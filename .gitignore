@@ -1,3 +1,11 @@
 workspace/*
 !workspace/.gitkeep
 .DS_Store
+
+# agent-log-sync local output
+/.plans/
+/.research/
+/.artifacts/
+.worktrees
+.logs
+mise.toml
