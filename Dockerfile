@@ -9,9 +9,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # 隔離設定: シェルの種類(login/interactive)に依存させず、コンテナ全体に
-# 確実に効かせるため ENV で直接設定する
+# 確実に効かせるため ENV で直接設定する。
+# Discovery は SUBNET: 同じ Docker ネットワーク（ros2-lab-net 等）上の
+# ラボ用コンテナとは疎通させる。ホスト・実機側のネットワークには
+# コンテナのネットワーク名前空間で届かない。
 ENV ROS_DOMAIN_ID=42
-ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+ENV ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
 
 # setup.bash の自動 source。/etc/profile.d/ に置くことで、
 # `docker compose exec ... bash -lc '...'`（login shell、.bashrc は読まれない）
