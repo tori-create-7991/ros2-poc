@@ -1,0 +1,12 @@
+services:
+  ros2lab:
+    build: .
+    container_name: ros2lab
+    tty: true
+    stdin_open: true
+    # デフォルトの bridge ネットワーク。ホストの実機 ROS グラフとは
+    # 別ネットワーク名前空間になるため、実機と混線しない。
+    # ROS_DOMAIN_ID / ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST は
+    # コンテナ内での多重防御として Dockerfile 側で設定済み。
+    volumes:
+      - ./workspace:/workspace
