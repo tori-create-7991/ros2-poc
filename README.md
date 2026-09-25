@@ -26,27 +26,27 @@ Discovery は同じ Docker ネットワーク（`ros2-lab-net` 上のラボ用�
 
 ## 使い方
 
-複数ターミナルでの Pub/Sub 実習は、同じコンテナに対して
-`docker compose exec` を必要な数だけ実行して行う。
+`ros2lab-a` と `ros2lab-b` の 2 コンテナが同じイメージから立ち上がる。
+Discovery 範囲が `SUBNET` なので、コンテナをまたいだ Pub/Sub を試せる。
 
-ターミナルA（Subscriber）:
+ターミナルA（ros2lab-a で Subscriber）:
 
 ```bash
-docker compose exec ros2lab bash
+docker compose exec ros2lab-a bash
 ros2 topic echo /chatter std_msgs/msg/String
 ```
 
-ターミナルB（Publisher）:
+ターミナルB（ros2lab-b で Publisher）:
 
 ```bash
-docker compose exec ros2lab bash
+docker compose exec ros2lab-b bash
 ros2 topic pub /chatter std_msgs/msg/String "{data: 'hello'}" -r 1
 ```
 
 Discovery の状態を覗く:
 
 ```bash
-docker compose exec ros2lab bash
+docker compose exec ros2lab-a bash
 ros2 topic list -t
 ros2 topic info /chatter -v
 ```
@@ -54,12 +54,12 @@ ros2 topic info /chatter -v
 環境の自己診断:
 
 ```bash
-docker compose exec ros2lab bash -lc 'ros2 doctor --report | sed -n "1,40p"'
+docker compose exec ros2lab-a bash -lc 'ros2 doctor --report | sed -n "1,40p"'
 ```
 
 ## 他のラボ用コンテナとの接続（ros2-lab-net）
 
-`ros2lab` は `ros2-lab-net`（internal: インターネットへの出口なし）にも参加している。
+`ros2lab-a` / `ros2lab-b` は `ros2-lab-net`（internal: インターネットへの出口なし）にも参加している。
 別の compose プロジェクトのコンテナ（例: `kali-vnc`）は、必要なときだけ後付けで参加させる。
 
 ```bash
@@ -74,13 +74,13 @@ docker network disconnect ros2-lab-net kali-vnc   # 切断
 
 ```bash
 # 名前解決
-docker exec kali-vnc getent hosts ros2lab
-docker exec ros2lab getent hosts kali-vnc
+docker exec kali-vnc getent hosts ros2lab-a
+docker exec ros2lab-a getent hosts kali-vnc
 
-# TCP: ros2lab で待ち受け、kali-vnc から接続
-docker exec -d ros2lab python3 -m http.server 8000
-docker exec kali-vnc bash -c 'echo > /dev/tcp/ros2lab/8000 && echo OK || echo NG'
-docker exec ros2lab pkill -f 'http.server 8000'
+# TCP: ros2lab-a で待ち受け、kali-vnc から接続
+docker exec -d ros2lab-a python3 -m http.server 8000
+docker exec kali-vnc bash -c 'echo > /dev/tcp/ros2lab-a/8000 && echo OK || echo NG'
+docker exec ros2lab-a pkill -f 'http.server 8000'
 ```
 
 ネットワークは `docker compose up` 時に作成される。`kali-vnc` が接続中に
@@ -93,7 +93,7 @@ docker exec ros2lab pkill -f 'http.server 8000'
 実習を行う際にイメージの再ビルドが不要になるようにしている。
 
 ```bash
-docker compose exec ros2lab bash -lc 'ros2 pkg list | grep sros2'
+docker compose exec ros2lab-a bash -lc 'ros2 pkg list | grep sros2'
 ```
 
 ## 片付け

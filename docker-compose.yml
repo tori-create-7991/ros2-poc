@@ -1,19 +1,30 @@
+# ros2lab-a / ros2lab-b: 同じイメージから 2 台立ち上げ、コンテナ間の
+# ROS 2 Discovery・Pub/Sub を実習する。
+x-ros2lab: &ros2lab
+  build: .
+  image: ros2lab:jazzy
+  tty: true
+  stdin_open: true
+  # default: ホストの実機 ROS グラフとは別ネットワーク名前空間の bridge。
+  # lab: 他のラボ用コンテナ（kali-vnc 等）と疎通させるための internal
+  #      ネットワーク。インターネットへの出口は持たない。
+  # ROS_DOMAIN_ID / ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET は Dockerfile 側で設定済み。
+  # SUBNET により同じネットワーク上の ros2lab-a / ros2lab-b / ラボ用コンテナ間で Discovery できる。
+  networks:
+    - default
+    - lab
+  volumes:
+    - ./workspace:/workspace
+
 services:
-  ros2lab:
-    build: .
-    container_name: ros2lab
-    tty: true
-    stdin_open: true
-    # default: ホストの実機 ROS グラフとは別ネットワーク名前空間の bridge。
-    # lab: 他のラボ用コンテナ（kali-vnc 等）と疎通させるための internal
-    #      ネットワーク。インターネットへの出口は持たない。
-    # ROS_DOMAIN_ID / ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET は Dockerfile 側で設定済み。
-    # SUBNET により lab ネットワーク上のコンテナとも Discovery できる。
-    networks:
-      - default
-      - lab
-    volumes:
-      - ./workspace:/workspace
+  ros2lab-a:
+    <<: *ros2lab
+    container_name: ros2lab-a
+    hostname: ros2lab-a
+  ros2lab-b:
+    <<: *ros2lab
+    container_name: ros2lab-b
+    hostname: ros2lab-b
 
 networks:
   lab:
