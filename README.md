@@ -56,6 +56,35 @@ ros2 topic info /chatter -v
 docker compose exec ros2lab bash -lc 'ros2 doctor --report | sed -n "1,40p"'
 ```
 
+## 他のラボ用コンテナとの接続（ros2-lab-net）
+
+`ros2lab` は `ros2-lab-net`（internal: インターネットへの出口なし）にも参加している。
+別の compose プロジェクトのコンテナ（例: `kali-vnc`）は、必要なときだけ後付けで参加させる。
+
+```bash
+docker network connect ros2-lab-net kali-vnc      # 接続
+docker network disconnect ros2-lab-net kali-vnc   # 切断
+```
+
+接続先コンテナの既存ネットワークはそのまま残り、NIC が 1 本追加されるだけ。
+コンテナを作り直すと接続は外れる。
+
+疎通確認（追加インストール不要）:
+
+```bash
+# 名前解決
+docker exec kali-vnc getent hosts ros2lab
+docker exec ros2lab getent hosts kali-vnc
+
+# TCP: ros2lab で待ち受け、kali-vnc から接続
+docker exec -d ros2lab python3 -m http.server 8000
+docker exec kali-vnc bash -c 'echo > /dev/tcp/ros2lab/8000 && echo OK || echo NG'
+docker exec ros2lab pkill -f 'http.server 8000'
+```
+
+ネットワークは `docker compose up` 時に作成される。`kali-vnc` が接続中に
+`docker compose down` するとネットワーク削除が失敗するため、先に切断する。
+
 ## SROS2 について
 
 `ros-jazzy-sros2`（DDS-Security による認証・アクセス制御・暗号化のツール群）
