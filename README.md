@@ -16,9 +16,10 @@ colima start   # 未起動の場合
 docker compose up -d --build
 ```
 
-コンテナに入ると `ROS_DOMAIN_ID=42` / `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`
+コンテナに入ると `ROS_DOMAIN_ID=42` / `ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET`
 が自動的に有効になる（`ros2lab` エイリアスとして `.bashrc` に設定済み）。
-これにより、同じホスト上の他の ROS グラフや、ネットワーク越しの実機と混線しない。
+Discovery は同じ Docker ネットワーク（`ros2-lab-net` 上のラボ用コンテナ等）
+までに限られ、ホスト上の他の ROS グラフやネットワーク越しの実機とは混線しない。
 
 コンテナ自体もホストとは別ネットワーク名前空間（デフォルト bridge）なので、
 二重に隔離されている。
