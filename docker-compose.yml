@@ -4,9 +4,19 @@ services:
     container_name: ros2lab
     tty: true
     stdin_open: true
-    # デフォルトの bridge ネットワーク。ホストの実機 ROS グラフとは
-    # 別ネットワーク名前空間になるため、実機と混線しない。
+    # default: ホストの実機 ROS グラフとは別ネットワーク名前空間の bridge。
+    # lab: 他のラボ用コンテナ（kali-vnc 等）と疎通させるための internal
+    #      ネットワーク。インターネットへの出口は持たない。
     # ROS_DOMAIN_ID / ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST は
     # コンテナ内での多重防御として Dockerfile 側で設定済み。
+    networks:
+      - default
+      - lab
     volumes:
       - ./workspace:/workspace
+
+networks:
+  lab:
+    # 他の compose プロジェクトから `docker network connect` で参照できるよう固定名にする
+    name: ros2-lab-net
+    internal: true
