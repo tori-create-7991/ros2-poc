@@ -52,6 +52,8 @@ services:
     # ros2arm（シミュ）と同時に起動しない。scripts/up-real.sh 経由で起動すること:
     #   bash scripts/up-real.sh
     # ドライバは手動起動（トルクオンを人が制御する）。README「実機で動かす」参照。
+    # restart ポリシーは意図的に付けない（再起動後に勝手にトルクオンさせないため）。
+    # 追加しないこと。
     profiles: [real]
     build:
       context: .
@@ -61,6 +63,7 @@ services:
     hostname: ros2real
     tty: true
     stdin_open: true
+    init: true
     # ホストの udev rule（host/99-crane-x7.rules）が作る symlink を渡す
     devices:
       - /dev/crane_x7:/dev/crane_x7
@@ -68,6 +71,7 @@ services:
       - dialout
     # ROS_DOMAIN_ID / ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET は Dockerfile.real 側で設定済み。
     # lab 経由で ros2lab から実機に指令できる。
+    # 注意: DDS は無認証。ros2-lab-net に参加する全コンテナ（kali-vnc 等）が実機に指令できる。
     networks:
       - default
       - lab

@@ -9,6 +9,9 @@
 #   4. USB を挿し直し、`ls -l /dev/crane_x7` と
 #      `cat /sys/bus/usb-serial/devices/ttyUSB0/latency_timer`（1 になる）で確認する。
 
+# 同じ VID/PID の USB-シリアルを複数挿す場合は、`udevadm info -a -n /dev/ttyUSB0 | grep serial`
+# で実機のシリアルを調べ、下の 2 行の ATTRS{idProduct} の後に ATTRS{serial}=="<実機のシリアル>" を足す。
+
 # /dev/crane_x7 を作り、dialout グループに読み書きを許可する
 SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", SYMLINK+="crane_x7", GROUP="dialout", MODE="0660"
 

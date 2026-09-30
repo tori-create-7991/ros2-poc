@@ -168,7 +168,7 @@ docker exec -it -u ubuntu -e DISPLAY=:1 ros2arm bash -ic 'ros2 launch crane_x7_g
 
 ```bash
 # ros2arm 側のトピックが ros2lab から見えることを確認（出ない場合は数秒待って再実行）
-docker compose exec ros2lab bash -lc 'ros2 topic list | grep -E "joint_states|crane_x7_arm_controller"'
+docker compose exec ros2lab bash -lc 'ros2 topic list | grep -E "joint_states|crane_x7_arm_controller"'   # 数秒かかる
 
 # 関節角の指令を送る（Gazebo 上のアームが 3 秒かけて動く）
 docker compose exec ros2lab bash -lc "ros2 topic pub --once /crane_x7_arm_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory \"{joint_names: [crane_x7_shoulder_fixed_part_pan_joint, crane_x7_shoulder_revolute_part_tilt_joint, crane_x7_upper_arm_revolute_part_twist_joint, crane_x7_upper_arm_revolute_part_rotate_joint, crane_x7_lower_arm_fixed_part_joint, crane_x7_lower_arm_revolute_part_joint, crane_x7_wrist_joint], points: [{positions: [0.5, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0], time_from_start: {sec: 3}}]}\""
@@ -202,8 +202,9 @@ docker compose exec ros2lab bash -lc 'ros2 topic echo --once /joint_states'
 
 ## 実機で動かす（ros2real / CRANE-X7）
 
-> **未検証**: この手順は CRANE-X7 実機で動作確認していない（ビルドと `docker compose config`
-> までを確認済み）。初回は下の「安全上の注意」を必ず読むこと。
+> **実機は未検証**: イメージのビルド、`docker compose config`、モックのハードウェア
+> （`use_mock_components:=true`）でのドライバ起動までを確認済み。実機での動作（udev rule、
+> `latency_timer`、トルクの挙動）は未確認。初回は下の「安全上の注意」を必ず読むこと。
 
 ```
 ros2lab-a/b ──ros2-lab-net (DDS)── ros2real ── /dev/crane_x7 ── CRANE-X7
@@ -231,8 +232,11 @@ sudo cp host/99-crane-x7.rules /etc/udev/rules.d/
 sudo udevadm control --reload && sudo udevadm trigger
 # USB を挿し直して確認
 ls -l /dev/crane_x7                                        # ttyUSB* への symlink
-cat /sys/bus/usb-serial/devices/ttyUSB0/latency_timer      # 1 になっていること
+cat /sys/bus/usb-serial/devices/$(basename "$(readlink -f /dev/crane_x7)")/latency_timer  # 1 になっていること
 ```
+
+`/dev/crane_x7` が作られない場合は `udevadm info -a -n /dev/ttyUSB0` で ID を確認し直す
+（他の USB-シリアルを挿していると番号が `ttyUSB1` などになる）。
 
 `latency_timer` は 200Hz 制御のために 1ms へ下げる設定で、コンテナ内の `/sys` は書けないためホスト側で行う。
 
@@ -250,20 +254,39 @@ docker compose exec ros2real bash -lc \
   'ros2 launch crane_x7_control crane_x7_control.launch.py port_name:=/dev/crane_x7'
 ```
 
+`/dev/crane_x7` が無いと `up-real.sh` は起動せずに理由を表示する。`docker compose --profile real up`
+を直接叩くと上のガードを通らないため、使わない。USB を抜き差ししたらコンテナの
+デバイスが古くなるので、ドライバを止めて `bash scripts/up-real.sh` を実行し直す。
+
+**実機なしでドライバだけ確認する**（モックのハードウェアで起動する）:
+
+```bash
+docker compose exec ros2real bash -lc \
+  'ros2 launch crane_x7_control crane_x7_control.launch.py use_mock_components:=true'
+```
+
 ### 3. ros2lab から指令する
 
 ドライバを起動したまま別ターミナルで、シミュと同じコマンドを使う
 （「ros2lab から ros2arm のアームを動かす」参照）。
 
 ```bash
-docker compose exec ros2lab bash -lc 'ros2 topic list | grep -E "joint_states|crane_x7_arm_controller"'
+docker compose exec ros2lab bash -lc 'ros2 topic list | grep -E "joint_states|crane_x7_arm_controller"'   # 数秒かかる
 docker compose exec ros2lab bash -lc 'ros2 topic echo --once /joint_states'
 ```
 
 ### 安全上の注意
 
 - 実機は指令どおりに動く。初回は**小さな振幅・長い `time_from_start`** で試し、周囲を空けておくこと。
-- ドライバを止める前に腕を安全な姿勢へ戻す。停止するとトルクが抜ける。
+- **ドライバが止まるとトルクが抜けて腕が自重で落ちる**。次のいずれでも起きる:
+  ドライバの停止（Ctrl+C）、`docker compose down`、端末や SSH の切断、コンテナの異常終了、USB の抜け。
+  止める前に腕を安全な姿勢（低い位置・何も持たない状態）へ戻す。
+- **`ros2-lab-net` に参加する全コンテナ（ros2lab、kali-vnc など）が実機に指令できる**
+  （DDS は無認証）。実機を動かす間は、信頼できないコンテナをこのネットワークに参加させない。
+  SROS2 での制限は未対応。
+- `ros2arm` と `ros2real` の同時起動は `up-real.sh` が一方向だけ防ぐ。`ros2real` の起動中に
+  `--profile arm up` を叩くと二重になるので、シミュを使う前に `ros2real` を止める。
+- `ros2real` に restart ポリシーは付けていない（再起動後に勝手にトルクオンさせないため）。
 - `ros2real` のコンテナは `dialout` グループに所属する。ホストの `dialout` の GID が 20 でない場合は
   `docker-compose.yml` の `group_add` に GID を数値で指定する。
 - 通信が不安定なら、Dynamixel Wizard 2 でサーボの Return Delay Time を下げる（既定 250 = 500μs）。

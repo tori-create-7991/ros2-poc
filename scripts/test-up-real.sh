@@ -16,21 +16,40 @@ fi
 STUB
 chmod +x "$TMP/docker"
 
+# 存在するデバイス代わりのファイル
+touch "$TMP/crane_x7"
+
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-# (a) ros2arm 起動中 → 拒否（exit 1、stderr に ros2arm、compose up は呼ばれない）
-export STUB_LOG="$TMP/a.log"
-set +e
-err="$(PATH="$TMP:$PATH" STUB_ARM_RUNNING=1 bash "$ROOT/scripts/up-real.sh" 2>&1 >/dev/null)"
-rc=$?
-set -e
-[ "$rc" -eq 1 ] || fail "ros2arm 起動中は exit 1 のはずが $rc"
-grep -q "ros2arm" <<<"$err" || fail "stderr に ros2arm が含まれない: $err"
-if grep -q "compose" "$STUB_LOG"; then fail "拒否時に docker compose が呼ばれた"; fi
+# 引数: ARM_RUNNING DEVICE。stderr を ERR、終了コードを RC、docker 呼び出しログを LOG に入れる
+run_case() {
+  STUB_LOG="$TMP/log.$1.$$"
+  : > "$STUB_LOG"
+  export STUB_LOG
+  set +e
+  ERR="$(PATH="$TMP:$PATH" STUB_ARM_RUNNING="$1" CRANE_X7_DEVICE="$2" bash "$ROOT/scripts/up-real.sh" 2>&1 >/dev/null)"
+  RC=$?
+  set -e
+  LOG="$(cat "$STUB_LOG")"
+}
 
-# (b) ros2arm 非起動 → compose up が呼ばれる
-export STUB_LOG="$TMP/b.log"
-PATH="$TMP:$PATH" STUB_ARM_RUNNING=0 bash "$ROOT/scripts/up-real.sh" >/dev/null
-grep -q "compose --profile real up -d --build" "$STUB_LOG" || fail "compose --profile real up が呼ばれない: $(cat "$STUB_LOG")"
+# (a) ros2arm 起動中 → 拒否（exit 1、stderr に ros2arm、compose up は呼ばれない）
+run_case 1 "$TMP/crane_x7"
+[ "$RC" -eq 1 ] || fail "ros2arm 起動中は exit 1 のはずが $RC"
+grep -q "ros2arm" <<<"$ERR" || fail "stderr に ros2arm が含まれない: $ERR"
+if grep -q "compose" <<<"$LOG"; then fail "拒否時に docker compose が呼ばれた"; fi
+
+# (b) デバイス無し → 拒否（exit 1、stderr にデバイスパス、compose up は呼ばれない）
+run_case 0 "$TMP/no-such-device"
+[ "$RC" -eq 1 ] || fail "デバイス無しは exit 1 のはずが $RC"
+grep -q "no-such-device" <<<"$ERR" || fail "stderr にデバイスパスが含まれない: $ERR"
+if grep -q "compose" <<<"$LOG"; then fail "デバイス無しで docker compose が呼ばれた"; fi
+
+# (c) ros2arm 非起動 + デバイス有り → compose up が呼ばれる。ガードの filter も検証する
+run_case 0 "$TMP/crane_x7"
+[ "$RC" -eq 0 ] || fail "正常系は exit 0 のはずが $RC: $ERR"
+grep -qF 'name=^ros2arm$' <<<"$LOG" || fail "docker ps の name filter が無い: $LOG"
+grep -q "status=running" <<<"$LOG" || fail "docker ps の status filter が無い: $LOG"
+grep -q "compose --profile real up -d --build" <<<"$LOG" || fail "compose --profile real up が呼ばれない: $LOG"
 
 echo "OK: up-real.sh guard tests passed"
