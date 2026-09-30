@@ -195,8 +195,79 @@ docker compose exec ros2lab bash -lc 'ros2 topic echo --once /joint_states'
 - **GPU 直結への移行**: noVNC は CPU 描画のため遅延がある。重いシミュが必要になったら、
   Linux + NVIDIA GPU のホストで X11 / Wayland を共有し `--gpus all`（NVIDIA Container Toolkit）
   で動かす構成へ移行する。ROS 2 のコード自体はそのまま使える。
-- **実機への移行**: シミュで書いたノードは、トピック名・コントローラ名を実機ドライバ
-  （CRANE-X7 なら `crane_x7_control`）に合わせれば実機でも動く。
+- **実機への移行**: シミュと実機でコントローラ名は同じ
+  （`/crane_x7_arm_controller/joint_trajectory` 等）。ros2lab のコードは変えずに、
+  ドライバ側だけ ros2arm から ros2real に差し替えれば実機でも動く見込み。
+  手順は次の「実機で動かす（ros2real）」を参照。
+
+## 実機で動かす（ros2real / CRANE-X7）
+
+> **未検証**: この手順は CRANE-X7 実機で動作確認していない（ビルドと `docker compose config`
+> までを確認済み）。初回は下の「安全上の注意」を必ず読むこと。
+
+```
+ros2lab-a/b ──ros2-lab-net (DDS)── ros2real ── /dev/crane_x7 ── CRANE-X7
+ (クライアント)                     (crane_x7_control のみ)
+```
+
+`ros2real` は実機ドライバ専用のコンテナ（`Dockerfile.real`、`profile: real`）。
+クライアントの `ros2lab` は変更せず、`ros2-lab-net` 越しの Discovery で実機に指令する。
+
+### 前提
+
+- **Linux ホスト（Ubuntu など）が必須**。Mac + Colima では USB をコンテナに渡せない。
+- CRANE-X7 を USB で接続し、Docker が使えること。
+
+### 1. ホストの udev rule を入れる
+
+```bash
+lsusb   # CRANE-X7 の USB-シリアル変換の ID（例: 0403:6014）を確認する
+```
+
+`host/99-crane-x7.rules` の `idProduct`（既定 `6014`、FTDI 想定）を `lsusb` の値に合わせてから配置する。
+
+```bash
+sudo cp host/99-crane-x7.rules /etc/udev/rules.d/
+sudo udevadm control --reload && sudo udevadm trigger
+# USB を挿し直して確認
+ls -l /dev/crane_x7                                        # ttyUSB* への symlink
+cat /sys/bus/usb-serial/devices/ttyUSB0/latency_timer      # 1 になっていること
+```
+
+`latency_timer` は 200Hz 制御のために 1ms へ下げる設定で、コンテナ内の `/sys` は書けないためホスト側で行う。
+
+### 2. 起動する
+
+`ros2arm`（シミュ）と `ros2real` は**同時に起動しない**。同名のコントローラが二重になり、
+ros2lab の指令が実機にも届いてしまう。`scripts/up-real.sh` は `ros2arm` が起動中なら拒否する。
+
+```bash
+docker compose --profile arm down   # ros2arm を止める（起動していれば）
+bash scripts/up-real.sh             # ros2real を起動（ドライバはまだ動かない）
+
+# ドライバを手動起動（サーボがトルクオンし、腕が現在姿勢を保持する）
+docker compose exec ros2real bash -lc \
+  'ros2 launch crane_x7_control crane_x7_control.launch.py port_name:=/dev/crane_x7'
+```
+
+### 3. ros2lab から指令する
+
+ドライバを起動したまま別ターミナルで、シミュと同じコマンドを使う
+（「ros2lab から ros2arm のアームを動かす」参照）。
+
+```bash
+docker compose exec ros2lab bash -lc 'ros2 topic list | grep -E "joint_states|crane_x7_arm_controller"'
+docker compose exec ros2lab bash -lc 'ros2 topic echo --once /joint_states'
+```
+
+### 安全上の注意
+
+- 実機は指令どおりに動く。初回は**小さな振幅・長い `time_from_start`** で試し、周囲を空けておくこと。
+- ドライバを止める前に腕を安全な姿勢へ戻す。停止するとトルクが抜ける。
+- `ros2real` のコンテナは `dialout` グループに所属する。ホストの `dialout` の GID が 20 でない場合は
+  `docker-compose.yml` の `group_add` に GID を数値で指定する。
+- 通信が不安定なら、Dynamixel Wizard 2 でサーボの Return Delay Time を下げる（既定 250 = 500μs）。
+- モデル（`crane_x7_description`）は株式会社アールティの非商用ライセンス。学習・研究目的に限る。
 
 ## SROS2 について
 
@@ -212,6 +283,7 @@ docker compose exec ros2lab-a bash -lc 'ros2 pkg list | grep sros2'
 
 ```bash
 docker compose --profile arm down  # ros2lab と ros2arm を停止・削除
+docker compose --profile real down  # ros2lab と ros2real を停止・削除（先にドライバを止め腕を安全な姿勢へ）
 ```
 
 `./workspace` は両コンテナの `/workspace` にマウントされる。SROS2 の
