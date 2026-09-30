@@ -28,7 +28,7 @@ services:
 
   ros2arm:
     # アームシミュ（Gazebo / MoveIt 2 / RViz2）。重いので profile 指定時のみ起動する:
-    #   docker compose --profile arm up -d --build
+    #   bash scripts/up-arm.sh   （ros2real 起動中は拒否する。docker compose --profile arm up -d --build と同じ）
     profiles: [arm]
     build:
       context: .
@@ -44,6 +44,49 @@ services:
     networks:
       - default
       - lab
+    volumes:
+      - ./workspace:/workspace
+
+  ros2real:
+    # CRANE-X7 実機ドライバ。Linux ホスト専用（Mac / Colima は USB を渡せない）。
+    # ros2arm（シミュ）と同時に起動しない。scripts/up-real.sh 経由で起動すること:
+    #   bash scripts/up-real.sh
+    # ドライバは手動起動（トルクオンを人が制御する）。README「実機で動かす」参照。
+    # restart ポリシーは意図的に付けない（再起動後に勝手にトルクオンさせないため）。
+    # 追加しないこと。
+    profiles: [real]
+    build:
+      context: .
+      dockerfile: Dockerfile.real
+    image: ros2real:jazzy
+    container_name: ros2real
+    hostname: ros2real
+    tty: true
+    stdin_open: true
+    init: true
+    # ホストの udev rule（host/99-crane-x7.rules）が作る symlink を渡す
+    devices:
+      - /dev/crane_x7:/dev/crane_x7
+    # ホストの dialout の GID を数値で渡す（名前だとコンテナ側の /etc/group で解決され、ホストと
+    # 食い違うことがある）。Ubuntu / Debian は 20。違うなら DIALOUT_GID=$(getent group dialout | cut -d: -f3)
+    group_add:
+      - "${DIALOUT_GID:-20}"
+    # デバイスを読み書きするだけなので特権は要らない
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # ROS_DOMAIN_ID / ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET は Dockerfile.real 側で設定済み。
+    # 意図的に lab (ros2-lab-net) へは繋がない。DDS は無認証で、lab に繋ぐと kali-vnc など
+    # 他のラボ用コンテナからも実機に指令できてしまうため。この compose プロジェクトの
+    # default ネットワークにいる ros2lab-a/b だけが実機に指令できる。
+    networks:
+      - default
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
     volumes:
       - ./workspace:/workspace
 

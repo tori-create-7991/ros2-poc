@@ -1,0 +1,20 @@
+# CRANE-X7 実機用 udev rule（Linux ホスト側に置く。コンテナ内では使わない）。
+#
+# 導入手順:
+#   1. `lsusb` で CRANE-X7 の USB-シリアル変換の ID を確認する（例: "ID 0403:6014" なら
+#      idVendor=0403 / idProduct=6014）。下の idProduct と ATTRS{serial} を実機の値に書き換える。
+#      ※ VID 0403 (FTDI) は想定。実機で確認するまで未検証。
+#   2. sudo cp host/99-crane-x7.rules /etc/udev/rules.d/
+#   3. sudo udevadm control --reload && sudo udevadm trigger
+#   4. USB を挿し直し、`ls -l /dev/crane_x7` と
+#      `cat /sys/bus/usb-serial/devices/ttyUSB0/latency_timer`（1 になる）で確認する。
+
+# 実機のシリアルで固定する（fail closed）: REPLACE_ME を実機のシリアルに書き換えるまで、
+# この rule はどの USB-シリアルにも一致しない。他の FTDI アダプタが /dev/crane_x7 になるのを防ぐ。
+#   udevadm info -a -n /dev/ttyUSB0 | grep -m1 'ATTRS{serial}'
+
+# /dev/crane_x7 を作り、dialout グループに読み書きを許可する
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", ATTRS{serial}=="REPLACE_ME", SYMLINK+="crane_x7", GROUP="dialout", MODE="0660"
+
+# 200Hz 制御のため USB-シリアルの latency_timer を 1ms に下げる（既定 16ms）
+ACTION=="add", SUBSYSTEM=="usb-serial", DRIVER=="ftdi_sio", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", ATTRS{serial}=="REPLACE_ME", ATTR{latency_timer}="1"
