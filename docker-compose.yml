@@ -26,6 +26,27 @@ services:
     container_name: ros2lab-b
     hostname: ros2lab-b
 
+  ros2arm:
+    # アームシミュ（Gazebo / MoveIt 2 / RViz2）。重いので profile 指定時のみ起動する:
+    #   docker compose --profile arm up -d --build
+    profiles: [arm]
+    build:
+      context: .
+      dockerfile: Dockerfile.arm
+    container_name: ros2arm
+    # noVNC。LAN には出さずホストのローカルからのみ接続させる
+    ports:
+      - "127.0.0.1:6080:80"
+    # Gazebo / RViz が共有メモリを使うため既定の 64MB では不足する
+    shm_size: 512m
+    # ROS_DOMAIN_ID / ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET は Dockerfile.arm 側で設定済み。
+    # lab 経由で ros2lab と Discovery し、ros2lab をクライアントとして使える。
+    networks:
+      - default
+      - lab
+    volumes:
+      - ./workspace:/workspace
+
 networks:
   lab:
     # 他の compose プロジェクトから `docker network connect` で参照できるよう固定名にする
