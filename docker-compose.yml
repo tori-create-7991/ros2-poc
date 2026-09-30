@@ -47,6 +47,33 @@ services:
     volumes:
       - ./workspace:/workspace
 
+  ros2real:
+    # CRANE-X7 実機ドライバ。Linux ホスト専用（Mac / Colima は USB を渡せない）。
+    # ros2arm（シミュ）と同時に起動しない。scripts/up-real.sh 経由で起動すること:
+    #   bash scripts/up-real.sh
+    # ドライバは手動起動（トルクオンを人が制御する）。README「実機で動かす」参照。
+    profiles: [real]
+    build:
+      context: .
+      dockerfile: Dockerfile.real
+    image: ros2real:jazzy
+    container_name: ros2real
+    hostname: ros2real
+    tty: true
+    stdin_open: true
+    # ホストの udev rule（host/99-crane-x7.rules）が作る symlink を渡す
+    devices:
+      - /dev/crane_x7:/dev/crane_x7
+    group_add:
+      - dialout
+    # ROS_DOMAIN_ID / ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET は Dockerfile.real 側で設定済み。
+    # lab 経由で ros2lab から実機に指令できる。
+    networks:
+      - default
+      - lab
+    volumes:
+      - ./workspace:/workspace
+
 networks:
   lab:
     # 他の compose プロジェクトから `docker network connect` で参照できるよう固定名にする
