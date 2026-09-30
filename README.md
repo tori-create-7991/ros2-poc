@@ -4,6 +4,10 @@ ROS 2 (Jazzy Jalisco) の Pub/Sub・Discovery を、実機や既存の ROS グ�
 一切触れずローカルで安全に試すための隔離実習環境。Colima 上の Docker
 コンテナとして立ち上げる。
 
+あわせて、ブラウザ（noVNC）から Gazebo Harmonic / MoveIt 2 / RViz2 で
+ロボットアームを動かすシミュ用コンテナ `ros2arm` も用意している
+（[アームシミュ](#アームシミュros2arm--novnc) 参照）。
+
 ## 前提
 
 - [Colima](https://github.com/abiosoft/colima)（`colima start`）
@@ -86,6 +90,83 @@ docker exec ros2lab pkill -f 'http.server 8000'
 ネットワークは `docker compose up` 時に作成される。`kali-vnc` が接続中に
 `docker compose down` するとネットワーク削除が失敗するため、先に切断する。
 
+## アームシミュ（ros2arm / noVNC）
+
+Factory I/O（Windows 専用）の代わりに、Mac / Linux のブラウザだけで
+ROS 2 のロボットアーム制御を試すためのコンテナ。
+[tiryoh/ros2-desktop-vnc](https://github.com/Tiryoh/docker-ros2-desktop-vnc)
+（Ubuntu 24.04 デスクトップ + noVNC、Gazebo Harmonic 同梱）に以下を追加している。
+
+| 追加物 | 用途 |
+|---|---|
+| MoveIt 2 | 衝突回避・軌道計画 |
+| `moveit_resources_panda_moveit_config` | Panda アームの MoveIt + RViz デモ |
+| `ur_simulation_gz` / `ur_moveit_config` | UR アームの Gazebo シミュ |
+| CRANE-X7（`/opt/crane_ws`） | アールティ製アームの Gazebo + MoveIt（ソースビルド、コミット固定） |
+
+重いので compose の profile `arm` を指定したときだけ起動する。
+`docker compose up -d` だけなら従来どおり `ros2lab` のみが起動する。
+
+### 起動・停止
+
+```bash
+docker compose --profile arm up -d --build   # 初回ビルドは 10 分前後
+```
+
+ブラウザで <http://127.0.0.1:6080/> を開き、「Connect」でデスクトップに入る。
+ポートは `127.0.0.1` にだけ公開しているので、LAN の他端末からは見えない。
+
+```bash
+docker compose --profile arm down
+```
+
+### デモ
+
+noVNC のデスクトップで端末（LXTerminal）を開いて実行する。
+CPU 描画で重いため、デモは **1度に1つ** だけ起動する（Ctrl+C で終了してから次へ）。
+
+```bash
+# 1. Panda + MoveIt: RViz の MotionPlanning パネルで Plan & Execute
+ros2 launch moveit_resources_panda_moveit_config demo.launch.py
+
+# 2. CRANE-X7 を Gazebo 上に表示（MoveIt / RViz も同時に起動する）
+ros2 launch crane_x7_gazebo crane_x7_with_table.launch.py
+
+# 3. UR を Gazebo 上に表示
+ros2 launch ur_simulation_gz ur_sim_control.launch.py
+```
+
+### ros2lab から ros2arm のアームを動かす（2コンテナ構成）
+
+`ros2arm`（シミュ = サーバー側）と `ros2lab`（クライアント側）は `ros2-lab-net` 上で
+同じ `ROS_DOMAIN_ID=42` / `SUBNET` 設定なので、互いのトピックが見える。
+デモ 2（CRANE-X7）を起動した状態で、Mac のターミナルから:
+
+```bash
+# ros2arm 側のトピックが ros2lab から見えることを確認
+docker compose exec ros2lab bash -lc 'ros2 topic list | grep -E "joint_states|crane_x7_arm_controller"'
+
+# 関節角の指令を送る（Gazebo 上のアームが 3 秒かけて動く）
+docker compose exec ros2lab bash -lc "ros2 topic pub --once /crane_x7_arm_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory \"{joint_names: [crane_x7_shoulder_fixed_part_pan_joint, crane_x7_shoulder_revolute_part_tilt_joint, crane_x7_upper_arm_revolute_part_twist_joint, crane_x7_upper_arm_revolute_part_rotate_joint, crane_x7_lower_arm_fixed_part_joint, crane_x7_lower_arm_revolute_part_joint, crane_x7_wrist_joint], points: [{positions: [0.5, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0], time_from_start: {sec: 3}}]}\""
+
+# 現在の関節角を読む
+docker compose exec ros2lab bash -lc 'ros2 topic echo --once /joint_states'
+```
+
+`trajectory_msgs` は ros-base に含まれるので、`ros2lab` 側に追加インストールは不要。
+
+### 注意
+
+- **リソース**: Colima は 4CPU / 8GiB / ディスク 50GB 程度を推奨
+  （`colima start --cpu 4 --memory 8 --disk 50`）。イメージは約 13GB になる。
+- **ライセンス**: CRANE-X7 のモデル（`crane_x7_description`）は株式会社アールティの
+  非商用ライセンス。学習・研究目的に限って使う。
+- **GPU 直結への移行**: noVNC は CPU 描画のため遅延がある。重いシミュが必要になったら、
+  Linux + NVIDIA GPU のホストで X11 / Wayland を共有し `--gpus all`（NVIDIA Container Toolkit）
+  で動かす構成へ移行する。ROS 2 のコード自体はそのまま使える。
+- **実機への移行**: シミュで書いたノードは、トピック名・コントローラ名を実機ドライバ
+  （CRANE-X7 なら `crane_x7_control`）に合わせれば実機でも動く。
+
 ## SROS2 について
 
 `ros-jazzy-sros2`（DDS-Security による認証・アクセス制御・暗号化のツール群）
@@ -99,8 +180,9 @@ docker compose exec ros2lab bash -lc 'ros2 pkg list | grep sros2'
 ## 片付け
 
 ```bash
-docker compose down
+docker compose down                # ros2lab のみ
+docker compose --profile arm down  # ros2arm も含めて停止
 ```
 
-`./workspace` はコンテナの `/workspace` にマウントされる。SROS2 の
+`./workspace` は両コンテナの `/workspace` にマウントされる。SROS2 の
 keystore など、永続化したいファイルはここに置く。
