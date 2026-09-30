@@ -110,8 +110,10 @@ ROS 2 のロボットアーム制御を試すためのコンテナ。
 ### 起動・停止
 
 ```bash
-docker compose --profile arm up -d --build   # 初回ビルドは 10 分前後
+bash scripts/up-arm.sh   # 初回ビルドは 10 分前後。docker compose --profile arm up -d --build と同じ
 ```
+
+（実機ドライバ `ros2real` が起動中は拒否される。[実機で動かす](#実機で動かすros2real--crane-x7) 参照）
 
 ブラウザで <http://127.0.0.1:6080/> を開き、「Connect」でデスクトップに入る。
 ポートは `127.0.0.1` にだけ公開しているので、LAN の他端末からは見えない。
@@ -207,12 +209,13 @@ docker compose exec ros2lab bash -lc 'ros2 topic echo --once /joint_states'
 > `latency_timer`、トルクの挙動）は未確認。初回は下の「安全上の注意」を必ず読むこと。
 
 ```
-ros2lab-a/b ──ros2-lab-net (DDS)── ros2real ── /dev/crane_x7 ── CRANE-X7
- (クライアント)                     (crane_x7_control のみ)
+ros2lab-a/b ──compose の default ネットワーク (DDS)── ros2real ── /dev/crane_x7 ── CRANE-X7
+ (クライアント)                                       (crane_x7_control のみ)
 ```
 
 `ros2real` は実機ドライバ専用のコンテナ（`Dockerfile.real`、`profile: real`）。
-クライアントの `ros2lab` は変更せず、`ros2-lab-net` 越しの Discovery で実機に指令する。
+クライアントの `ros2lab` は変更せず、同じ compose プロジェクトの default ネットワーク越しの
+Discovery で実機に指令する。**`ros2-lab-net` には繋がない**（後述）。
 
 ### 前提
 
@@ -249,14 +252,18 @@ ros2lab の指令が実機にも届いてしまう。`scripts/up-real.sh` は `r
 docker compose --profile arm down   # ros2arm を止める（起動していれば）
 bash scripts/up-real.sh             # ros2real を起動（ドライバはまだ動かない）
 
-# ドライバを手動起動（サーボがトルクオンし、腕が現在姿勢を保持する）
-docker compose exec ros2real bash -lc \
-  'ros2 launch crane_x7_control crane_x7_control.launch.py port_name:=/dev/crane_x7'
+# ドライバを手動起動（サーボがトルクオンする）。-d でバックグラウンドにし、SSH や端末が
+# 切れてもドライバが落ちないようにする。ログは ./workspace/crane_x7_control.log に出る
+docker compose exec -d ros2real bash -lc \
+  'ros2 launch crane_x7_control crane_x7_control.launch.py port_name:=/dev/crane_x7 \
+     > /workspace/crane_x7_control.log 2>&1'
+tail -f workspace/crane_x7_control.log
 ```
 
-`/dev/crane_x7` が無いと `up-real.sh` は起動せずに理由を表示する。`docker compose --profile real up`
-を直接叩くと上のガードを通らないため、使わない。USB を抜き差ししたらコンテナの
-デバイスが古くなるので、ドライバを止めて `bash scripts/up-real.sh` を実行し直す。
+`/dev/crane_x7` が無いと `up-real.sh` は起動せずに理由を表示する。`latency_timer` が 1 でなければ
+警告する。`docker compose --profile real up` を直接叩くと上のガードを通らないため、使わない。
+USB を抜き差ししたらコンテナのデバイスが古くなるので、`down-real.sh` で止めてから
+`up-real.sh` をやり直す。
 
 **実機なしでドライバだけ確認する**（モックのハードウェアで起動する）:
 
@@ -275,17 +282,29 @@ docker compose exec ros2lab bash -lc 'ros2 topic list | grep -E "joint_states|cr
 docker compose exec ros2lab bash -lc 'ros2 topic echo --once /joint_states'
 ```
 
+### 4. 止める
+
+**`docker compose down` は使わない**（ドライバが即座に落ちてトルクが抜ける）。
+
+```bash
+bash scripts/down-real.sh   # 腕を安全な姿勢に戻したか確認 → ドライバを停止 → ros2real を削除
+```
+
+ros2lab は止まらない。シミュに戻すときは `bash scripts/up-arm.sh`（`ros2real` 起動中は拒否される）。
+
 ### 安全上の注意
 
 - 実機は指令どおりに動く。初回は**小さな振幅・長い `time_from_start`** で試し、周囲を空けておくこと。
 - **ドライバが止まるとトルクが抜けて腕が自重で落ちる**。次のいずれでも起きる:
-  ドライバの停止（Ctrl+C）、`docker compose down`、端末や SSH の切断、コンテナの異常終了、USB の抜け。
-  止める前に腕を安全な姿勢（低い位置・何も持たない状態）へ戻す。
-- **`ros2-lab-net` に参加する全コンテナ（ros2lab、kali-vnc など）が実機に指令できる**
-  （DDS は無認証）。実機を動かす間は、信頼できないコンテナをこのネットワークに参加させない。
+  ドライバの停止、`docker compose down`、コンテナの異常終了、USB の抜け、ホストの再起動。
+  止めるときは `scripts/down-real.sh` を使い、その前に腕を安全な姿勢（低い位置・何も持たない状態）へ戻す。
+  ドライバを `exec -d` で動かすのは、端末や SSH の切断で落とさないため。
+- **DDS は無認証**。`ros2real` は `ros2-lab-net` に繋がず、compose の default ネットワークにだけ置くので、
+  実機に指令できるのは同じ compose プロジェクトの `ros2lab-a/b`（と、同じホストで docker を使える人）に限られる。
+  `kali-vnc` など `ros2-lab-net` の他のコンテナは届かない。`ros2lab-a/b` に他のコンテナを繋がないこと。
   SROS2 での制限は未対応。
-- `ros2arm` と `ros2real` の同時起動は `up-real.sh` が一方向だけ防ぐ。`ros2real` の起動中に
-  `--profile arm up` を叩くと二重になるので、シミュを使う前に `ros2real` を止める。
+- `ros2arm` と `ros2real` の同時起動は `up-real.sh` / `up-arm.sh` が互いに拒否する。
+  `docker compose --profile ... up` を直接叩くとこのガードを通らないので、必ずスクリプト経由で起動する。
 - `ros2real` に restart ポリシーは付けていない（再起動後に勝手にトルクオンさせないため）。
 - `ros2real` のコンテナは `dialout` グループに所属する。ホストの `dialout` の GID が 20 でない場合は
   `docker-compose.yml` の `group_add` に GID を数値で指定する。
@@ -306,7 +325,7 @@ docker compose exec ros2lab-a bash -lc 'ros2 pkg list | grep sros2'
 
 ```bash
 docker compose --profile arm down  # ros2lab と ros2arm を停止・削除
-docker compose --profile real down  # ros2lab と ros2real を停止・削除（先にドライバを止め腕を安全な姿勢へ）
+bash scripts/down-real.sh            # 実機ドライバ ros2real を安全に停止・削除（ros2lab は残る）
 ```
 
 `./workspace` は両コンテナの `/workspace` にマウントされる。SROS2 の

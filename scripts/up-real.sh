@@ -20,4 +20,10 @@ if [ ! -e "$DEVICE" ]; then
   exit 1
 fi
 
+# latency_timer が 1 でないと 200Hz の制御が崩れる。sysfs が読めるときだけ警告する（非致命）。
+LATENCY_FILE="/sys/bus/usb-serial/devices/$(basename "$(readlink -f "$DEVICE")")/latency_timer"
+if [ -r "$LATENCY_FILE" ] && [ "$(cat "$LATENCY_FILE")" != "1" ]; then
+  echo "警告: $LATENCY_FILE が 1 ではない。host/99-crane-x7.rules が効いていない可能性がある。" >&2
+fi
+
 docker compose --profile real up -d --build

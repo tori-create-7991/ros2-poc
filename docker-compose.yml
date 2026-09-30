@@ -70,11 +70,16 @@ services:
     group_add:
       - dialout
     # ROS_DOMAIN_ID / ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET は Dockerfile.real 側で設定済み。
-    # lab 経由で ros2lab から実機に指令できる。
-    # 注意: DDS は無認証。ros2-lab-net に参加する全コンテナ（kali-vnc 等）が実機に指令できる。
+    # 意図的に lab (ros2-lab-net) へは繋がない。DDS は無認証で、lab に繋ぐと kali-vnc など
+    # 他のラボ用コンテナからも実機に指令できてしまうため。この compose プロジェクトの
+    # default ネットワークにいる ros2lab-a/b だけが実機に指令できる。
     networks:
       - default
-      - lab
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
     volumes:
       - ./workspace:/workspace
 

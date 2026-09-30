@@ -1,6 +1,7 @@
 # CRANE-X7 実機ドライバ用（crane_x7_control のみ）。Linux ホストで USB を渡して使う。
 # シミュ用の Dockerfile.arm と違い Gazebo / MoveIt / VNC は入れない。
-FROM ros:jazzy-ros-base
+# ベースは digest で固定する（multi-arch の manifest list）。更新するときは digest を差し替える。
+FROM ros:jazzy-ros-base@sha256:c3706ef0a0aa45413c07803cf433602f543b22e45b4855f6fca955c2d8ecc4e8
 
 SHELL ["/bin/bash", "-c"]
 
