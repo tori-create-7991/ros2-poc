@@ -141,6 +141,25 @@ ros2 launch crane_x7_gazebo crane_x7_with_table.launch.py
 ros2 launch ur_simulation_gz ur_sim_control.launch.py
 ```
 
+#### Mac のターミナルから起動する
+
+noVNC の端末を使わず、Mac のターミナルから `docker exec` で起動することもできる。
+ウィンドウは noVNC（<http://127.0.0.1:6080/>）側のデスクトップに表示される。
+
+```bash
+# シェルに入る（以降は上のコマンドをそのまま実行できる）
+docker exec -it -u ubuntu -e DISPLAY=:1 ros2arm bash
+
+# 1コマンドで起動する（例: デモ 2）
+docker exec -it -u ubuntu -e DISPLAY=:1 ros2arm bash -ic 'ros2 launch crane_x7_gazebo crane_x7_with_table.launch.py'
+```
+
+| オプション | 理由 |
+|---|---|
+| `-u ubuntu` | ROS 2 の環境設定は `/home/ubuntu/.bashrc` にある（root では読まれない） |
+| `-e DISPLAY=:1` | VNC の画面 `:1` に GUI を表示する |
+| `bash -ic` | 対話シェルでないと `.bashrc` が読まれず `ros2` が見つからない |
+
 ### ros2lab から ros2arm のアームを動かす（2コンテナ構成）
 
 `ros2arm`（シミュ = サーバー側）と `ros2lab`（クライアント側）は `ros2-lab-net` 上で
