@@ -15,6 +15,12 @@ if [ -n "$(docker ps --filter 'name=^ros2arm$' --filter 'status=running' -q)" ];
   exit 1
 fi
 
+# 起動中に up し直すと、イメージや設定の変更でコンテナが作り直され、ドライバが落ちてトルクが抜ける
+if [ -n "$(docker ps --filter 'name=^ros2real$' --filter 'status=running' -q)" ]; then
+  echo "ros2real は既に起動中。作り直すとドライバが落ちてトルクが抜けるため、先に 'bash scripts/down-real.sh' すること。" >&2
+  exit 1
+fi
+
 if [ ! -e "$DEVICE" ]; then
   echo "$DEVICE が無い。CRANE-X7 の USB 接続と host/99-crane-x7.rules の導入（README「実機で動かす」）を確認すること。" >&2
   exit 1

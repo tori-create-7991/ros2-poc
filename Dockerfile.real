@@ -41,6 +41,5 @@ RUN printf '%s\n' \
 
 WORKDIR /workspace
 
-# ドライバは手動起動（トルクオンを人が制御する）:
-#   docker compose exec ros2real bash -lc 'ros2 launch crane_x7_control crane_x7_control.launch.py port_name:=/dev/crane_x7'
+# ドライバは手動起動（トルクオンを人が制御する）。手順は README「実機で動かす」参照。
 CMD ["sleep", "infinity"]
