@@ -26,7 +26,8 @@ RUN mkdir -p /opt/crane_ws/src && cd /opt/crane_ws/src \
     && apt-get clean \
     && rm -rf /opt/crane_ws/build /opt/crane_ws/log /var/lib/apt/lists/*
 
-# 隔離設定は ros2lab と同じ。ros2-lab-net 上の ros2lab とだけ Discovery する
+# 隔離設定は ros2lab と同じ。同じ compose の default ネットワーク上の ros2lab-a/b とだけ Discovery する
+# （ros2-lab-net には繋がない）
 ENV ROS_DOMAIN_ID=42
 ENV ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
 

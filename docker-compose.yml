@@ -28,7 +28,7 @@ services:
 
   ros2arm:
     # アームシミュ（Gazebo / MoveIt 2 / RViz2）。重いので profile 指定時のみ起動する:
-    #   docker compose --profile arm up -d --build
+    #   bash scripts/up-arm.sh   （ros2real 起動中は拒否する。docker compose --profile arm up -d --build と同じ）
     profiles: [arm]
     build:
       context: .

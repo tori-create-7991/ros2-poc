@@ -43,7 +43,7 @@ run_case() {
   : > "$STUB_LOG"
   export STUB_LOG
   set +e
-  ERR="$(printf '%s\n' "$input" | PATH="$TMP:$PATH" STUB_RUNNING="$running" STUB_DRIVER_STUCK="${STUB_DRIVER_STUCK:-0}" CRANE_X7_DEVICE="$device" \
+  ERR="$(if [ "$input" = "__EOF__" ]; then cat /dev/null; else printf '%s\n' "$input"; fi | PATH="$TMP:$PATH" STUB_RUNNING="$running" STUB_DRIVER_STUCK="${STUB_DRIVER_STUCK:-0}" CRANE_X7_DEVICE="$device" \
     DRIVER_STOP_WAIT=0 bash "$ROOT/scripts/$script" "$@" 2>&1 >/dev/null)"
   RC=$?
   set -e
@@ -109,7 +109,8 @@ if grep -q "exec" <<<"$LOG"; then fail "down-real(no): ドライバ停止が呼�
 # 確認に yes → ドライバ停止 → コンテナ削除の順（ros2lab は止めない）
 run_case down-real.sh "ros2real" "" "yes"
 [ "$RC" -eq 0 ] || fail "down-real: yes は exit 0 のはずが $RC: $ERR"
-grep -q "exec ros2real pkill -INT" <<<"$LOG" || fail "down-real: ドライバ停止が呼ばれない: $LOG"
+grep -qF "exec ros2real pkill -INT -f [r]os2 launch crane_x7_control" <<<"$LOG" || fail "down-real: pkill のパターンが違う: $LOG"
+grep -qF "exec ros2real pgrep -f [r]os2_control_node" <<<"$LOG" || fail "down-real: 終了確認の pgrep が呼ばれない: $LOG"
 grep -q "compose --profile real rm -sf ros2real" <<<"$LOG" || fail "down-real: rm が ros2real に限定されていない: $LOG"
 [ "$(grep -n 'exec ros2real pkill' <<<"$LOG" | head -1 | cut -d: -f1)" -lt "$(grep -n 'rm -sf' <<<"$LOG" | cut -d: -f1)" ] || fail "down-real: ドライバ停止が rm より後"
 
@@ -129,6 +130,18 @@ run_case down-real.sh "ros2real" "" ""
 # printf '%s\n' "" は空行を 1 つ渡すため、空回答＝中止として扱われる
 [ "$RC" -eq 1 ] || fail "down-real(empty answer): exit 1 のはずが $RC"
 grep -q "中止" <<<"$ERR" || fail "down-real(empty answer): 中止メッセージが無い: $ERR"
+
+# stdin が真の EOF（非対話）→ 中止
+run_case down-real.sh "ros2real" "" "__EOF__"
+[ "$RC" -eq 1 ] || fail "down-real(EOF): exit 1 のはずが $RC"
+grep -q "中止" <<<"$ERR" || fail "down-real(EOF): 中止メッセージが無い: $ERR"
+no_compose "down-real(EOF)"
+
+# ドライバが終了しない + --yes → 警告つきで削除まで進む（プロンプトなし）
+STUB_DRIVER_STUCK=1 run_case down-real.sh "ros2real" "" "" --yes
+[ "$RC" -eq 0 ] || fail "down-real(stuck, --yes): exit 0 のはずが $RC: $ERR"
+grep -q "終了しない" <<<"$ERR" || fail "down-real(stuck, --yes): 警告が出ない: $ERR"
+grep -q "rm -sf ros2real" <<<"$LOG" || fail "down-real(stuck, --yes): 削除が呼ばれない: $LOG"
 
 # --yes → プロンプトなしで実行
 run_case down-real.sh "ros2real" "" "" --yes

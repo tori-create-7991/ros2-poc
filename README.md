@@ -105,7 +105,7 @@ ROS 2 のロボットアーム制御を試すためのコンテナ。
 | CRANE-X7（`/opt/crane_ws`） | アールティ製アームの Gazebo + MoveIt（ソースビルド、コミット固定） |
 
 重いので compose の profile `arm` を指定したときだけ起動する。
-`docker compose up -d` だけなら従来どおり `ros2lab` のみが起動する。
+`docker compose up -d` だけなら従来どおり `ros2lab-a` / `ros2lab-b` のみが起動する。
 
 ### 起動・停止
 
@@ -120,7 +120,7 @@ bash scripts/up-arm.sh   # 初回ビルドは 10 分前後。docker compose --pr
 
 ```bash
 docker compose --profile arm down   # ros2lab も含めて停止・削除（ros2real が起動中なら先に scripts/down-real.sh）
-docker compose stop ros2arm         # ros2arm だけ一時停止（start で再開、コンテナ内の状態は残る）
+docker compose stop ros2arm         # ros2arm だけ一時停止（start で再開、コンテナ内の状態は残る。ros2real が起動中は start しない）
 ```
 
 `down` するとコンテナ内の変更は消える。残したいファイルは `/workspace` に置く。
@@ -170,13 +170,13 @@ docker exec -it -u ubuntu -e DISPLAY=:1 ros2arm bash -ic 'ros2 launch crane_x7_g
 
 ```bash
 # ros2arm 側のトピックが ros2lab から見えることを確認（出ない場合は数秒待って再実行）
-docker compose exec ros2lab bash -lc 'ros2 topic list | grep -E "joint_states|crane_x7_arm_controller"'   # 数秒かかる
+docker compose exec ros2lab-a bash -lc 'ros2 topic list | grep -E "joint_states|crane_x7_arm_controller"'   # 数秒かかる
 
 # 関節角の指令を送る（Gazebo 上のアームが 3 秒かけて動く）
-docker compose exec ros2lab bash -lc "ros2 topic pub --once /crane_x7_arm_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory \"{joint_names: [crane_x7_shoulder_fixed_part_pan_joint, crane_x7_shoulder_revolute_part_tilt_joint, crane_x7_upper_arm_revolute_part_twist_joint, crane_x7_upper_arm_revolute_part_rotate_joint, crane_x7_lower_arm_fixed_part_joint, crane_x7_lower_arm_revolute_part_joint, crane_x7_wrist_joint], points: [{positions: [0.5, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0], time_from_start: {sec: 3}}]}\""
+docker compose exec ros2lab-a bash -lc "ros2 topic pub --once /crane_x7_arm_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory \"{joint_names: [crane_x7_shoulder_fixed_part_pan_joint, crane_x7_shoulder_revolute_part_tilt_joint, crane_x7_upper_arm_revolute_part_twist_joint, crane_x7_upper_arm_revolute_part_rotate_joint, crane_x7_lower_arm_fixed_part_joint, crane_x7_lower_arm_revolute_part_joint, crane_x7_wrist_joint], points: [{positions: [0.5, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0], time_from_start: {sec: 3}}]}\""
 
 # 現在の関節角を読む
-docker compose exec ros2lab bash -lc 'ros2 topic echo --once /joint_states'
+docker compose exec ros2lab-a bash -lc 'ros2 topic echo --once /joint_states'
 ```
 
 `trajectory_msgs` は ros-base に含まれるので、`ros2lab` 側に追加インストールは不要。
@@ -260,10 +260,11 @@ bash scripts/up-real.sh             # ros2real を起動（ドライバはまだ
 docker compose exec -d ros2real bash -lc \
   'ros2 launch crane_x7_control crane_x7_control.launch.py port_name:=/dev/crane_x7 \
      > /workspace/crane_x7_control.$(date +%Y%m%d-%H%M%S).log 2>&1'
-tail -f workspace/crane_x7_control.*.log
+tail -f "$(ls -t workspace/crane_x7_control.*.log | head -1)"   # 起動直後はログができるまで数秒待つ
 ```
 
-ログは自動でローテーションされない。溜まったら `workspace/crane_x7_control.*.log` を消す。
+ログは自動でローテーションされない。溜まったら `workspace/crane_x7_control.*.log` を消す
+（コンテナの root が作るので、ホストでは `sudo rm` が要る）。
 
 `/dev/crane_x7` が無いと `up-real.sh` は起動せずに理由を表示する。`latency_timer` が 1 でなければ
 警告する。`docker compose --profile real up` を直接叩くと上のガードを通らないため、使わない。
@@ -287,8 +288,8 @@ docker run --rm ros2real:jazzy bash -lc \
 （「ros2lab から ros2arm のアームを動かす」参照）。
 
 ```bash
-docker compose exec ros2lab bash -lc 'ros2 topic list | grep -E "joint_states|crane_x7_arm_controller"'   # 数秒かかる
-docker compose exec ros2lab bash -lc 'ros2 topic echo --once /joint_states'
+docker compose exec ros2lab-a bash -lc 'ros2 topic list | grep -E "joint_states|crane_x7_arm_controller"'   # 数秒かかる
+docker compose exec ros2lab-a bash -lc 'ros2 topic echo --once /joint_states'
 ```
 
 ### 4. 止める

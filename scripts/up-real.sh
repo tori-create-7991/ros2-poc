@@ -8,6 +8,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# CRANE_X7_DEVICE はテスト用の上書き。docker-compose.yml が渡すデバイスは /dev/crane_x7 固定
 DEVICE="${CRANE_X7_DEVICE:-/dev/crane_x7}"
 
 if [ -n "$(docker ps --filter 'name=^ros2arm$' --filter 'status=running' -q)" ]; then
