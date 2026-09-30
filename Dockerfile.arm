@@ -1,6 +1,7 @@
 # ROS 2 アームシミュ用: ブラウザ(noVNC) から Gazebo / MoveIt 2 / RViz2 を操作する。
-# 週次で更新されるため日付タグで固定する（amd64/arm64 両対応）。
-FROM tiryoh/ros2-desktop-vnc:jazzy-20260927T0957
+# 週次で更新されるため日付タグ + digest（multi-arch の manifest list）で固定する。
+# 動作確認は arm64（Colima）のみ。amd64 はベースイメージが対応している。
+FROM tiryoh/ros2-desktop-vnc:jazzy-20260927T0957@sha256:3d0bcd5a6ec951cde22f50c79d96fe93f1f3001a6425369d0cd833ad37b766f8
 
 SHELL ["/bin/bash", "-c"]
 
@@ -26,7 +27,7 @@ RUN mkdir -p /opt/crane_ws/src && cd /opt/crane_ws/src \
     && apt-get update \
     && source /opt/ros/jazzy/setup.bash \
     && rosdep update --rosdistro jazzy \
-    && rosdep install -r -y -i --from-paths /opt/crane_ws/src --rosdistro jazzy \
+    && rosdep install -y -i --from-paths /opt/crane_ws/src --rosdistro jazzy \
     && cd /opt/crane_ws && colcon build \
     && rm -rf /opt/crane_ws/build /opt/crane_ws/log /var/lib/apt/lists/*
 

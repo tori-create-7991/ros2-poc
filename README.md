@@ -117,12 +117,17 @@ docker compose --profile arm up -d --build   # 初回ビルドは 10 分前後
 ポートは `127.0.0.1` にだけ公開しているので、LAN の他端末からは見えない。
 
 ```bash
-docker compose --profile arm down
+docker compose --profile arm down   # ros2lab も含めて停止・削除
+docker compose stop ros2arm         # ros2arm だけ一時停止（start で再開、コンテナ内の状態は残る）
 ```
+
+`down` するとコンテナ内の変更は消える。残したいファイルは `/workspace` に置く。
+`kali-vnc` を `ros2-lab-net` に繋いでいる場合は、先に切断してから `down` する
+（[他のラボ用コンテナとの接続](#他のラボ用コンテナとの接続ros2-lab-net) 参照）。
 
 ### デモ
 
-noVNC のデスクトップで端末（LXTerminal）を開いて実行する。
+noVNC のデスクトップで端末（Terminator または MATE Terminal）を開いて実行する。
 CPU 描画で重いため、デモは **1度に1つ** だけ起動する（Ctrl+C で終了してから次へ）。
 
 ```bash
@@ -143,7 +148,7 @@ ros2 launch ur_simulation_gz ur_sim_control.launch.py
 デモ 2（CRANE-X7）を起動した状態で、Mac のターミナルから:
 
 ```bash
-# ros2arm 側のトピックが ros2lab から見えることを確認
+# ros2arm 側のトピックが ros2lab から見えることを確認（出ない場合は数秒待って再実行）
 docker compose exec ros2lab bash -lc 'ros2 topic list | grep -E "joint_states|crane_x7_arm_controller"'
 
 # 関節角の指令を送る（Gazebo 上のアームが 3 秒かけて動く）
@@ -159,6 +164,13 @@ docker compose exec ros2lab bash -lc 'ros2 topic echo --once /joint_states'
 
 - **リソース**: Colima は 4CPU / 8GiB / ディスク 50GB 程度を推奨
   （`colima start --cpu 4 --memory 8 --disk 50`）。イメージは約 13GB になる。
+- **noVNC の認証**: VNC パスワードは設定していない。LAN からは見えないが、同じ Mac のブラウザで
+  開いた Web ページからは `127.0.0.1:6080` に接続を試みられる。使うときだけ起動し、終わったら止める。
+  `ros2-lab-net` に繋いだ他のラボ用コンテナ（kali-vnc 等）からも `ros2arm:80` に到達できる。
+- **`/workspace` の所有者**: `ros2lab` は root、`ros2arm` のデスクトップは `ubuntu` ユーザーで動くため、
+  片方で作ったファイルをもう片方から書き換えられないことがある。その場合は `ros2arm` 側で `sudo` を使う
+  （`ubuntu` ユーザーはパスワードなしで sudo できる）。
+- **ディスク**: ビルドキャッシュが溜まったら `docker builder prune` で掃除する。
 - **ライセンス**: CRANE-X7 のモデル（`crane_x7_description`）は株式会社アールティの
   非商用ライセンス。学習・研究目的に限って使う。
 - **GPU 直結への移行**: noVNC は CPU 描画のため遅延がある。重いシミュが必要になったら、
@@ -180,8 +192,7 @@ docker compose exec ros2lab bash -lc 'ros2 pkg list | grep sros2'
 ## 片付け
 
 ```bash
-docker compose down                # ros2lab のみ
-docker compose --profile arm down  # ros2arm も含めて停止
+docker compose --profile arm down  # ros2lab と ros2arm を停止・削除
 ```
 
 `./workspace` は両コンテナの `/workspace` にマウントされる。SROS2 の
