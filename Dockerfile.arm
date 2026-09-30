@@ -1,0 +1,44 @@
+# ROS 2 アームシミュ用: ブラウザ(noVNC) から Gazebo / MoveIt 2 / RViz2 を操作する。
+# 週次で更新されるため日付タグで固定する（amd64/arm64 両対応）。
+FROM tiryoh/ros2-desktop-vnc:jazzy-20260927T0957
+
+SHELL ["/bin/bash", "-c"]
+
+# Gazebo Harmonic (ros-gz) はベースイメージに同梱。MoveIt 2 と UR / Panda デモを追加する
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ros-jazzy-moveit \
+        ros-jazzy-moveit-resources-panda-moveit-config \
+        ros-jazzy-ur-simulation-gz \
+        ros-jazzy-ur-moveit-config \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# CRANE-X7 (アールティ): apt 未提供のためソースビルド。再現性のためコミット固定。
+# crane_x7_description は非商用ライセンス（README 参照）。
+ARG CRANE_X7_ROS_REF=3761ab179dbcbd7432b28968340e2225978006de
+ARG CRANE_X7_DESCRIPTION_REF=61865950f741f0d5a35e28eb0a7d2501cac86e7b
+RUN mkdir -p /opt/crane_ws/src && cd /opt/crane_ws/src \
+    && git clone https://github.com/rt-net/crane_x7_ros.git \
+    && git -C crane_x7_ros checkout "$CRANE_X7_ROS_REF" \
+    && git clone https://github.com/rt-net/crane_x7_description.git \
+    && git -C crane_x7_description checkout "$CRANE_X7_DESCRIPTION_REF" \
+    && apt-get update \
+    && source /opt/ros/jazzy/setup.bash \
+    && rosdep update --rosdistro jazzy \
+    && rosdep install -r -y -i --from-paths /opt/crane_ws/src --rosdistro jazzy \
+    && cd /opt/crane_ws && colcon build \
+    && rm -rf /opt/crane_ws/build /opt/crane_ws/log /var/lib/apt/lists/*
+
+# 隔離設定は ros2lab と同じ。ros2-lab-net 上の ros2lab とだけ Discovery する
+ENV ROS_DOMAIN_ID=42
+ENV ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
+
+# デスクトップの端末がコンテナ ENV を継承しない場合に備え、ubuntu ユーザーの .bashrc にも書く
+RUN printf '%s\n' \
+    '# --- ros2-poc: arm sim env ---' \
+    'export ROS_DOMAIN_ID=42' \
+    'export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET' \
+    'source /opt/ros/jazzy/setup.bash' \
+    'source /opt/crane_ws/install/setup.bash' \
+    >> /home/ubuntu/.bashrc
