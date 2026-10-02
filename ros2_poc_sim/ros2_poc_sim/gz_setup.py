@@ -154,7 +154,7 @@ def main(argv=None):
     ap.add_argument('--object-name', default='')
     ap.add_argument('--world', default='default')
     ap.add_argument('--world-entity-id', type=int, default=1)
-    ap.add_argument('--wait-sec', type=float, default=180.0)
+    ap.add_argument('--wait-sec', type=float, default=300.0)
     ap.add_argument('--spawn-timeout', type=float, default=240.0)
     a = ap.parse_args(argv)
 

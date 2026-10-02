@@ -110,7 +110,7 @@ LAUNCH_ARGS = {
     'ns_mode': '',
     'spawn_object': 'true',
     'world': 'default',
-    'wait_sec': '180',
+    'wait_sec': '300',
     'spawn_timeout': '240',
 }
 

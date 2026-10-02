@@ -28,7 +28,7 @@ ros2 launch ros2_poc_sim sim_camera.launch.py profile:=realsense_d435 placement:
 | `ns_mode` | プロファイルの既定 | `nested` にすると素の realsense-ros Jazzy と同じ `/camera/camera/...` 形になる |
 | `spawn_object` | `true` | 青い立方体を置く |
 | `world` | `default` | Gazebo のワールド名 |
-| `wait_sec` / `spawn_timeout` | `180` / `240` | ワールドが立つまで待つ秒数 / 1 回のスポーンのタイムアウト。負荷が高いと `create` は遅い |
+| `wait_sec` / `spawn_timeout` | `300` / `240` | ワールドが立つまで待つ秒数 / 1 回のスポーンのタイムアウト。初回（Fuel のモデル取得）やホストが高負荷のときは Gazebo の起動自体が数分かかる。`ros2arm` を別に使っていると特に遅い |
 
 **再実行の挙動**
 
