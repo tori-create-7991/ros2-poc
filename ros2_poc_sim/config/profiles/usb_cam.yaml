@@ -47,8 +47,6 @@ qos:
 
 compressed: [color_image]
 
-parameters: {}
-
 not_reproduced:
   - 露出・フォーカス・ホワイトバランス等の V4L2 制御
   - pixel_format 違い（yuyv 時の yuv422_yuy2）、MJPEG のブロックノイズ

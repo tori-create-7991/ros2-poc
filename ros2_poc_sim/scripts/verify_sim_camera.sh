@@ -12,7 +12,8 @@ ARM="${ARM:-ros2arm}"
 LAB="${LAB:-ros2lab-a}"
 SHARE=/opt/ros2_poc_ws/install/ros2_poc_sim/share/ros2_poc_sim
 OUT_DIR="${OUT_DIR:-workspace}"
-# 物体の期待位置（base_link, 立方体の中心）。config/placements の object と一致させる
+# 物体の期待位置（base_link, 立方体の中心の落ち着き位置）。config/placements の object の x, y と
+# 立方体の半辺 0.02（机上面が base_link の z=0）。test_verify_script_matches_placement が一致を検査する
 EXPECT="${EXPECT:-0.20 0.10 0.02}"
 TOL="${TOL:-0.015}"
 ROS_ENV='source /opt/ros/jazzy/setup.bash; source /opt/crane_ws/install/setup.bash; source /opt/ros2_poc_ws/install/setup.bash'
@@ -33,12 +34,12 @@ for c in "$ARM" "$LAB"; do
   [ -n "$(docker ps --filter "name=^${c}$" --filter status=running -q)" ] || { echo "$c が起動していない" >&2; exit 2; }
 done
 
-# V1: コンテナ内の単体・結合テスト
-if out=$(docker exec -u ubuntu "$ARM" bash -c "$ROS_ENV; cd /opt/ros2_poc_ws/src/ros2_poc_sim && PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider test 2>&1 | tail -1"); then
-  case "$out" in *passed*) report V1-pytest ok "$out" ;; *) report V1-pytest FAIL "$out" ;; esac
-else
-  report V1-pytest FAIL "実行できない"
-fi
+# V1: コンテナ内の単体・結合テスト（本番の DDS ドメインと混ざらないよう別ドメインで実行し、pytest の終了コードで判定する）
+# 注意: 見るのはイメージに焼かれた /opt/ros2_poc_ws/src のコピー。ros2_poc_sim/ を編集したらイメージを再ビルドすること。
+out=$(docker exec -u ubuntu -e ROS_DOMAIN_ID=97 "$ARM" bash -c "$ROS_ENV; cd /opt/ros2_poc_ws/src/ros2_poc_sim && PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider test 2>&1; echo PYTEST_RC=\$?")
+rc=$(printf '%s\n' "$out" | sed -n 's/^PYTEST_RC=//p' | tail -1)
+summary=$(printf '%s\n' "$out" | grep -E 'passed|failed|error' | tail -1)
+if [ "$rc" = 0 ]; then report V1-pytest ok "$summary"; else report V1-pytest FAIL "rc=${rc:-?} $summary"; fi
 
 # V3: 仮想カメラのトピックが出ている（購読者なしで一覧に出る）
 topics=$(docker exec "$LAB" bash -lc 'ros2 topic list 2>/dev/null' || true)
@@ -62,7 +63,13 @@ docker cp ros2_poc_sim/scripts/save_frame.py "$LAB":/tmp/save_frame.py >/dev/nul
 mkdir -p "$OUT_DIR"
 if out=$(docker exec "$LAB" bash -lc "python3 /tmp/save_frame.py $COLOR /tmp/sim_camera_color.png 90 2>&1 | grep -E '^(saved|ERROR)' | tail -1") \
    && docker cp "$LAB":/tmp/sim_camera_color.png "$OUT_DIR/sim_camera_color.png" >/dev/null 2>&1; then
-  report V5-save-frame ok "$OUT_DIR/sim_camera_color.png ($out)"
+  std=$(printf '%s' "$out" | sed -n 's/.*std=\([0-9.]*\).*/\1/p')
+  # 真っ黒・単色（過去に灰色一色の不具合があった）を弾く。机と物体が写っていれば標準偏差はこれより大きい
+  if [ -n "$std" ] && awk "BEGIN{exit !($std > 5.0)}"; then
+    report V5-save-frame ok "$OUT_DIR/sim_camera_color.png ($out)"
+  else
+    report V5-save-frame FAIL "画像がほぼ単色: $out"
+  fi
 else
   report V5-save-frame FAIL "$out"
 fi
@@ -70,10 +77,10 @@ fi
 # V7b: 簡易検出スクリプト（realsense_d435 のみ。深度が要る）
 if [ "$PROFILE" = realsense_d435 ]; then
   docker cp ros2_poc_sim/scripts/vla_stub_detect.py "$LAB":/tmp/vla_stub_detect.py >/dev/null
-  log=$(docker exec "$LAB" bash -lc 'timeout -s INT 45 python3 /tmp/vla_stub_detect.py 2>&1' || true)
+  log=$(docker exec "$LAB" bash -lc 'timeout -s INT 60 python3 /tmp/vla_stub_detect.py 2>&1' || true)
   line=$(printf '%s\n' "$log" | grep 'base_link=' | tail -1)
   if [ -z "$line" ]; then
-    report V7b-stub-detect FAIL "base_link 基準の target_0 が出ない"
+    report V7b-stub-detect FAIL "base_link 基準の target_0 が出ない: $(printf '%s\n' "$log" | grep -E 'ERROR|エラー|来ない' | tail -1)"
   else
     res=$(python3 - "$line" "$EXPECT" "$TOL" <<'PY'
 import re, sys

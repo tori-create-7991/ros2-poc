@@ -4,10 +4,30 @@ from xml.sax.saxutils import escape
 from ros2_poc_sim import geometry as G
 from ros2_poc_sim import profile as P
 
+MODEL_PREFIX = 'sim_camera_'
+SENSORS_MARKER_NAME = f'{MODEL_PREFIX}sensors_marker'
 CUBE_SIDE = 0.04
 CUBE_MASS = 0.05
 # OpenCV の HSV で H≈118, S≈241, V≈230（公式 color_detection の青: H100-125, S>=100, V>=30）
 CUBE_DIFFUSE = (0.05, 0.1, 0.9, 1.0)
+
+
+def camera_model_name(profile: dict) -> str:
+    return f"{MODEL_PREFIX}{profile['name']}"
+
+
+def sensors_marker_sdf() -> str:
+    """Sensors システムを追加した印。Gazebo にはシステムの有無を問い合わせる手段が無いので、
+    追加の直後にこの静的モデルを置き、再実行時の二重追加を防ぐ（Gazebo を再起動すれば消える）。"""
+    return f'''<?xml version="1.0"?>
+<sdf version="1.9">
+  <model name="{SENSORS_MARKER_NAME}">
+    <static>true</static>
+    <pose>0 0 -100 0 0 0</pose>
+    <link name="link"/>
+  </model>
+</sdf>
+'''
 
 
 def gz_base_topic(profile: dict) -> str:
@@ -52,7 +72,7 @@ def camera_model_sdf(profile: dict, placement: dict) -> str:
     pos, R = G.sensor_pose_in_world(profile, placement)
     return f"""<?xml version="1.0"?>
 <sdf version="1.9">
-  <model name="sim_camera_{escape(profile['name'])}">
+  <model name="{escape(camera_model_name(profile))}">
     <static>true</static>
     <pose>{_pose_str(pos, R)}</pose>
     <link name="link">
@@ -62,13 +82,13 @@ def camera_model_sdf(profile: dict, placement: dict) -> str:
         <material><diffuse>0.1 0.1 0.1 1</diffuse></material>
       </visual>
       <sensor name="sensor" type="{s['gz_type']}">
-        <update_rate>{s['fps']}</update_rate>
+        <update_rate>{float(s['fps']):g}</update_rate>
         <topic>{gz_base_topic(profile)}</topic>
         <gz_frame_id>{escape(_color_frame_id(profile))}</gz_frame_id>
         <camera>
           <horizontal_fov>{P.horizontal_fov(profile):.9g}</horizontal_fov>
-          <image><width>{s['width']}</width><height>{s['height']}</height>{fmt}</image>
-          <clip><near>{s['clip']['near']}</near><far>{s['clip']['far']}</far></clip>
+          <image><width>{int(s['width'])}</width><height>{int(s['height'])}</height>{fmt}</image>
+          <clip><near>{float(s['clip']['near']):g}</near><far>{float(s['clip']['far']):g}</far></clip>
         </camera>
         <always_on>1</always_on>
         <visualize>false</visualize>

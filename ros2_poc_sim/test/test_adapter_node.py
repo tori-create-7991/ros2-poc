@@ -25,7 +25,7 @@ REL = QoSProfile(depth=10, reliability=QoSReliabilityPolicy.RELIABLE)
 
 @pytest.fixture(scope='module')
 def ctx():
-    os.environ.setdefault('ROS_DOMAIN_ID', '97')
+    os.environ['ROS_DOMAIN_ID'] = '97'   # 稼働中のドメイン（42）に混ざらないよう無条件に上書きする
     os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] = 'LOCALHOST'
     rclpy.init()
     yield
@@ -158,3 +158,110 @@ def test_static_tf_published(ctx):
     assert ('camera_color_frame', 'camera_color_optical_frame') in frames
     adapter.destroy_node()
     helper.destroy_node()
+
+
+def _make_adapter(profile, **extra):
+    params = [Parameter('profile', value=profile)] + [Parameter(k, value=v) for k, v in extra.items()]
+    return CameraAdapter(parameter_overrides=params)
+
+
+def test_usb_cam_profile_has_no_depth_and_passes_pixels(ctx):
+    adapter = _make_adapter('usb_cam')
+    helper = rclpy.create_node('helper4')
+    ex = SingleThreadedExecutor()
+    ex.add_node(adapter)
+    ex.add_node(helper)
+    got = {}
+    helper.create_subscription(Image, '/image_raw', lambda m: got.__setitem__('c', m), REL)
+    helper.create_subscription(CameraInfo, '/camera_info', lambda m: got.__setitem__('i', m), REL)
+    pub = helper.create_publisher(Image, '/sim_camera/usb_cam/raw/image', REL)
+    pub_i = helper.create_publisher(CameraInfo, '/sim_camera/usb_cam/raw/camera_info', REL)
+    _spin(ex, 2.0, until=lambda: len(adapter.subs) >= 2)
+    assert set(adapter.subs) == {'color', 'info'}     # depth / points は存在しない
+    src = _raw_image()
+    info = CameraInfo()
+    info.header.stamp = STAMP
+    for _ in range(20):
+        pub.publish(src)
+        pub_i.publish(info)
+        _spin(ex, 0.1, until=lambda: len(got) == 2)
+        if len(got) == 2:
+            break
+    assert bytes(got['c'].data) == bytes(src.data)               # ピクセルはそのまま
+    assert got['c'].header.frame_id == 'camera'
+    assert got['i'].header.frame_id == 'camera' and list(got['i'].k)[0] == pytest.approx(438.78)
+    adapter.destroy_node()
+    helper.destroy_node()
+
+
+def test_each_output_keeps_its_own_input_stamp(ctx):
+    adapter = _make_adapter('realsense_d435')
+    helper = rclpy.create_node('helper5')
+    ex = SingleThreadedExecutor()
+    ex.add_node(adapter)
+    ex.add_node(helper)
+    got = {}
+    helper.create_subscription(Image, '/camera/color/image_raw', lambda m: got.__setitem__('c', m), REL)
+    helper.create_subscription(Image, '/camera/aligned_depth_to_color/image_raw',
+                               lambda m: got.__setitem__('d', m), REL)
+    pc = helper.create_publisher(Image, f'{RAW}/image', REL)
+    pd = helper.create_publisher(Image, f'{RAW}/depth_image', REL)
+    _spin(ex, 2.0, until=lambda: len(adapter.subs) >= 2)
+    color = _raw_image()
+    color.header.stamp = Time(sec=1, nanosec=1)
+    depth = Image()
+    depth.header.stamp = Time(sec=2, nanosec=2)
+    depth.height, depth.width, depth.encoding, depth.step = 1, 1, '32FC1', 4
+    depth.data = np.array([1.0], dtype='<f4').tobytes()
+    for _ in range(20):
+        pc.publish(color)
+        pd.publish(depth)
+        _spin(ex, 0.1, until=lambda: len(got) == 2)
+        if len(got) == 2:
+            break
+    assert got['c'].header.stamp.sec == 1 and got['d'].header.stamp.sec == 2
+    adapter.destroy_node()
+    helper.destroy_node()
+
+
+def test_malformed_messages_are_dropped_not_fatal(ctx):
+    adapter = _make_adapter('realsense_d435')
+    helper = rclpy.create_node('helper6')
+    ex = SingleThreadedExecutor()
+    ex.add_node(adapter)
+    ex.add_node(helper)
+    got = []
+    helper.create_subscription(Image, '/camera/aligned_depth_to_color/image_raw', got.append, REL)
+    pd = helper.create_publisher(Image, f'{RAW}/depth_image', REL)
+    _spin(ex, 2.0, until=lambda: 'depth' in adapter.subs)
+    bad = Image()
+    bad.header.stamp = STAMP
+    bad.height, bad.width, bad.encoding, bad.step = 4, 4, '32FC1', 16
+    bad.data = b'\x00' * 7                    # 大きさが合わない
+    wrong_enc = Image()
+    wrong_enc.header.stamp = STAMP
+    wrong_enc.height, wrong_enc.width, wrong_enc.encoding, wrong_enc.step = 1, 1, 'rgb8', 3
+    wrong_enc.data = b'\x00\x00\x00'
+    good = Image()
+    good.header.stamp = STAMP
+    good.height, good.width, good.encoding, good.step = 1, 1, '32FC1', 4
+    good.data = np.array([0.5], dtype='<f4').tobytes()
+    for _ in range(3):
+        pd.publish(bad)
+        pd.publish(wrong_enc)
+        _spin(ex, 0.1)
+    for _ in range(20):
+        pd.publish(good)
+        _spin(ex, 0.1, until=lambda: bool(got))
+        if got:
+            break
+    assert got and np.frombuffer(bytes(got[0].data), '<u2').tolist() == [500]  # 壊れた入力の後も動く
+    adapter.destroy_node()
+    helper.destroy_node()
+
+
+def test_nested_ns_mode_topics(ctx):
+    adapter = _make_adapter('realsense_d435', ns_mode='nested')
+    names = {t for t, _ in adapter.get_publisher_names_and_types_by_node('camera_adapter', '/')}
+    assert '/camera/camera/color/image_raw' in names
+    adapter.destroy_node()

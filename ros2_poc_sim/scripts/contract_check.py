@@ -31,6 +31,27 @@ def evaluate(exp: dict, obs):
     return problems
 
 
+def stamp_ratio(names, stamps):
+    """グループ内で最少の件数に対する、全トピックに共通する stamp の割合。"""
+    sets = [stamps.get(n, set()) for n in names]
+    smallest = min((len(x) for x in sets), default=0)
+    return (len(set.intersection(*sets)) / smallest) if smallest else 0.0
+
+
+def check_info(exp: dict, info) -> list:
+    """CameraInfo の内容（幅・高さ・fx）を契約と比べる。info は dict(width,height,k)。"""
+    problems = []
+    if info is None:
+        return ['camera_info を受信できず内容を検査できない']
+    if 'width' in exp and info['width'] != exp['width']:
+        problems.append(f"width {info['width']} != {exp['width']}")
+    if 'height' in exp and info['height'] != exp['height']:
+        problems.append(f"height {info['height']} != {exp['height']}")
+    if 'fx' in exp and abs(info['k'][0] - exp['fx']) > exp.get('fx_tol', 1.0):
+        problems.append(f"fx {info['k'][0]} != {exp['fx']} ±{exp.get('fx_tol', 1.0)}")
+    return problems
+
+
 def common_stamps(names, stamps):
     sets = [stamps.get(n, set()) for n in names]
     return set.intersection(*sets) if sets else set()
@@ -65,6 +86,7 @@ def main(argv=None):
     seen = {e['name']: {'count': 0, 'first': None, 'last': None, 'encoding': None, 'frame_id': None}
             for e in expected}
     stamps = {e['name']: set() for e in expected}
+    infos, sizes = {}, {}
 
     def make_cb(name):
         def cb(msg):
@@ -76,6 +98,10 @@ def main(argv=None):
             s['frame_id'] = msg.header.frame_id
             s['encoding'] = getattr(msg, 'encoding', None)
             stamps[name].add((msg.header.stamp.sec, msg.header.stamp.nanosec))
+            if hasattr(msg, 'k'):
+                infos[name] = {'width': msg.width, 'height': msg.height, 'k': list(msg.k)}
+            elif hasattr(msg, 'width') and hasattr(msg, 'height') and hasattr(msg, 'encoding'):
+                sizes[name] = (msg.width, msg.height)
         return cb
 
     types_by_topic = {}
@@ -112,9 +138,19 @@ def main(argv=None):
         if not all(n in stamps for n in group):
             continue
         n = len(common_stamps(group, stamps))
-        ok = n > 0
+        ratio = stamp_ratio(group, stamps)
+        ok = ratio >= contract.get('same_stamp_min_ratio', 0.5)
         failed |= not ok
-        print(f"{'ok  ' if ok else 'FAIL'} same_stamp {group}: 共通 stamp {n} 件")
+        print(f"{'ok  ' if ok else 'FAIL'} same_stamp {group}: 共通 stamp {n} 件（最少の {ratio:.0%}）")
+    for name, exp_info in (contract.get('camera_info') or {}).items():
+        problems = check_info(exp_info, infos.get(name))
+        # 画像の幅・高さが camera_info と一致すること（組になる画像を contract の image キーで指定）
+        img = exp_info.get('image')
+        if img and img in sizes and name in infos:
+            if sizes[img] != (infos[name]['width'], infos[name]['height']):
+                problems.append(f'画像 {sizes[img]} と camera_info の大きさが違う')
+        failed |= bool(problems)
+        print(f"{'FAIL' if problems else 'ok  '} camera_info {name}" + ''.join(f'\n       - {p}' for p in problems))
     tf = contract.get('tf') or {}
     for fr in tf.get('frames', []):
         deadline = time.monotonic() + 5.0

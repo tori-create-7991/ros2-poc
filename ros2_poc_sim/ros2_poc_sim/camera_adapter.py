@@ -5,6 +5,8 @@
   これで color / depth / info が同一 stamp になり、公式 color_detection の ExactTime 同期が成立する。
 - 静的 TF（placement の base_link→camera_link とプロファイルの tf.links）もここで出す。
 """
+import time
+
 import numpy as np
 import rclpy
 from rclpy.clock import Clock, ClockType
@@ -71,6 +73,9 @@ class CameraAdapter(Node):
             self.get_logger().info(f'{sid}: {topic}')
 
         self.subs = {}  # raw source -> subscription
+        self._sub_started = {}   # raw source -> 購読開始の壁時計
+        self._got_frame = set()  # 1 枚でも受けた raw source
+        self._warned = set()
         # use_sim_time でも /clock が来ない間に止まらないよう、購読者の監視は壁時計で回す
         self.create_timer(float(self.get_parameter('lazy_poll_sec').value), self._poll_subscribers,
                           clock=Clock(clock_type=ClockType.SYSTEM_TIME))
@@ -82,16 +87,38 @@ class CameraAdapter(Node):
             wanted = any(self.pubs[s].get_subscription_count() > 0 for s in sids)
             if wanted and raw not in self.subs:
                 topic = B.raw_topic(self.profile, _RAW_LEAF[raw])
-                cb = getattr(self, f'_on_{raw}')
+                handler = getattr(self, f'_on_{raw}')
+                cb = (lambda m, _r=raw, _h=handler: self._guard(_r, _h, m))
                 self.subs[raw] = self.create_subscription(
                     _RAW_MSG[raw], topic, cb, QoSProfile(depth=5,
                                                          reliability=QoSReliabilityPolicy.RELIABLE))
+                self._sub_started[raw] = time.monotonic()
+                self._got_frame.discard(raw)
+                self._warned.discard(raw)
                 self.get_logger().info(f'購読開始: {topic}')
             elif not wanted and raw in self.subs:
                 self.destroy_subscription(self.subs.pop(raw))
+                self._sub_started.pop(raw, None)
                 self.get_logger().info(f'購読停止: {raw}')
 
+        # 購読したのに生トピックが来ない（gz→bridge の経路切れ・重負荷）ときは気づけるよう警告する
+        now = time.monotonic()
+        for raw, t0 in self._sub_started.items():
+            if raw not in self._got_frame and raw not in self._warned and now - t0 > 10.0:
+                self._warned.add(raw)
+                self.get_logger().warning(
+                    f'{B.raw_topic(self.profile, _RAW_LEAF[raw])} が 10 秒来ない。'
+                    'gz のカメラ・bridge・RTF（gz topic -e -t /stats）を確認する')
+
     # ---- コールバック -------------------------------------------------
+    def _guard(self, raw, fn, msg):
+        """不正なメッセージ 1 つで spin を落とさない（ログして捨てる）。"""
+        self._got_frame.add(raw)
+        try:
+            fn(msg)
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f'{raw} を処理できず破棄: {exc!r}', throttle_duration_sec=5.0)
+
     def _frame(self, sid: str) -> str:
         st = self.profile['topics']['streams'][sid]
         return self.profile['frames'][st['frame']]

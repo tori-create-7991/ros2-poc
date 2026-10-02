@@ -26,11 +26,9 @@ def needed_sources(profile: dict, pointcloud: bool) -> list:
 
 
 def _gz_topic(profile: dict, leaf: str) -> str:
-    name = profile['name']
-    if profile['sensor']['gz_type'] == 'rgbd_camera':
-        return f'/sim_camera/{name}/{leaf}'
-    # camera: 画像が /<topic>、camera_info は同階層
-    return f'/sim_camera/{name}/{leaf}'
+    # sdf.gz_base_topic が決める <topic> の下に leaf が付く。rgbd_camera は <topic>/{image,depth_image,points,camera_info}、
+    # camera は <topic> が画像で camera_info は同階層なので、どちらも /sim_camera/<name>/<leaf> になる。
+    return f"/sim_camera/{profile['name']}/{leaf}"
 
 
 def bridge_entries(profile: dict, pointcloud: bool = False) -> list:

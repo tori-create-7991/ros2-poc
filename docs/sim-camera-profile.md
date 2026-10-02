@@ -23,12 +23,19 @@ ros2 launch ros2_poc_sim sim_camera.launch.py profile:=realsense_d435 placement:
 |---|---|---|
 | `profile` | `realsense_d435` | `realsense_d435` / `usb_cam` |
 | `placement` | `fixed_near_top` | `fixed_near_top`（机の真上、物体まで約 0.4m。公式 `color_detection` 用）/ `fixed_front_oblique`（ロボットの正面、三人称視点） |
-| `pointcloud` | `false` | 点群（`/camera/depth/color/points`）も出す。重いので既定は off |
+| `pointcloud` | `false` | 点群（`/camera/depth/color/points`）も出す。**未検証**（検証 V9 未実施）。1 枚 7.4MB で CPU 描画下では重く、Colima の 8GB ではメモリが逼迫しうる。QoS は RELIABLE・depth 2（公式 `point_cloud_detection` が RELIABLE で購読するため best_effort にはできない）。既定は off |
 | `compressed` | `true` | `<画像トピック>/compressed`（JPEG）も出す |
 | `ns_mode` | プロファイルの既定 | `nested` にすると素の realsense-ros Jazzy と同じ `/camera/camera/...` 形になる |
 | `spawn_object` | `true` | 青い立方体を置く |
+| `world` | `default` | Gazebo のワールド名 |
+| `wait_sec` / `spawn_timeout` | `180` / `240` | ワールドが立つまで待つ秒数 / 1 回のスポーンのタイムアウト。負荷が高いと `create` は遅い |
 
-再実行しても Sensors システムの二重追加やモデルの重複は起きない（`sim_camera_*` モデルの有無で判断する）。別のプロファイルを後から足すこともできる。
+**再実行の挙動**
+
+- **Gazebo 側は冪等**。Sensors システムは「追加した直後に置く目印のモデル（`sim_camera_sensors_marker`）」で追加済みかを判断し、カメラ・物体は名前で重複を避ける。Gazebo は Sensors システムの有無を問い合わせる手段を持たないための方式で、Gazebo を再起動すると目印も消える（そのまま起動し直してよい）。状態を取得できないとき（`gz` が重すぎる等）は、推測で追加せず `rc=6` で中止する。
+- **ROS ノード（bridge / adapter / republish）は冪等ではない**。同じプロファイルを動かしたまま `sim_camera.launch.py` を再実行しない（先に Ctrl-C する）。ノード名・republish 名はプロファイル名を含むので、**別のプロファイルを同時に動かすのは問題ない**（TF のフレーム名も重ならないよう分けてある）。
+- `gz_setup` が失敗（rc≠0）したら launch 全体を止める（bridge / adapter を空回りさせない）。
+- 生成物（SDF・ブリッジ設定）は `/tmp/ros2_poc_sim_<uid>/<プロファイル名>/`（0700）に出る。困ったときはここを見る。
 
 ### 出るトピック
 
@@ -62,11 +69,14 @@ docker compose exec ros2lab-a bash -lc 'python3 /tmp/vla_stub_detect.py'
 
 `ros2arm` のデスクトップ上なら `rqt_image_view` でも見られる。
 
+**イメージの再ビルド**: `ros2_poc_sim/` は `Dockerfile.arm` の末尾でイメージに焼かれる（`--symlink-install` ではない）。ソースやプロファイルを編集したら `docker compose --profile arm build ros2arm` で再ビルドする（変更が最終 2 レイヤだけなので速い）。`docker exec` の非対話シェルは `~/.bashrc` を読まないので、`source /opt/ros2_poc_ws/install/setup.bash` を明示する。
+
 ### 簡易検出スクリプト（`vla_stub_detect.py`）
 
 OpenVLA の代わりの簡易スクリプト。色画像・整列深度・camera_info から青い立方体を検出し、TF **`target_0`**（親 = 画像の `frame_id`）を配信する。公式 `crane_x7_examples` の `color_detection` と同じ規約（青の HSV 範囲、有効距離 0.2〜0.5m、`target_0`）なので、後段の `pick_and_place_tf` や本物の VLA ノードと差し替えられる。`ros2lab`（OpenCV なし）で動くよう numpy だけで書いてある。
 
-- 受け取るのは `rgb8` の色画像と `16UC1`(mm) の深度。実機でもシミュでも同じ（これが「受け手無改変」の確認）。
+- 受け取るのは `rgb8` の色画像と `16UC1`(mm) の深度。実機でもシミュでも同じ（これが「受け手無改変」の確認）。深度が無い `usb_cam` プロファイルでは、10 秒たっても深度が来ないとエラーを出す。
+- 入力は信頼しない（DDS は無認証）: 画像の `frame_id` が `camera_color_optical_frame` でない、`camera_info` の `fx, fy` が不正（0・負・NaN）なら破棄する。色と深度は stamp が同じ組だけを使い、どちらが先に着いても組になる。
 - `base_link` から見た位置が分かれば INFO に出す（例: `base_link=(0.200,0.101,0.025)`）。
 - アームには何も送らない。
 
@@ -84,7 +94,9 @@ ros2 run tf2_ros tf2_echo base_link target_0
 bash ros2_poc_sim/scripts/verify_sim_camera.sh realsense_d435   # または usb_cam
 ```
 
-V1（pytest）、V3（ros2lab から見える）、出力契約（型・エンコーディング・frame_id・Hz・同一 stamp・TF）、画像の保存、簡易検出スクリプトの位置誤差（±1.5cm）を順に確認する。契約ファイルは [../ros2_poc_sim/config/contracts](../ros2_poc_sim/config/contracts)。**同じ契約を実機にも流せる**（`--min-hz 5` などで Hz の下限を厳しくする）。
+V1（pytest。本番の DDS ドメインに混ざらないよう `ROS_DOMAIN_ID=97` で実行し、終了コードで判定）、V3（ros2lab から見える）、出力契約（型・エンコーディング・frame_id・Hz・同一 stamp・CameraInfo の内容・TF）、画像の保存（ほぼ単色なら不合格）、簡易検出スクリプトの位置誤差（±1.5cm）を順に確認する。
+
+自動化していないもの（手で確認）: 公式 `color_detection`（V7、上の単独起動）、ロボットの位置（V2）、点群（V9）、TF の値（連結だけ確認）。V1 が見るのはイメージに焼かれたコピーなので、編集後は再ビルドしてから実行する。Hz の下限は「生きている」ことの確認（0.5Hz）で、実機に流すときは `--min-hz` で厳しくする。契約ファイルは [../ros2_poc_sim/config/contracts](../ros2_poc_sim/config/contracts)。**同じ契約を実機にも流せる**（`--min-hz 5` などで Hz の下限を厳しくする）。
 
 ## プロファイルの形式（YAML）
 
@@ -99,7 +111,9 @@ V1（pytest）、V3（ros2lab から見える）、出力契約（型・エン�
 | `topics.streams` | `source`・`name`・`type`・`encoding`・`frame`・`transform`（変換）・`enabled_by` |
 | `qos`、`compressed`、`not_reproduced` | QoS、圧縮して出すストリーム、再現しないもの |
 
-変換（`transform`）は `passthrough` / `depth_to_16uc1_mm`（32FC1(m) → 16UC1(mm)）/ `points_to_optical`（点群をセンサ座標から光学座標へ）。新しいカメラは YAML と契約ファイルを足し、足りない変換があれば [`transforms.py`](../ros2_poc_sim/ros2_poc_sim/transforms.py) に単体テスト付きで足す。
+**プロファイルを書くときの注意**: `frames` は「論理名 → 実フレーム名」の表で、ストリームの `frame` と `tf.gz_sensor_frame` は論理名（キー）、`tf.links` の `parent` / `child` は実フレーム名で書く。`gz` の色は `rgb8` なので、変換なしで他のエンコーディングを名乗ることは検証で拒否される。
+
+変換（`transform`）は `passthrough` / `depth_to_16uc1_mm`（32FC1(m) → 16UC1(mm)）/ `points_to_optical`（点群をセンサ座標から光学座標へ）。新しいカメラは YAML と契約ファイルを足せば増やせる（契約とプロファイルの食い違いは pytest が検出する）。次のものは **YAML だけでは足りない**: 新しい変換（`bgr8` / `bgra8` / `mono8` への変換など。[`transforms.py`](../ros2_poc_sim/ros2_poc_sim/transforms.py) に単体テスト付きで足し、`camera_adapter.py` の呼び出しも足す）、非理想の内部パラメータ（Gazebo が描画できない）、1 プロファイルに複数のカメラ（ステレオ・IR など）。
 
 ## 既知の差分（実機と違う点）
 
@@ -108,6 +122,7 @@ V1（pytest）、V3（ros2lab から見える）、出力契約（型・エン�
 - **点群の `frame_id`**: 実機 RealSense は `camera_depth_optical_frame`、シミュは `camera_color_optical_frame`。Gazebo は 1 つの視点から深度を色に位置合わせして描画するため、実機ラベルを付けると 15mm ずれる。位置の正しさを優先している。
 - **画像の圧縮サイズ**は机上のシーンで約 58KB/枚（単色の合成シーンでの 9.5KB より大きい）。
 - 固定カメラは **シミュ上の幽霊**（衝突なし、MoveIt の計画シーンにも載らない）。
+- `contract` の `camera_info` の `fx` はプロファイルの暫定値に固定している。実機に流すときは外すか実測値に差し替える。
 
 ## 再現できないもの
 
@@ -122,14 +137,18 @@ V1（pytest）、V3（ros2lab から見える）、出力契約（型・エン�
 ## 隔離方針との関係
 
 - 仮想カメラのトピックは `ros2arm` が参加する既存の経路（`default` と `ros2-lab-net`）で `ros2lab` に届く。compose の変更は不要。
-- DDS は無認証。`ros2-lab-net` に `kali-vnc` などを接続すると、そこからカメラトピックの購読や偽の画像の注入ができる（シミュ限定なので実害は小さいが、将来 VLA の入力を汚染しうる）。
+- **DDS は無認証**。`ros2-lab-net` に `kali-vnc` などを接続すると、そこからカメラトピックを購読でき、偽の画像・深度・CameraInfo や `/tf`・`/tf_static` を注入できる。簡易検出スクリプトは入力を信頼して `target_0` を出す（公式の `pick_and_place_tf` は `target_0` を読む）ので、**注入されるとシミュ上のアームが攻撃者の指定した位置へ動きうる**。VLA の入力も同様に信頼してはならない。
+- **Gazebo の通信（gz-transport）も無認証**。`gz_setup` が使う `entity/system/add` は、同じ Gazebo パーティションにいる誰でも呼べ、任意のライブラリをロードさせられる（ワールドの変更も同様）。`ros2-lab-net` を越えて gz-transport の Discovery が届くかは**未検証**。届く場合は `GZ_PARTITION` の固定値化や `GZ_IP` での絞り込みを検討する。この PR は compose を変えていないので、従来のリスクが増えるわけではないが、このサービスを使い始める。
 - 実カメラを接続するときは `ros2real` 側で動かし、画像を `ros2-lab-net` に出さない構成を維持する（`ros2real` は `lab` に繋がない）。
 
 ## トラブルシュート
 
 | 症状 | 原因・対処 |
 |---|---|
+| トピックは見えるが画像が来ない・1Hz 未満 | 負荷。`gz topic -e -t /stats` で RTF を見る。adapter は購読後 10 秒来ないと警告を出す。`ros2 topic hz /sim_camera/<プロファイル名>/raw/image` で bridge の手前から切り分ける。センサは `always_on` なので、購読者がいなくても Gazebo は描画し続ける（lazy で省けるのは bridge と adapter の変換・転送だけ） |
+| `gz_setup` が rc=6 で止まる | Gazebo が重くてワールドの状態を取得できない。待つか、Gazebo を再起動してから再実行 |
+| `gz_setup` が rc=3/4 | Sensors システムの追加またはスポーンが失敗。ログを確認し、不安なら Gazebo を再起動してから再実行（目印のモデルが無いまま Sensors だけ追加されていると、再実行で二重になりうる） |
 | `ros2lab` にトピックが出ない | Discovery に 10〜20 秒かかる。`ros2arm` で launch が動いているか、同じ `ROS_DOMAIN_ID`（42）かを確認 |
 | `gz_setup` が `ワールド default のサービスが立たない` で終わる | 公式 launch を先に起動していない、または Fuel のモデルダウンロード待ち（外向き HTTP が必要）。待ってから `sim_camera.launch.py` を再実行 |
 | 画像が灰色一色 | 古い版では `ros_gz_sim create` が SDF の姿勢を無視していた。最新の `ros2_poc_sim` を使う（姿勢を `-x -y -z -R -P -Y` で明示している） |
-| 再起動後に二重に描画される | Gazebo を止めずに `sim_camera.launch.py` を何度も起動しても二重にならない。Gazebo ごと再起動したときは `sim_camera_*` モデルも消えるので、そのまま起動し直してよい |
+| 同じプロファイルを再実行したら二重に動いた | bridge / adapter は ROS ノードなので、動かしたまま同じプロファイルで再実行しない（先に Ctrl-C）。Gazebo 側（Sensors・モデル）は冪等 |

@@ -55,12 +55,9 @@ topics:
 qos:
   image:  {reliability: reliable, depth: 10}
   info:   {reliability: reliable, depth: 10}
-  points: {reliability: reliable, depth: 10}
+  points: {reliability: reliable, depth: 2}   # 7.4MB/枚。公式 point_cloud_detection は RELIABLE で購読するので best_effort にはできない。depth だけ絞って滞留を抑える
 
 compressed: [color_image]
-
-parameters:
-  pointcloud.enable: false     # 既定 off。on にすると source: points が動く
 
 not_reproduced:
   - 露出・ゲイン・ホワイトバランス（enable_auto_exposure ほか）

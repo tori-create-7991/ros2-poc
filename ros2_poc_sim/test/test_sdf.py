@@ -96,3 +96,18 @@ def test_pose_args_for_create_match_sdf_pose():
 def test_object_pose6_is_base_offset_plus_placement():
     pl = P.load_placement('fixed_near_top')
     assert S.object_pose6(pl) == pytest.approx((0.20, 0.10, 1.045, 0, 0, 0))
+
+
+def test_camera_model_name_and_marker_share_the_prefix():
+    prof = P.load_profile('usb_cam')
+    assert S.camera_model_name(prof) == 'sim_camera_usb_cam'
+    assert S.SENSORS_MARKER_NAME.startswith(S.MODEL_PREFIX)
+    root = ET.fromstring(S.sensors_marker_sdf())
+    assert root.find('model').get('name') == S.SENSORS_MARKER_NAME
+    assert root.find('model').findtext('static') == 'true'
+    assert root.find('.//collision') is None
+
+
+def test_sdf_model_name_comes_from_helper():
+    prof, pl, root = _parse('usb_cam', 'fixed_front_oblique')
+    assert root.find('model').get('name') == S.camera_model_name(prof)

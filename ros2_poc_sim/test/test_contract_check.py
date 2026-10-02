@@ -54,3 +54,19 @@ def test_same_stamp_groups():
     stamps = {'/a': {(1, 2), (3, 4)}, '/b': {(1, 2), (5, 6)}, '/c': {(1, 2)}}
     assert C.common_stamps(['/a', '/b', '/c'], stamps) == {(1, 2)}
     assert C.common_stamps(['/a', '/b'], {'/a': {(1, 2)}, '/b': {(9, 9)}}) == set()
+
+
+def test_stamp_ratio():
+    st = {'/a': {1, 2, 3, 4}, '/b': {1, 2}, '/c': {1, 2, 9}}
+    assert C.stamp_ratio(['/a', '/b', '/c'], st) == 1.0   # 最少の /b(2 件) が全て共通
+    assert C.stamp_ratio(['/a', '/b'], {'/a': {1, 2, 3}, '/b': {1, 9}}) == 0.5
+    assert C.stamp_ratio(['/a'], {'/a': set()}) == 0.0
+
+
+def test_check_info():
+    exp = {'width': 640, 'height': 480, 'fx': 462.14, 'fx_tol': 1.0}
+    ok = {'width': 640, 'height': 480, 'k': [462.14] + [0] * 8}
+    assert C.check_info(exp, ok) == []
+    assert any('fx' in p for p in C.check_info(exp, {**ok, 'k': [300.0] + [0] * 8}))
+    assert any('width' in p for p in C.check_info(exp, {**ok, 'width': 320}))
+    assert C.check_info(exp, None)

@@ -116,3 +116,40 @@ def test_profiles_do_not_share_mount_frame_names():
     d435_frames = set(d435['frames'].values())
     usb_frames = set(usb['frames'].values())
     assert not (d435_frames & usb_frames)
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda d: d.update(name='bad/name'),
+    lambda d: d['sensor'].update(clip={'near': 1.0, 'far': 0.5}),
+    lambda d: d['sensor'].update(clip={'near': '0.2', 'far': 6.0}),
+    lambda d: d['intrinsics'].pop('fx'),
+    lambda d: d['qos'].pop('points'),
+    lambda d: d['topics']['streams']['color_info'].update(type='sensor_msgs/msg/Image'),
+    lambda d: d['topics']['streams']['aligned_depth'].pop('encoding'),
+    lambda d: d['topics']['streams']['color_image'].update(encoding='bgr8'),
+    lambda d: d['tf'].update(gz_sensor_frame='depth'),
+])
+def test_additional_validation_rejects(mutate):
+    d = _base()
+    if mutate.__code__.co_names and 'gz_sensor_frame' in str(mutate.__code__.co_consts):
+        d['frames']['detached'] = 'detached_frame'
+        d['tf']['gz_sensor_frame'] = 'detached'
+    else:
+        mutate(d)
+    with pytest.raises(P.ProfileError):
+        P.validate(d)
+
+
+def test_stream_frame_must_have_tf():
+    d = _base()
+    d['frames']['floating'] = 'floating_frame'
+    d['topics']['streams']['color_image']['frame'] = 'floating'
+    with pytest.raises(P.ProfileError):
+        P.validate(d)
+
+
+def test_short_name_with_path_separator_rejected():
+    with pytest.raises(P.ProfileError):
+        P.load_profile('../profiles/usb_cam')
+    with pytest.raises(P.ProfileError):
+        P.load_placement('a/b')

@@ -76,3 +76,18 @@ def test_decode_requires_expected_encodings():
     with pytest.raises(ValueError):
         V.decode_depth('32FC1', 1, 1, b'\0\0\0\0')
     assert V.decode_depth('16UC1', 1, 2, b'\x01\x00\x02\x00').tolist() == [[1, 2]]
+
+
+def test_intrinsics_ok():
+    assert V.intrinsics_ok(K)
+    assert not V.intrinsics_ok([0, 0, 320, 0, 462, 240])
+    assert not V.intrinsics_ok([462, 0, float('nan'), 0, 462, 240])
+    assert not V.intrinsics_ok([462, 0, 320])
+    assert not V.intrinsics_ok([-1.0, 0, 320, 0, 462, 240])
+
+
+def test_shaded_cube_faces_still_detected():
+    # Gazebo では上面と側面で明るさが違う。公式の下限 V>=30, S>=100 の内側に入る色は拾う
+    for c in [(13, 25, 230), (10, 20, 150), (5, 10, 60)]:
+        m = V.blue_mask(_img((10, 10, 30, 30), color=c))
+        assert m[15, 15], c

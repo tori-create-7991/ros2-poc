@@ -73,7 +73,8 @@ def main(argv=None):
     arr = image_to_array(m.encoding, m.height, m.width, bytes(m.data))
     with open(out, 'wb') as f:
         f.write(encode_png(arr))
-    print(f'saved {out}: {m.width}x{m.height} {m.encoding} frame_id={m.header.frame_id}')
+    std = float(np.asarray(arr, dtype=np.float64).std())
+    print(f'saved {out}: {m.width}x{m.height} {m.encoding} frame_id={m.header.frame_id} std={std:.1f}')
     return 0
 
 

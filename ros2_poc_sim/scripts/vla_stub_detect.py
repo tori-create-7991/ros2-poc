@@ -20,6 +20,7 @@ LOW_V, HIGH_V = 30, 255
 DEPTH_MIN, DEPTH_MAX = 0.2, 0.5   # 公式 color_detection と同じ有効距離 [m]
 DEPTH_OFFSET = 0.015              # 物体表面の少し奥（公式と同じ）
 MIN_PIXELS = 30
+EXPECTED_FRAME_ID = 'camera_color_optical_frame'
 
 
 def decode_color(encoding, height, width, data):
@@ -82,6 +83,13 @@ def backproject(u, v, z_depth, k, offset=DEPTH_OFFSET):
     return ((u - cx) / fx * z, (v - cy) / fy * z, z)
 
 
+def intrinsics_ok(k):
+    """fx, fy が正の有限値で、主点が有限であること。"""
+    import math
+    return (len(k) >= 6 and all(math.isfinite(v) for v in (k[0], k[2], k[4], k[5]))
+            and k[0] > 0 and k[4] > 0)
+
+
 def in_range(z, lo=DEPTH_MIN, hi=DEPTH_MAX):
     return lo <= z <= hi
 
@@ -97,7 +105,11 @@ def main(argv=None):
     class Detector(Node):
         def __init__(self):
             super().__init__('vla_stub_detect')
-            self.depths = {}   # stamp(ns) -> Image（直近だけ保持）
+            # 入力は信頼できない（DDS は無認証）。想定外の frame_id や内部パラメータは捨てる
+            self.declare_parameter('expected_frame_id', EXPECTED_FRAME_ID)
+            self.expected_frame = self.get_parameter('expected_frame_id').value
+            self.colors = {}   # stamp(ns) -> Image（直近だけ保持）
+            self.depths = {}
             self.info = None
             self.tf_broadcaster = TransformBroadcaster(self)
             self.tf_buffer = Buffer()
@@ -108,24 +120,57 @@ def main(argv=None):
                                      self._on_depth, qos_profile_sensor_data)
             self.create_subscription(Image, '/camera/color/image_raw', self._on_color,
                                      qos_profile_sensor_data)
+            self.create_timer(10.0, self._check_inputs)
             self.get_logger().info('vla_stub_detect: 青い立方体を検出して TF target_0 を配信します（アームは動かしません）')
+
+        def _check_inputs(self):
+            if not self.depths:
+                self.get_logger().error(
+                    '10 秒たっても深度 (/camera/aligned_depth_to_color/image_raw) が来ない。'
+                    'usb_cam プロファイルなど深度の無いカメラでは動かない。realsense_d435 で起動する',
+                    throttle_duration_sec=30.0)
 
         @staticmethod
         def _ns(stamp):
             return stamp.sec * 1_000_000_000 + stamp.nanosec
 
+        @staticmethod
+        def _trim(cache):
+            while len(cache) > 10:
+                cache.pop(min(cache))
+
         def _on_info(self, msg):
             self.info = msg
 
         def _on_depth(self, msg):
-            self.depths[self._ns(msg.header.stamp)] = msg
-            while len(self.depths) > 10:
-                self.depths.pop(min(self.depths))
+            key = self._ns(msg.header.stamp)
+            self.depths[key] = msg
+            self._trim(self.depths)
+            if key in self.colors:   # 色が先に着いていた組もここで拾う
+                self._process(self.colors.pop(key), msg)
 
         def _on_color(self, msg):
-            depth_msg = self.depths.get(self._ns(msg.header.stamp))
-            if depth_msg is None or self.info is None:
+            key = self._ns(msg.header.stamp)
+            depth_msg = self.depths.get(key)
+            if depth_msg is None:
+                self.colors[key] = msg
+                self._trim(self.colors)
+                return
+            self._process(msg, depth_msg)
+
+        def _process(self, msg, depth_msg):
+            if self.info is None:
                 return  # 同一 stamp の組だけを使う（公式 color_detection の ExactTime と同じ）
+            if msg.header.frame_id != self.expected_frame:
+                self.get_logger().error(
+                    f'frame_id が想定外: {msg.header.frame_id!r} (期待 {self.expected_frame!r})。破棄',
+                    throttle_duration_sec=5.0)
+                return
+            k = list(self.info.k)
+            if not intrinsics_ok(k):
+                self.get_logger().error(f'camera_info の内部パラメータが不正: {k[:6]}。破棄',
+                                        throttle_duration_sec=5.0)
+                return
             try:
                 img = decode_color(msg.encoding, msg.height, msg.width, bytes(msg.data))
                 depth = decode_depth(depth_msg.encoding, depth_msg.height, depth_msg.width,
@@ -142,7 +187,7 @@ def main(argv=None):
                 self.get_logger().info('深度が取れないか範囲外（0.2〜0.5m）。把持位置は出さない',
                                        throttle_duration_sec=5.0)
                 return
-            x, y, zz = backproject(c[0], c[1], z, list(self.info.k))
+            x, y, zz = backproject(c[0], c[1], z, k)
             t = TransformStamped()
             t.header = msg.header
             t.child_frame_id = 'target_0'

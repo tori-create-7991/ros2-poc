@@ -4,6 +4,7 @@
 CameraInfo は gz が描画できる理想ピンホールに限る（描画と CameraInfo を一致させるため）。
 """
 import math
+import re
 from pathlib import Path
 
 import yaml
@@ -20,6 +21,16 @@ GZ_TYPES = {'camera', 'rgbd_camera'}
 REQUIRED_TOP = ('schema', 'name', 'based_on', 'sensor', 'intrinsics', 'frames', 'tf', 'topics', 'qos')
 
 
+NAME_RE = re.compile(r'^[A-Za-z0-9_]+$')
+_QOS_KIND = {'color': 'image', 'depth': 'image', 'points': 'points',
+             'info_color': 'info', 'info_depth': 'info'}
+_TYPE_FOR_SOURCE = {
+    'color': 'sensor_msgs/msg/Image', 'depth': 'sensor_msgs/msg/Image',
+    'points': 'sensor_msgs/msg/PointCloud2',
+    'info_color': 'sensor_msgs/msg/CameraInfo', 'info_depth': 'sensor_msgs/msg/CameraInfo',
+}
+
+
 class ProfileError(ValueError):
     pass
 
@@ -29,20 +40,29 @@ def _load_yaml(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
-def load_profile(name_or_path: str) -> dict:
+def _resolve(kind: str, name_or_path: str) -> Path:
     p = Path(name_or_path)
-    if not (p.suffix in ('.yaml', '.yml') and p.exists()):
-        p = config_dir('profiles') / f'{name_or_path}.yaml'
+    if p.suffix in ('.yaml', '.yml') and p.exists():
+        return p
+    if not NAME_RE.match(name_or_path):
+        raise ProfileError(f'名前は英数字とアンダースコアのみ: {name_or_path!r}')
+    return config_dir(kind) / f'{name_or_path}.yaml'
+
+
+def load_profile(name_or_path: str) -> dict:
+    p = _resolve('profiles', name_or_path)
     data = _load_yaml(p)
     validate(data)
     return data
 
 
 def load_placement(name_or_path: str) -> dict:
-    p = Path(name_or_path)
-    if not (p.suffix in ('.yaml', '.yml') and p.exists()):
-        p = config_dir('placements') / f'{name_or_path}.yaml'
-    return _load_yaml(p)
+    d = _load_yaml(_resolve('placements', name_or_path))
+    obj = d.get('object') or {}
+    for label, v in (('name', d.get('name')), ('object.name', obj.get('name'))):
+        if v is not None and not NAME_RE.match(str(v)):
+            raise ProfileError(f'{label} は英数字とアンダースコアのみ: {v!r}')
+    return d
 
 
 def horizontal_fov(profile: dict) -> float:
@@ -56,12 +76,20 @@ def validate(d: dict) -> None:
             raise ProfileError(f'必須キーがない: {k}')
     if d['schema'] != 1:
         raise ProfileError(f"未対応の schema: {d['schema']}")
+    if not NAME_RE.match(str(d['name'])):
+        raise ProfileError(f"name は英数字とアンダースコアのみ: {d['name']!r}")
     s = d['sensor']
     if s.get('gz_type') not in GZ_TYPES:
         raise ProfileError(f"sensor.gz_type は {sorted(GZ_TYPES)} のどれか")
     for k in ('width', 'height', 'fps'):
         if not isinstance(s.get(k), (int, float)) or s[k] <= 0:
             raise ProfileError(f'sensor.{k} が不正')
+    clip = s.get('clip') or {}
+    for k in ('near', 'far'):
+        if not isinstance(clip.get(k), (int, float)) or clip[k] <= 0:
+            raise ProfileError(f'sensor.clip.{k} が不正')
+    if clip['near'] >= clip['far']:
+        raise ProfileError('sensor.clip.near < far でなければならない')
     _check_intrinsics(d)
     _check_tf(d)
     _check_streams(d)
@@ -71,6 +99,9 @@ def validate(d: dict) -> None:
 
 def _check_intrinsics(d: dict) -> None:
     i, s = d['intrinsics'], d['sensor']
+    for k in ('fx', 'fy', 'cx', 'cy'):
+        if not isinstance(i.get(k), (int, float)) or i[k] <= 0:
+            raise ProfileError(f'intrinsics.{k} が不正')
     # Gazebo は fx==fy・主点が画像中心・歪みゼロの理想ピンホールしか描画できない。
     if abs(i['fx'] - i['fy']) > 1e-6:
         raise ProfileError('fx != fy は描画できない')
@@ -98,6 +129,13 @@ def _check_tf(d: dict) -> None:
     sensor_key = d['tf'].get('gz_sensor_frame')
     if sensor_key not in frames:
         raise ProfileError('tf.gz_sensor_frame が frames に無い')
+    if frames[sensor_key] not in reach:
+        raise ProfileError(f'gz_sensor_frame の {frames[sensor_key]} が camera_link から辿れない')
+    # フレームのキー（frames）→実フレーム名の対応を取り違えやすいので、TF に載るフレームだけを許す
+    for sid, st in d['topics'].get('streams', {}).items():
+        real = frames.get(st.get('frame'))
+        if real is not None and real not in reach:
+            raise ProfileError(f'{sid}: frame {real} が tf.links から辿れない（TF が無い frame_id になる）')
 
 
 def _check_streams(d: dict) -> None:
@@ -117,6 +155,14 @@ def _check_streams(d: dict) -> None:
             need = SUPPORTED_TRANSFORMS[tr]
             if need and st.get('encoding') != need:
                 raise ProfileError(f'{sid}: {tr} の出力は {need}（encoding={st.get("encoding")}）')
+        if st['type'] != _TYPE_FOR_SOURCE[st['source']]:
+            raise ProfileError(f"{sid}: source {st['source']} の type は {_TYPE_FOR_SOURCE[st['source']]}")
+        if st['type'] == 'sensor_msgs/msg/Image' and not st.get('encoding'):
+            raise ProfileError(f'{sid}: Image には encoding が要る')
+        if st['source'] == 'color' and tr in (None, 'passthrough') and st.get('encoding') != 'rgb8':
+            raise ProfileError(f"{sid}: gz の色は rgb8。passthrough で {st.get('encoding')} と名乗ると嘘になる（変換を足す）")
+        if _QOS_KIND[st['source']] not in d['qos']:
+            raise ProfileError(f"{sid}: qos.{_QOS_KIND[st['source']]} が無い")
         if st['source'] in ('depth', 'info_depth', 'points') and d['sensor']['gz_type'] != 'rgbd_camera':
             raise ProfileError(f'{sid}: {st["source"]} は rgbd_camera が必要')
 
