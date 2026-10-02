@@ -16,6 +16,7 @@ setup(
         (os.path.join('share', package_name, 'config', 'placements'), glob.glob('config/placements/*.yaml')),
         (os.path.join('share', package_name, 'config', 'contracts'), glob.glob('config/contracts/*.yaml')),
         (os.path.join('share', package_name, 'launch'), glob.glob('launch/*.py')),
+        (os.path.join('share', package_name, 'scripts'), glob.glob('scripts/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -26,7 +27,6 @@ setup(
     entry_points={
         'console_scripts': [
             'camera_adapter = ros2_poc_sim.camera_adapter:main',
-            'contract_check = ros2_poc_sim.contract_check:main',
             'gz_setup = ros2_poc_sim.gz_setup:main',
         ],
     },
