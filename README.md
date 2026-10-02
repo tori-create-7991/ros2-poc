@@ -6,7 +6,7 @@ ROS 2 (Jazzy Jalisco) の Pub/Sub・Discovery を、実機や既存の ROS グ�
 
 あわせて、ブラウザ（noVNC）から Gazebo Harmonic / MoveIt 2 / RViz2 で
 ロボットアームを動かすシミュ用コンテナ `ros2arm` も用意している
-（[アームシミュ](#アームシミュros2arm--novnc) 参照）。
+（[アームシミュ](#アームシミュros2arm--novncvnc) 参照）。
 
 Gazebo / MoveIt 2 / RViz2 の役割、アーキテクチャ図、サービスブループリントは
 [docs/arm-sim-architecture.md](docs/arm-sim-architecture.md)（[HTML 版](docs/arm-sim-architecture.html)）にまとめている。
@@ -95,7 +95,7 @@ docker exec ros2lab-a pkill -f 'http.server 8000'
 ネットワークは `docker compose up` 時に作成される。`kali-vnc` が接続中に
 `docker compose down` するとネットワーク削除が失敗するため、先に切断する。
 
-## アームシミュ（ros2arm / noVNC）
+## アームシミュ（ros2arm / noVNC・VNC）
 
 Factory I/O（Windows 専用）の代わりに、Mac / Linux のブラウザだけで
 ROS 2 のロボットアーム制御を試すためのコンテナ。
@@ -120,8 +120,26 @@ bash scripts/up-arm.sh   # 初回ビルドは 10 分前後。docker compose --pr
 
 （実機ドライバ `ros2real` が起動中は拒否される。[実機で動かす](#実機で動かすros2real--crane-x7) 参照）
 
-ブラウザで <http://127.0.0.1:6080/> を開き、「Connect」でデスクトップに入る。
+ブラウザで <http://127.0.0.1:6080/> を開き、「Connect」でデスクトップに入る（noVNC）。
 ポートは `127.0.0.1` にだけ公開しているので、LAN の他端末からは見えない。
+
+### ネイティブ VNC クライアントで接続する
+
+noVNC は WebSocket 変換と JS デコードを挟むぶん遅く、日本語入力やキー入力に癖がある。
+ネイティブの VNC クライアントでも同じデスクトップに入れる。noVNC（6080）は従来どおり使える。
+
+| 項目 | 値 |
+|---|---|
+| 接続先 | `127.0.0.1:5901`（ホスト側。コンテナ内は 5900 → Xtigervnc の 5901 へ socat で中継） |
+| パスワード | `ubuntu`（ベースイメージの既定値。noVNC はこれを自動入力している） |
+
+- **TigerVNC Viewer**: `vncviewer 127.0.0.1:5901`（GUI なら Server 欄に `127.0.0.1:5901`）。
+- **macOS の画面共有**: Finder で `Cmd+K`（サーバへ接続）に `vnc://127.0.0.1:5901` を入力するか、
+  ターミナルで `open vnc://127.0.0.1:5901`。パスワードを聞かれたら上の値を入れる。
+
+ホスト側を 5900 でなく 5901 にしているのは、macOS の画面共有サーバー（既定 5900）と衝突させないため。
+画面共有の「サーバへ接続」はクライアント側の機能なので、この Mac 自身の画面共有をオンにする必要はない。
+遅さの主因は CPU 描画（llvmpipe）と見ており、プロトコルを変えても劇的には改善しない見込み（未計測）。
 
 ```bash
 docker compose --profile arm down   # ros2lab も含めて停止・削除（ros2real が起動中なら先に scripts/down-real.sh）
@@ -190,9 +208,13 @@ docker compose exec ros2lab-a bash -lc 'ros2 topic echo --once /joint_states'
 
 - **リソース**: Colima は 4CPU / 8GiB / ディスク 50GB 程度を推奨
   （`colima start --cpu 4 --memory 8 --disk 50`）。イメージは約 13GB になる。
-- **noVNC の認証**: VNC パスワードは設定していない。LAN からは見えないが、同じ Mac のブラウザで
-  開いた Web ページからは `127.0.0.1:6080` に接続を試みられる。使うときだけ起動し、終わったら止める。
-  `ros2-lab-net` に繋いだ他のラボ用コンテナ（kali-vnc 等）からも `ros2arm:80` に到達できる。
+- **noVNC / VNC の認証**: VNC パスワードは自分で設定しておらず、ベースイメージの既定値（`ubuntu`）のまま。
+  noVNC はそれを自動入力するので実質認証なしで入れる。ネイティブ VNC（`127.0.0.1:5901`）も
+  同じパスワードで、推測されやすい。どちらも `127.0.0.1` にだけ公開していて LAN からは見えないが、
+  同じ Mac のブラウザで開いた Web ページからは `127.0.0.1:6080` に接続を試みられる。
+  使うときだけ起動し、終わったら止める。
+  `ros2-lab-net` に繋いだ他のラボ用コンテナ（kali-vnc 等）からも `ros2arm:80`（noVNC）と
+  `ros2arm:5900`（VNC）に到達できる。
 - **`/workspace` の所有者**: `ros2lab` は root、`ros2arm` のデスクトップは `ubuntu` ユーザーで動くため、
   片方で作ったファイルをもう片方から書き換えられないことがある。その場合は `ros2arm` 側で `sudo` を使う
   （`ubuntu` ユーザーはパスワードなしで sudo できる）。

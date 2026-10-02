@@ -1,4 +1,4 @@
-# ROS 2 アームシミュ用: ブラウザ(noVNC) から Gazebo / MoveIt 2 / RViz2 を操作する。
+# ROS 2 アームシミュ用: ブラウザ(noVNC) またはネイティブ VNC クライアントから Gazebo / MoveIt 2 / RViz2 を操作する。
 # 週次で更新されるため日付タグ + digest（multi-arch の manifest list）で固定する。
 # 動作確認は arm64（Colima）のみ。amd64 はベースイメージが対応している。
 FROM tiryoh/ros2-desktop-vnc:jazzy-20260927T0957@sha256:3d0bcd5a6ec951cde22f50c79d96fe93f1f3001a6425369d0cd833ad37b766f8
@@ -30,6 +30,17 @@ RUN mkdir -p /opt/crane_ws/src && cd /opt/crane_ws/src \
     && rosdep install -y -i --from-paths /opt/crane_ws/src --rosdistro jazzy \
     && cd /opt/crane_ws && colcon build \
     && rm -rf /opt/crane_ws/build /opt/crane_ws/log /var/lib/apt/lists/*
+
+# ネイティブ VNC クライアント用ブリッジ。ベースイメージの Xtigervnc は -localhost=1 で
+# コンテナ内ループバック(127.0.0.1:5901)にしか待ち受けないため、Docker の公開ポートが届かない。
+# socat で 0.0.0.0:5900 -> 127.0.0.1:5901 に中継する（実測: Xtigervnc は 5901）。
+# ベースの entrypoint は conf.d/supervisord.conf だけを書き直すので、別ファイルで追加すれば残る。
+# 認証は Xtigervnc の VncAuth のまま。ホストへは docker-compose.yml で 127.0.0.1 限定で公開する。
+RUN printf '%s\n' \
+    '[program:vncbridge]' \
+    'command=socat TCP-LISTEN:5900,fork,reuseaddr TCP:127.0.0.1:5901' \
+    'autorestart=true' \
+    > /etc/supervisor/conf.d/vncbridge.conf
 
 # 隔離設定は ros2lab と同じ。ros2-lab-net 上の ros2lab とだけ Discovery する
 ENV ROS_DOMAIN_ID=42
