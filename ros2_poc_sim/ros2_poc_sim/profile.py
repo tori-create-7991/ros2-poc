@@ -139,3 +139,18 @@ def enabled_streams(d: dict, pointcloud: bool = False) -> list:
             continue
         out.append(sid)
     return out
+
+
+def camera_info_fields(d: dict) -> dict:
+    """プロファイルの内部パラメータから CameraInfo の値を作る（単眼、歪みなし、R=I）。"""
+    i, s = d['intrinsics'], d['sensor']
+    fx, fy, cx, cy = i['fx'], i['fy'], i['cx'], i['cy']
+    return {
+        'width': int(s['width']),
+        'height': int(s['height']),
+        'distortion_model': i.get('distortion_model', 'plumb_bob'),
+        'd': [float(v) for v in i.get('d', [0.0] * 5)],
+        'k': [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0],
+        'r': [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        'p': [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0],
+    }

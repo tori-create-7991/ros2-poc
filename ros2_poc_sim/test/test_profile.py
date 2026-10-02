@@ -98,3 +98,11 @@ def test_enabled_streams_respect_pointcloud_flag():
     names = P.enabled_streams(d, pointcloud=False)
     assert 'points' not in names and 'color_image' in names
     assert 'points' in P.enabled_streams(d, pointcloud=True)
+
+
+def test_camera_info_fields():
+    f = P.camera_info_fields(P.load_profile('realsense_d435'))
+    assert f['width'] == 640 and f['height'] == 480
+    assert f['k'] == [462.14, 0.0, 320.0, 0.0, 462.14, 240.0, 0.0, 0.0, 1.0]
+    assert f['p'][0] == 462.14 and f['p'][2] == 320.0 and f['p'][5] == 462.14 and f['p'][6] == 240.0
+    assert len(f['p']) == 12 and len(f['d']) == 5 and f['distortion_model'] == 'plumb_bob'
