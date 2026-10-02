@@ -32,54 +32,108 @@ def test_script_never_runs_arm_moving_examples():   # pick_and_place_tf は検�
     assert 'camera_example.launch' not in code and 'ros2 run crane_x7_examples pick' not in code
 
 
-def _run_with_fake_docker(tmp_path, pytest_out, stale=False):
-    """PATH 先頭の偽 docker で verify_sim_camera.sh を実行し、V1 の行を返す。"""
+def _tool():
+    import shutil
+    return shutil.which('sha1sum') or shutil.which('shasum')
+
+
+def _run_with_fake_docker(tmp_path, pytest_out, mutate=None, profile='usb_cam', node_list=None):
+    """PATH 先頭の偽 docker で verify_sim_camera.sh を隔離環境で実行し、出力を返す。
+    イメージ内のソースは手元のコピー（mutate で 1 ファイルだけ変えれば「古いイメージ」）。"""
     import os
+    import shutil
     import stat
     import subprocess
-    fake = tmp_path / 'docker'
+    repo = SCRIPT.parents[2]
+    tree = tmp_path / 'image_tree'
+    shutil.copytree(repo / 'ros2_poc_sim', tree, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    if mutate:
+        mutate(tree)
     out_file = tmp_path / 'pytest_out.txt'
     out_file.write_text(pytest_out + '\n')
+    calls = tmp_path / 'calls.log'
+    fake = tmp_path / 'docker'
+    nodes_cmd = f'cat "{tmp_path / "nodes.txt"}"; exit 0' if node_list is not None else 'exit 1'
+    if node_list is not None:
+        (tmp_path / 'nodes.txt').write_text(node_list)
     fake.write_text(f"""#!/usr/bin/env bash
+echo "$*" >> "{calls}"
 case "$1" in
   ps) echo cid; exit 0;;
+  cp) exit 0;;
   exec)
     all="$*"
     if echo "$all" | grep -q 'sha1sum'; then
-      if [ "{int(stale)}" = 1 ]; then echo deadbeef; else
-        (cd "$REPO/ros2_poc_sim" && find ros2_poc_sim test config launch scripts -type f ! -name '*.pyc' ! -path '*__pycache__*' | LC_ALL=C sort | xargs shasum | shasum | cut -d' ' -f1)
-      fi; exit 0
+      cd "{tree}" && find ros2_poc_sim test config launch scripts resource setup.py setup.cfg package.xml -type f ! -name '*.pyc' ! -path '*__pycache__*' -print0 | LC_ALL=C sort -z | xargs -0 {_tool()}
+      exit 0
     fi
     if echo "$all" | grep -q 'pytest'; then cat "{out_file}"; exit 0; fi
+    if echo "$all" | grep -q 'node list'; then {nodes_cmd}; fi
     exit 1;;
-  *) exit 0;;
+  *) echo "unexpected docker $*" >&2; exit 99;;
 esac
 """)
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
-    repo = SCRIPT.parents[2]
-    env = dict(os.environ, PATH=f'{tmp_path}:{os.environ["PATH"]}', REPO=str(repo))
-    r = subprocess.run(['bash', str(SCRIPT), 'usb_cam'], capture_output=True, text=True, env=env,
+    env = {'PATH': f'{tmp_path}:/usr/bin:/bin', 'HOME': str(tmp_path), 'ARM': 'fakearm', 'LAB': 'fakelab',
+           'OUT_DIR': str(tmp_path / 'out')}
+    r = subprocess.run(['bash', str(SCRIPT), profile], capture_output=True, text=True, env=env,
                        cwd=str(repo), timeout=120)
-    line = next((l for l in r.stdout.splitlines() if 'V1-pytest' in l), '')
-    return line
+    return r.stdout, calls.read_text() if calls.exists() else ''
 
 
-@pytest.mark.skipif(__import__('shutil').which('shasum') is None, reason='shasum が無い')
+def _line(out, key):
+    return next((l for l in out.splitlines() if key in l), '')
+
+
+needs_tool = pytest.mark.skipif(__import__('shutil').which('sha1sum') is None
+                                and __import__('shutil').which('shasum') is None,
+                                reason='sha1sum / shasum が無い')
+
+
+@needs_tool
 def test_v1_fails_on_nonzero_rc_even_if_output_says_passed(tmp_path):
-    line = _run_with_fake_docker(tmp_path, '=== 1 failed, 69 passed ===\nPYTEST_RC=1')
-    assert line.startswith('FAIL'), line
+    out, _ = _run_with_fake_docker(tmp_path, '=== 1 failed, 69 passed ===\nPYTEST_RC=1')
+    assert _line(out, 'V1-pytest').startswith('FAIL'), out
 
 
-@pytest.mark.skipif(__import__('shutil').which('shasum') is None, reason='shasum が無い')
+@needs_tool
 def test_v1_ok_on_rc0(tmp_path):
-    line = _run_with_fake_docker(tmp_path, '70 passed in 1s\nPYTEST_RC=0')
-    assert line.startswith('ok'), line
+    out, _ = _run_with_fake_docker(tmp_path, '70 passed in 1s\nPYTEST_RC=0')
+    assert _line(out, 'V1-pytest').startswith('ok'), out
 
 
-@pytest.mark.skipif(__import__('shutil').which('shasum') is None, reason='shasum が無い')
-def test_v1_fails_when_image_is_stale(tmp_path):
-    line = _run_with_fake_docker(tmp_path, '70 passed in 1s\nPYTEST_RC=0', stale=True)
-    assert line.startswith('FAIL') and '古い' in line, line
+@needs_tool
+def test_v1_detects_a_one_file_difference_and_names_it(tmp_path):
+    def mutate(tree):
+        f = tree / 'ros2_poc_sim' / 'profile.py'
+        f.write_text(f.read_text() + '\n# changed\n')
+    out, _ = _run_with_fake_docker(tmp_path, '70 passed in 1s\nPYTEST_RC=0', mutate=mutate)
+    line = _line(out, 'V1-pytest')
+    assert line.startswith('FAIL') and '古い' in line and 'profile.py' in line, out
+
+
+@needs_tool
+def test_v1_detects_a_package_metadata_difference(tmp_path):
+    def mutate(tree):
+        (tree / 'package.xml').write_text((tree / 'package.xml').read_text() + '<!-- x -->')
+    out, _ = _run_with_fake_docker(tmp_path, '70 passed in 1s\nPYTEST_RC=0', mutate=mutate)
+    assert _line(out, 'V1-pytest').startswith('FAIL') and 'package.xml' in _line(out, 'V1-pytest'), out
+
+
+@needs_tool
+def test_v7b_is_aborted_when_pick_and_place_tf_is_running_and_stub_never_runs(tmp_path):
+    out, calls = _run_with_fake_docker(tmp_path, '70 passed in 1s\nPYTEST_RC=0', profile='realsense_d435',
+                                       node_list='/camera_adapter\n/pick_and_place_tf\n')
+    assert _line(out, 'V7b').startswith('FAIL') and 'pick_and_place_tf' in _line(out, 'V7b'), out
+    assert 'vla_stub_detect.py' not in ' '.join(l for l in calls.splitlines() if 'timeout' in l or ' python3 ' in l)
+
+
+@needs_tool
+def test_v7b_fails_closed_when_node_list_is_unavailable(tmp_path):
+    out, calls = _run_with_fake_docker(tmp_path, '70 passed in 1s\nPYTEST_RC=0', profile='realsense_d435',
+                                       node_list=None)
+    assert _line(out, 'V7b').startswith('FAIL') and '中止' in _line(out, 'V7b'), out
+    assert not any('python3 /tmp/vla_stub_detect.py' in l for l in calls.splitlines())
 
 
 def test_script_guards_against_arm_moving_node():

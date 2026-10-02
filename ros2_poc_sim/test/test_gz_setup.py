@@ -63,6 +63,7 @@ class Fake:
     def __init__(self, models, service=True, add_ok=True, spawn_ok=None, marker_visible=True):
         self.models, self.service, self.add_ok = models, service, add_ok
         self.marker_visible = marker_visible
+        self.visible_late = {}
         self.spawn_ok = spawn_ok or {}
         self.added = 0
         self.spawned = []
@@ -71,13 +72,18 @@ class Fake:
         monkeypatch.setattr(Z, 'wait_for_service', lambda w, t: (self.service, 'last-error'))
         monkeypatch.setattr(Z, 'list_models', self._list)
         monkeypatch.setattr(Z, 'list_models_retry', lambda w, b: self._list(w))
-        monkeypatch.setattr(Z, 'wait_for_model', lambda w, n, b: self.marker_visible)
+        monkeypatch.setattr(Z, 'wait_for_model', self._visible)
         monkeypatch.setattr(Z, 'add_sensors_system', self._add)
         monkeypatch.setattr(Z, 'spawn', self._spawn)
         monkeypatch.setattr(Z, '_write_temp_sdf', lambda text: __import__('os').devnull)
         monkeypatch.setattr(Z.os, 'unlink', lambda p: None)
         monkeypatch.setattr(Z.time, 'sleep', lambda s: None)
         return self
+
+    def _visible(self, w, name, budget):
+        if name == S.SENSORS_MARKER_NAME:
+            return self.marker_visible
+        return self.spawn_ok.get(name, True) or self.visible_late.get(name, False)
 
     def _list(self, w):
         return self.models
@@ -137,9 +143,11 @@ def test_sensors_add_failure(monkeypatch):
     assert f.spawned == []
 
 
-def test_marker_spawn_failure_reports(monkeypatch):
-    Fake({'ground_plane'}, spawn_ok={S.SENSORS_MARKER_NAME: False}).install(monkeypatch)
+def test_marker_spawn_failure_and_never_visible_reports(monkeypatch):
+    """スポーンが失敗し、マーカーも現れないなら rc=3（Gazebo の再起動を促す）。"""
+    f = Fake({'ground_plane'}, spawn_ok={S.SENSORS_MARKER_NAME: False}, marker_visible=False).install(monkeypatch)
     assert Z.run_setup(_args()) == Z.EXIT_SENSORS
+    assert 'sim_camera_x' not in f.spawned
 
 
 def test_object_spawn_failure(monkeypatch):
@@ -168,10 +176,11 @@ def test_marker_not_visible_aborts_so_next_run_is_not_blind(monkeypatch):
     assert 'sim_camera_x' not in f.spawned          # カメラへ進まない
 
 
-def test_marker_spawn_is_retried_once(monkeypatch):
+def test_marker_spawn_is_retried_once_when_it_does_not_appear(monkeypatch):
     f = Fake({'ground_plane'}).install(monkeypatch)
-    results = iter([False, True])
-    monkeypatch.setattr(Z, 'spawn', lambda w, n, p, pose, t: (f.spawned.append(n), next(results, True))[1])
+    visible = iter([False, True])        # 1 回目のスポーン後は見えず、再スポーン後に見える
+    monkeypatch.setattr(Z, 'wait_for_model',
+                        lambda w, n, b: next(visible) if n == S.SENSORS_MARKER_NAME else True)
     assert Z.run_setup(_args(object_sdf='')) == 0
     assert f.spawned.count(S.SENSORS_MARKER_NAME) == 2
 
@@ -259,3 +268,77 @@ def test_lock_times_out_when_held(tmp_path, monkeypatch):
     monkeypatch.setattr(Z.time, 'time', lambda: next(ticks))
     assert Z.acquire_lock('default', 10) is None
     held.close()
+
+
+def test_marker_spawn_reports_failure_but_marker_appears_late_is_success(monkeypatch):
+    """create がタイムアウト等で非ゼロでも、Gazebo 側で後から完了してマーカーが見えれば成功（再起動は不要）。"""
+    f = Fake({'ground_plane'}, spawn_ok={S.SENSORS_MARKER_NAME: False}, marker_visible=True).install(monkeypatch)
+    assert Z.run_setup(_args(object_sdf='')) == 0
+    assert 'sim_camera_x' in f.spawned
+
+
+def test_camera_spawn_nonzero_but_visible_is_success(monkeypatch):
+    f = Fake({'ground_plane'}, spawn_ok={'sim_camera_x': False}).install(monkeypatch)
+    f.visible_late['sim_camera_x'] = True
+    assert Z.run_setup(_args(object_sdf='')) == 0
+
+
+def test_spawn_and_confirm_retries_only_when_not_visible(monkeypatch):
+    calls = []
+    monkeypatch.setattr(Z, 'spawn', lambda w, n, p, pose, t: (calls.append(n), True)[1])
+    seq = iter([False, True])
+    monkeypatch.setattr(Z, 'wait_for_model', lambda w, n, b: next(seq))
+    assert Z.spawn_and_confirm('default', 'm', '/x.sdf', [], 10, retries=1) is True
+    assert len(calls) == 2
+    calls.clear()
+    monkeypatch.setattr(Z, 'wait_for_model', lambda w, n, b: True)
+    assert Z.spawn_and_confirm('default', 'm', '/x.sdf', [], 10, retries=1) is True
+    assert len(calls) == 1
+
+
+def test_usage_errors_use_a_distinct_exit_code(monkeypatch):
+    assert Z.main(['--world', 'default']) == Z.EXIT_USAGE            # 必須引数なし（argparse の rc 2 と区別）
+    assert Z.EXIT_USAGE not in (Z.EXIT_NO_WORLD, Z.EXIT_SENSORS, Z.EXIT_CAMERA, Z.EXIT_OBJECT,
+                                Z.EXIT_UNKNOWN_STATE, Z.EXIT_LOCK_TIMEOUT)
+    assert Z.main(['--camera-sdf', 'c', '--camera-name', 'n', '--camera-pose=1,2',
+                   '--world', 'default']) == Z.EXIT_USAGE            # 姿勢の要素数が違う
+
+
+def test_list_models_zero_models_is_not_a_failure(monkeypatch):
+    monkeypatch.setattr(Z, '_run', lambda cmd, timeout=60: _cp(0, 'name: "empty_world"\nlight {\n  name: "sun"\n}\n'))
+    assert Z.list_models('default') == set()
+
+
+def test_run_kills_the_whole_group_on_keyboard_interrupt(monkeypatch):
+    import os
+    import subprocess
+    killed = []
+    monkeypatch.setattr(Z.os, 'killpg', lambda pid, sig: killed.append(pid))
+
+    class P:
+        pid = 4242
+
+        def communicate(self, timeout=None):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(Z.subprocess, 'Popen', lambda *a, **k: P())
+    with pytest.raises(KeyboardInterrupt):
+        Z._run(['x'], timeout=5)
+    assert killed == [4242]
+
+
+def test_run_does_not_hang_if_a_grandchild_holds_the_pipe(monkeypatch):
+    import subprocess
+
+    class P:
+        pid = 1
+        n = 0
+
+        def communicate(self, timeout=None):
+            P.n += 1
+            raise subprocess.TimeoutExpired('x', timeout)
+
+    monkeypatch.setattr(Z.subprocess, 'Popen', lambda *a, **k: P())
+    monkeypatch.setattr(Z.os, 'killpg', lambda pid, sig: None)
+    r = Z._run(['x'], timeout=1)
+    assert r.returncode == 124 and P.n == 2        # 2 回目の communicate もタイムアウトで諦める

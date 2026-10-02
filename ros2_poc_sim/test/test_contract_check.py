@@ -112,3 +112,11 @@ def test_main_returns_2_for_unreadable_contract(tmp_path, capsys):
     assert C.main([str(bad)]) == 2
     bad.write_text('topics: [')
     assert C.main([str(bad)]) == 2
+
+
+def test_remote_strings_are_escaped_in_messages():
+    evil = '\x1b]0;pwned\x07\nFAKE ok line'
+    exp = {'name': '/a', 'type': 'sensor_msgs/msg/Image', 'encoding': 'rgb8', 'frame_id': 'f', 'min_hz': 0}
+    obs = {'types': [evil], 'encoding': evil, 'frame_id': evil, 'hz': 9.0, 'count': 3}
+    for msg in C.evaluate(exp, obs):
+        assert '\x1b' not in msg and '\n' not in msg and '\x07' not in msg

@@ -53,3 +53,10 @@ def test_image_to_array_encodings():
     assert sf.image_to_array('16UC1', 1, 3, d).tolist() == [[0, 127, 255]]
     f = np.array([[0.0, float('inf'), 2.0]], dtype='<f4').tobytes()
     assert sf.image_to_array('32FC1', 1, 3, f).tolist() == [[0, 0, 255]]
+
+
+def test_unsupported_encoding_message_is_escaped():
+    import pytest
+    with pytest.raises(ValueError) as e:
+        sf.image_to_array('\x1b[31mred\nINJECT', 1, 1, b'')
+    assert '\x1b' not in str(e.value) and '\n' not in str(e.value)

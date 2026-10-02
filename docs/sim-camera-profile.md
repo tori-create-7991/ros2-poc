@@ -29,13 +29,13 @@ ros2 launch ros2_poc_sim sim_camera.launch.py profile:=realsense_d435 placement:
 | `spawn_object` | `true` | 青い立方体を置く |
 | `world` | `default` | Gazebo のワールド名 |
 | `wait_sec` / `spawn_timeout` | `300` / `240` | ワールドが立つまで待つ秒数 / 1 回のスポーンのタイムアウト。初回（Fuel のモデル取得）やホストが高負荷のときは Gazebo の起動自体が数分から 7 分以上かかることがある（実測）。**足りないときは先に公式 launch だけを起動し、立ち上がってから `sim_camera.launch.py` を起動するか、`wait_sec` を延ばす** |
-| `fail_fast` | `false` | `gz_setup` が失敗したときに launch 全体を止める。既定は止めない（公式の Gazebo / MoveIt まで巻き込まないため） |
+| `fail_fast` | `false` | `gz_setup` が失敗したときに launch 全体を止める。既定は **このプロファイルのノードだけを止め**、公式の Gazebo / MoveIt は巻き込まない |
 
 **再実行の挙動**
 
 - **Gazebo 側は冪等**。Sensors システムは「追加した直後に置く目印のモデル（`sim_camera_sensors_marker`）」で追加済みかを判断し、カメラ・物体は名前で重複を避ける。Gazebo は Sensors システムの有無を問い合わせる手段を持たないための方式。目印は Gazebo を再起動すると消えるので、**Gazebo を再起動したら `sim_camera.launch.py` も起動し直す**（bridge / adapter が動いたままでも、カメラのスポーンは起動時にしか行わない）。状態を取得できないとき（`gz` が重すぎる等）は、推測で追加せず中止する。
 - **ROS ノード（bridge / adapter / republish）は冪等ではない**。同じプロファイルを動かしたまま `sim_camera.launch.py` を再実行しない（先に Ctrl-C する）。ノード名・republish 名はプロファイル名を含むので、**別のプロファイルを同時に動かすのは問題ない**（TF のフレーム名も重ならないよう分けてある）。bridge と adapter は落ちたら 2 秒後に再起動する（`respawn`）。republish は監視していない。
-- `gz_setup` が失敗（rc≠0）しても、既定では公式スタックを止めない。ログに理由を出し、`sim_camera.launch.py` の再実行を促す。`fail_fast:=true` なら launch 全体を止める。
+- **`gz_setup` が失敗（rc≠0）したら、このプロファイルの bridge / adapter / republish だけを止める**（公式の Gazebo / MoveIt は動いたまま）。ログに終了コードを出す。止まった後は `ros2 launch ros2_poc_sim sim_camera.launch.py ...` を**単独で再実行**すればよい（ノードが二重にならない）。`arm_with_camera.launch.py` から起動していた場合も同じで、公式側はそのまま動く。`fail_fast:=true` なら launch 全体を止める。
 - 生成物（SDF・ブリッジ設定）は `/tmp/ros2_poc_sim_<uid>/<プロファイル名>/`（0700）に出る。困ったときはここを見る。
 
 ### 出るトピック
@@ -97,7 +97,7 @@ bash ros2_poc_sim/scripts/verify_sim_camera.sh realsense_d435   # または usb_
 
 V1（pytest。本番の DDS ドメインに混ざらないよう `ROS_DOMAIN_ID=97` で実行し、終了コードで判定）、V3（ros2lab から見える）、出力契約（型・エンコーディング・frame_id・Hz・同一 stamp・CameraInfo の内容・TF）、画像の保存（ほぼ単色なら不合格）、簡易検出スクリプトの位置誤差（±1.5cm）を順に確認する。
 
-`pick_and_place_tf` が動いている間は V7b を実行しない（`target_0` を流すとアームが動く）。スクリプトは検出して不合格で中止する。
+`pick_and_place_tf` が動いている間は V7b を実行しない（`target_0` を流すとアームが動く）。スクリプトは `ros2 node list` で検出して不合格で中止し、ノード一覧を取れないときも安全側（中止）に倒す。名前は公式 `camera_example.launch.py` の `Node(name='pick_and_place_tf')`。Discovery 前の取りこぼしや、確認から実行までの隙間は残るので、**実機（`ros2real`、同じ DDS ドメイン 42）が動いている環境では実行しない**。
 
 自動化していないもの（手で確認）: 公式 `color_detection`（V7、上の単独起動）、ロボットの位置（V2）、点群（V9）、TF の値（連結だけ確認）。V1 が見るのはイメージに焼かれたコピーなので、手元のソースとイメージ内のコピーが違えば（編集後に再ビルドしていなければ）不合格にする。Hz の下限は「生きている」ことの確認（0.5Hz）で、実機に流すときは `--min-hz` で厳しくする。契約ファイルは [../ros2_poc_sim/config/contracts](../ros2_poc_sim/config/contracts)。**同じ契約を実機にも流せる**（`--min-hz 5` などで Hz の下限を厳しくする）。
 
@@ -147,9 +147,10 @@ V1（pytest。本番の DDS ドメインに混ざらないよう `ROS_DOMAIN_ID=
 | 4 | カメラのスポーンに失敗（Sensors と目印は作成済み） | はい |
 | 5 | 物体のスポーンに失敗（カメラは作成済み） | はい |
 | 6 | ワールドの状態（`scene/info`）を取得できない。60 秒リトライしても取れない | はい |
-| 7 | 先行する別の `gz_setup` が終わらず、ロックを取れない | 先行のログを確認してから |
+| 7 | 先行する別の `gz_setup` が終わらず、ロックを取れない（待つ上限は先行の最悪経路の時間から導いている） | 先行のログを確認してから |
+| 64 | コマンドラインの誤り（姿勢の要素数、`--world` の文字、`--wait-sec` の値など）。待っても直らない | 引数を直してから |
 
-`ros2 run ros_gz_sim create` がタイムアウトしても、Gazebo 側で後から完了することがある（子プロセスごと止めるが、要求が受理済みの場合）。ログに「後から完了するかもしれない」と出る。
+`ros2 run ros_gz_sim create` がタイムアウトや非ゼロで終わっても、Gazebo 側で後から完了することがある。そのため成否は「`create` の終了コード」ではなく「モデルが `scene/info` に現れたか」で判断する（現れなければ、目印は 1 回だけ再スポーンする）。Ctrl-C / SIGTERM では子プロセスを含めて止める。
 
 ## 隔離方針との関係
 
@@ -164,6 +165,7 @@ V1（pytest。本番の DDS ドメインに混ざらないよう `ROS_DOMAIN_ID=
 |---|---|
 | トピックは見えるが画像が来ない・1Hz 未満 | 負荷。`gz topic -e -t /stats` で RTF を見る。adapter は購読後 10 秒来ないと警告を出す。`ros2 topic hz /sim_camera/<プロファイル名>/raw/image` で bridge の手前から切り分ける。センサは `always_on` なので、購読者がいなくても Gazebo は描画し続ける（lazy で省けるのは bridge と adapter の変換・転送だけ） |
 | `gz_setup` が終了コード付きで止まる | 下の表を参照 |
+| `compressed:=true`（既定）でも購読者がいないとき | `republish` は出力側に購読者がいるときだけ入力を購読する（遅延購読）ので、色画像の変換も購読者が付くまで走らない。ただし色ストリームでの実測は未実施 |
 | `ros2lab` にトピックが出ない | Discovery に 10〜20 秒かかる。`ros2arm` で launch が動いているか、同じ `ROS_DOMAIN_ID`（42）かを確認 |
 | `gz_setup` が `ワールド default のサービスが立たない` で終わる | 公式 launch を先に起動していない、または Fuel のモデルダウンロード待ち（外向き HTTP が必要）。待ってから `sim_camera.launch.py` を再実行 |
 | 画像が灰色一色 | 古い版では `ros_gz_sim create` が SDF の姿勢を無視していた。最新の `ros2_poc_sim` を使う（姿勢を `-x -y -z -R -P -Y` で明示している） |

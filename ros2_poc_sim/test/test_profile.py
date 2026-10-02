@@ -191,3 +191,42 @@ def test_placement_missing_key_and_empty(tmp_path):
     f.write_text('name: x\n')
     with pytest.raises(P.ProfileError, match='必須キー'):
         P.load_placement(str(f))
+
+
+@pytest.mark.parametrize('bad', ['abc\n', '', 'a b', 'a/b', '..', None, 7, 'あ'])
+def test_is_name_uses_fullmatch(bad):
+    assert P.is_name(bad) is False
+
+
+def test_is_name_accepts_plain_names():
+    assert P.is_name('usb_cam') and P.is_name('A1_b')
+
+
+def test_profile_name_with_trailing_newline_is_rejected():
+    d = _base()
+    d['name'] = 'realsense_d435\n'
+    with pytest.raises(P.ProfileError):
+        P.validate(d)
+
+
+def test_compressed_streams_normalizes_null_and_missing():
+    assert P.compressed_streams({'compressed': None}) == []
+    assert P.compressed_streams({}) == []
+    assert P.compressed_streams({'compressed': ['a']}) == ['a']
+
+
+@pytest.mark.parametrize('patch,match', [
+    ({'look_at': {'eye': [0, 0, float('nan')], 'target': [0, 0, 0], 'up_hint': [1, 0, 0]}}, '有限'),
+    ({'look_at': {'eye': 5, 'target': [0, 0, 0], 'up_hint': [1, 0, 0]}}, '有限'),
+    ({'look_at': [1, 2, 3]}, '辞書'),
+    ({'object': 'x'}, '辞書'),
+    ({'robot_base_in_world': {'xyz': [0, 0, True], 'rpy': [0, 0, 0]}}, '有限'),
+])
+def test_placement_numeric_and_type_validation(tmp_path, patch, match):
+    import yaml
+    d = P.load_placement('fixed_near_top')
+    d.update(patch)
+    f = tmp_path / 'p.yaml'
+    f.write_text(yaml.safe_dump(d))
+    with pytest.raises(P.ProfileError, match=match):
+        P.load_placement(str(f))

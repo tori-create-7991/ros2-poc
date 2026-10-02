@@ -9,7 +9,7 @@ Gazebo にはシステムの有無を問い合わせる手段が無い。そこ�
 
 終了コード: 0 成功 / 2 ワールドが立たない / 3 Sensors 追加またはマーカー失敗（Gazebo の再起動を推奨）
  / 4 カメラのスポーン失敗 / 5 物体のスポーン失敗 / 6 ワールドの状態を取得できない / 7 他の gz_setup を待ちきれない
- 2, 4, 5, 6, 7 は Gazebo の状態を壊していないので、そのまま再実行してよい。
+ / 64 コマンドラインの誤り。 2, 4, 5, 6, 7 は Gazebo の状態を壊していないので、そのまま再実行してよい。
 """
 import argparse
 import fcntl
@@ -26,15 +26,24 @@ from ros2_poc_sim import sdf as S
 
 (EXIT_NO_WORLD, EXIT_SENSORS, EXIT_CAMERA, EXIT_OBJECT,
  EXIT_UNKNOWN_STATE, EXIT_LOCK_TIMEOUT) = 2, 3, 4, 5, 6, 7
+EXIT_USAGE = 64   # argparse の終了コード 2 は「ワールドが立たない」と区別できないので別番号にする
 
 
 def _log(msg: str) -> None:
     print(f'[gz_setup {time.strftime("%H:%M:%S")}] {msg}', flush=True)
 
 
+def _kill_group(proc) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
 def _run(cmd, timeout=60):
     """タイムアウトや実行失敗を例外にせず rc で返す（負荷時に gz CLI は現実に遅い）。
-    タイムアウト時は子孫プロセスごと止める（`ros2 run` の下の create を孤児にしない）。"""
+    子は別セッションで動かし、タイムアウト・中断（Ctrl-C / SIGTERM）では子孫プロセスごと止める
+    （`ros2 run` の下の create を孤児にしない）。"""
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                 start_new_session=True)
@@ -43,12 +52,15 @@ def _run(cmd, timeout=60):
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        _kill_group(proc)
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            pass
-        out, err = proc.communicate()
+            out, err = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:   # setsid した孫がパイプを握っていても固まらない
+            out, err = '', ''
         return subprocess.CompletedProcess(cmd, 124, out or '', f'timeout after {timeout}s')
+    except BaseException:
+        _kill_group(proc)
+        raise
     return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
@@ -81,8 +93,8 @@ def list_models(world: str):
     """ワールドのトップレベルモデル名。問い合わせに失敗したら None（空集合と区別する）。"""
     r = _run(['gz', 'service', '-s', f'/world/{world}/scene/info', '--reqtype', 'gz.msgs.Empty',
               '--reptype', 'gz.msgs.Scene', '--timeout', '10000', '--req', ''], timeout=30)
-    if r.returncode != 0 or 'model {' not in r.stdout:
-        return None
+    if r.returncode != 0 or 'name:' not in r.stdout:
+        return None   # 取得失敗（モデルが 0 個でもワールド名やライトの name: は返る）
     return parse_model_names(r.stdout)
 
 
@@ -147,6 +159,21 @@ def wait_for_model(world: str, name: str, budget: float) -> bool:
     return False
 
 
+def spawn_and_confirm(world: str, name: str, sdf_path: str, pose: list, timeout: float,
+                      retries: int = 0) -> bool:
+    """スポーンして、モデルが scene/info に現れたことを成功の基準にする。
+    create がタイムアウトや非ゼロで終わっても Gazebo 側で後から完了することがあるので、
+    失敗扱いにする前に現れるのを（短く）待つ。現れなければ retries 回だけ再スポーンする。"""
+    for attempt in range(retries + 1):
+        accepted = spawn(world, name, sdf_path, pose, timeout)
+        # 受理されたなら RTF が低くても反映を待つ。受理されなかった場合も遅れて完了する余地があるので短く待つ
+        if wait_for_model(world, name, timeout if accepted else min(15.0, timeout)):
+            return True
+        if attempt < retries:
+            _log(f'{name} が現れない。再スポーン（{attempt + 1}/{retries}）')
+    return False
+
+
 def _write_temp_sdf(text: str) -> str:
     fd, path = tempfile.mkstemp(prefix='ros2_poc_sim_', suffix='.sdf', dir=paths.private_dir())
     with os.fdopen(fd, 'w', encoding='utf-8') as f:
@@ -178,27 +205,27 @@ def run_setup(a) -> int:
             _log('Sensors システムを追加した')
             marker = _write_temp_sdf(S.sensors_marker_sdf())
             try:
-                ok = spawn(a.world, S.SENSORS_MARKER_NAME, marker, S.pose_args((0, 0, -100, 0, 0, 0)),
-                           min(a.spawn_timeout, 60.0)) \
-                    or spawn(a.world, S.SENSORS_MARKER_NAME, marker, S.pose_args((0, 0, -100, 0, 0, 0)),
-                             min(a.spawn_timeout, 60.0))   # 1 回リトライ
+                visible = spawn_and_confirm(a.world, S.SENSORS_MARKER_NAME, marker,
+                                            S.pose_args((0, 0, -100, 0, 0, 0)), a.spawn_timeout, retries=1)
             finally:
                 os.unlink(marker)
             # 次の gz_setup が確実にマーカーを見られるよう、現れるまで待ってからロックを手放す
-            if not ok or not wait_for_model(a.world, S.SENSORS_MARKER_NAME, a.spawn_timeout):
+            if not visible:
                 _log('ERROR: マーカーを確認できない。次の再実行で Sensors が二重になる恐れがあるので、Gazebo を再起動する'
-                     '（この間に Ctrl-C した場合も同様）')
+                     '（この間に Ctrl-C / SIGTERM した場合も同様）')
                 return EXIT_SENSORS
         else:
             _log('Sensors システムは追加済み（マーカーまたは sim_camera_* モデルあり）')
         _log('カメラモデルをスポーン')
-        if not spawn(a.world, a.camera_name, a.camera_sdf, S.pose_args(a.camera_pose), a.spawn_timeout):
+        if not spawn_and_confirm(a.world, a.camera_name, a.camera_sdf, S.pose_args(a.camera_pose),
+                                 a.spawn_timeout, retries=0):
             _log('ERROR: カメラモデルのスポーンに失敗（Sensors は追加済みなので再実行は安全）')
             return EXIT_CAMERA
     if a.object_sdf:
         if a.object_name in models:
             _log(f'{a.object_name} は既にある。スキップ')
-        elif not spawn(a.world, a.object_name, a.object_sdf, S.pose_args(a.object_pose), a.spawn_timeout):
+        elif not spawn_and_confirm(a.world, a.object_name, a.object_sdf, S.pose_args(a.object_pose),
+                                   a.spawn_timeout, retries=0):
             _log('ERROR: 物体のスポーンに失敗（カメラは作成済み。再実行は安全）')
             return EXIT_OBJECT
     _log(f'完了（{time.time() - t0:.0f}s）')
@@ -214,8 +241,7 @@ def _pose(text: str):
     return vals
 
 
-def format_pose(pose6) -> str:
-    return ','.join(repr(float(v)) for v in pose6)
+format_pose = S.format_pose
 
 
 def build_parser():
@@ -236,7 +262,7 @@ def build_parser():
 def parse_args(argv=None):
     ap = build_parser()
     a = ap.parse_args(argv)
-    if not P.NAME_RE.match(a.world):
+    if not P.is_name(a.world):
         ap.error(f'--world は英数字とアンダースコアのみ: {a.world!r}')
     if a.object_sdf and (a.object_pose is None or not a.object_name):
         ap.error('--object-sdf には --object-pose と --object-name が要る')
@@ -263,8 +289,15 @@ def acquire_lock(world: str, timeout: float):
 
 
 def main(argv=None):
-    a = parse_args(argv)
-    lock = acquire_lock(a.world, a.wait_sec + a.spawn_timeout)   # 複数プロファイルを同時に起動しても直列化する
+    try:
+        a = parse_args(argv)
+    except SystemExit as exc:
+        return 0 if exc.code in (0, None) else EXIT_USAGE
+    # SIGTERM（launch の停止）でも finally とロックの解放が走るよう、例外に変える
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(143)))
+    # ロック待ちの上限: 先行が最悪の経路（世界待ち + 状態取得 + マーカー + カメラ + 物体）を辿る時間
+    budget = a.wait_sec + 60 + 3 * a.spawn_timeout + 120
+    lock = acquire_lock(a.world, budget)   # 複数プロファイルを同時に起動しても直列化する
     if lock is None:
         _log('ERROR: 他の gz_setup が終わらない。先行のログを確認する')
         return EXIT_LOCK_TIMEOUT

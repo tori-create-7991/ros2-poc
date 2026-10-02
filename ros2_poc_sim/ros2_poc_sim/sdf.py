@@ -61,6 +61,11 @@ def pose_args(pose6) -> list:
             '-R', f'{r:.9g}', '-P', f'{p:.9g}', '-Y', f'{yw:.9g}']
 
 
+def format_pose(pose6) -> str:
+    """gz_setup の `--camera-pose=` / `--object-pose=` に渡す文字列（カンマ区切り）。"""
+    return ','.join(repr(float(v)) for v in pose6)
+
+
 def _color_frame_id(profile: dict) -> str:
     st = profile['topics']['streams']['color_image']
     return profile['frames'][st['frame']]

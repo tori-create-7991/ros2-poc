@@ -19,13 +19,13 @@ def evaluate(exp: dict, obs):
         return [f"{exp['name']}: topic not found"]
     problems = []
     if exp['type'] not in obs['types']:
-        problems.append(f"type {obs['types']} != {exp['type']}")
+        problems.append(f"type {obs['types']!r} != {exp['type']}")
     if obs['count'] == 0:
         return problems + ['no message received']
     if 'encoding' in exp and obs.get('encoding') != exp['encoding']:
-        problems.append(f"encoding {obs.get('encoding')} != {exp['encoding']}")
+        problems.append(f"encoding {obs.get('encoding')!r} != {exp['encoding']}")
     if 'frame_id' in exp and obs.get('frame_id') != exp['frame_id']:
-        problems.append(f"frame_id {obs.get('frame_id')} != {exp['frame_id']}")
+        problems.append(f"frame_id {obs.get('frame_id')!r} != {exp['frame_id']}")
     if obs['hz'] < exp.get('min_hz', 0.0):
         problems.append(f"hz {obs['hz']:.2f} < {exp['min_hz']}")
     return problems

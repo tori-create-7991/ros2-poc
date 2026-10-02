@@ -135,31 +135,107 @@ def test_adapter_receives_user_supplied_placement_value(tmp_path, monkeypatch):
     assert flat['placement'].split('\n')[0] == str(f)        # 名前ではなく、ユーザーが渡した値（パス）をそのまま渡す
 
 
-def test_failure_handler_does_not_shutdown_by_default(tmp_path, monkeypatch):
-    from launch.actions import EmitEvent, RegisterEventHandler
+def _handler(actions):
+    from launch.actions import RegisterEventHandler
+    handler = next(a for a in actions if isinstance(a, RegisterEventHandler))
+    fn = getattr(handler.event_handler, '_OnActionEventBase__on_event', None)
+    assert fn is not None, 'launch の内部属性が変わった。テストを更新する'
+    return fn
+
+
+def test_failure_stops_only_this_profiles_nodes_by_default(tmp_path, monkeypatch):
+    from launch.actions import EmitEvent, LogInfo
+    from launch.events import Shutdown
+    from launch.events.process import ShutdownProcess
     mod = _load('sim_camera')
     monkeypatch.setattr(paths, 'private_dir', lambda name='', base=None: str(tmp_path))
+    actions = mod._setup(_context(mod, fail_fast='false'))
+    out = _handler(actions)(type('Ev', (), {'returncode': 2})(), None)
+    events = [x.event for x in out if isinstance(x, EmitEvent)]
+    assert events and all(isinstance(e, ShutdownProcess) for e in events)   # 公式スタックまで止める Shutdown ではない
+    assert not any(isinstance(e, Shutdown) for e in events)
+    assert any(isinstance(x, LogInfo) for x in out)
+    n_nodes = sum(1 for a in actions if hasattr(a, '_Node__node_name'))
+    assert len(events) == n_nodes                                          # bridge / adapter / republish を全部止める
+    assert _handler(actions)(type('Ev0', (), {'returncode': 0})(), None) == []
 
-    class Ev:
-        returncode = 2
 
-    for fail_fast, expect_shutdown in (('false', False), ('true', True)):
-        actions = mod._setup(_context(mod, fail_fast=fail_fast))
-        handler = next(a for a in actions if isinstance(a, RegisterEventHandler))
-        produced = handler.event_handler._OnActionEventBase__on_event \
-            if hasattr(handler.event_handler, '_OnActionEventBase__on_event') else None
-        assert produced is not None
-        out = produced(Ev(), None)
-        has_shutdown = any(isinstance(x, EmitEvent) for x in out)
-        assert has_shutdown is expect_shutdown
-        ok = produced(type('Ev0', (), {'returncode': 0})(), None)
-        assert ok == []
+def test_fail_fast_shuts_down_everything(tmp_path, monkeypatch):
+    from launch.actions import EmitEvent
+    from launch.events import Shutdown
+    mod = _load('sim_camera')
+    monkeypatch.setattr(paths, 'private_dir', lambda name='', base=None: str(tmp_path))
+    out = _handler(mod._setup(_context(mod, fail_fast='true')))(type('Ev', (), {'returncode': 3})(), None)
+    assert any(isinstance(x, EmitEvent) and isinstance(x.event, Shutdown) for x in out)
+
+
+def test_timeouts_must_be_positive_numbers(tmp_path, monkeypatch):
+    mod = _load('sim_camera')
+    monkeypatch.setattr(paths, 'private_dir', lambda name='', base=None: str(tmp_path))
+    for key in ('wait_sec', 'spawn_timeout'):
+        for bad in ('abc', '-1', '0', 'nan', 'inf'):
+            with pytest.raises(RuntimeError):
+                mod._setup(_context(mod, **{key: bad}))
+
+
+def test_gz_setup_receives_the_configured_timeouts(tmp_path, monkeypatch):
+    mod = _load('sim_camera')
+    monkeypatch.setattr(paths, 'private_dir', lambda name='', base=None: str(tmp_path))
+    actions = mod._setup(_context(mod, wait_sec='123', spawn_timeout='45', world='myworld'))
+    args = Z.parse_args(_cmd(next(a for a in actions if isinstance(a, ExecuteProcess)))[3:])
+    assert (args.wait_sec, args.spawn_timeout, args.world) == (123.0, 45.0, 'myworld')
+
+
+def test_compressed_null_in_profile_is_tolerated(tmp_path, monkeypatch):
+    import yaml
+    from ros2_poc_sim import profile as P
+    mod = _load('sim_camera')
+    monkeypatch.setattr(paths, 'private_dir', lambda name='', base=None: str(tmp_path))
+    d = P.load_profile('usb_cam')
+    d['compressed'] = None
+    f = tmp_path / 'usb_cam.yaml'
+    f.write_text(yaml.safe_dump(d))
+    actions = mod._setup(_context(mod, profile=str(f), placement='fixed_front_oblique'))
+    assert not any(_node_name(a).startswith('rep_') for a in actions if hasattr(a, '_Node__node_name'))
+
+
+def test_republish_remaps_are_per_topic(tmp_path, monkeypatch):
+    mod = _load('sim_camera')
+    monkeypatch.setattr(paths, 'private_dir', lambda name='', base=None: str(tmp_path))
+    actions = mod._setup(_context(mod, profile='usb_cam', placement='fixed_front_oblique'))
+    rep = next(a for a in actions if _node_name(a).startswith('rep_'))
+    remaps = {(_text(a), _text(b)) for a, b in rep._Node__remappings}
+    assert ('in', '/image_raw') in remaps and ('out/compressed', '/image_raw/compressed') in remaps
 
 
 def test_private_dir_is_0700(tmp_path):
     d = paths.private_dir('p', base=str(tmp_path / 'base'))
     assert stat.S_IMODE(os.lstat(d).st_mode) == 0o700
     assert stat.S_IMODE(os.lstat(os.path.dirname(d)).st_mode) == 0o700
+
+
+def test_private_dir_does_not_create_through_a_symlinked_base(tmp_path):
+    target = tmp_path / 'victim'
+    target.mkdir()
+    link = tmp_path / 'base'
+    os.symlink(target, link)
+    with pytest.raises(RuntimeError):
+        paths.private_dir('prof', base=str(link))
+    assert os.listdir(target) == []        # リンク先に何も作らない
+
+
+def test_private_dir_rejects_foreign_owner(tmp_path, monkeypatch):
+    base = tmp_path / 'base'
+    base.mkdir()
+    monkeypatch.setattr(os, 'getuid', lambda: 424242)
+    with pytest.raises(RuntimeError):
+        paths.private_dir('p', base=str(base))
+
+
+@pytest.mark.parametrize('bad', ['a\n', 'x/y', '../x', 'a b', 'あ'])
+def test_private_dir_rejects_bad_names(tmp_path, bad):
+    with pytest.raises(ValueError):
+        paths.private_dir(bad, base=str(tmp_path / 'b'))
 
 
 def test_private_dir_rejects_symlinked_base(tmp_path):

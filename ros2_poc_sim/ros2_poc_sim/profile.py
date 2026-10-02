@@ -21,7 +21,12 @@ GZ_TYPES = {'camera', 'rgbd_camera'}
 REQUIRED_TOP = ('schema', 'name', 'based_on', 'sensor', 'intrinsics', 'frames', 'tf', 'topics', 'qos')
 
 
-NAME_RE = re.compile(r'^[A-Za-z0-9_]+$')
+NAME_RE = re.compile(r'[A-Za-z0-9_]+')
+
+
+def is_name(v) -> bool:
+    """英数字とアンダースコアだけ（末尾の改行も許さない: fullmatch）。"""
+    return isinstance(v, str) and NAME_RE.fullmatch(v) is not None
 QOS_KIND = {'color': 'image', 'depth': 'image', 'points': 'points',
              'info_color': 'info', 'info_depth': 'info'}
 _TYPE_FOR_SOURCE = {
@@ -45,11 +50,23 @@ def _finite_positive(v) -> bool:
             and math.isfinite(v) and v > 0)
 
 
+def _vec3(v, label: str) -> None:
+    if (not isinstance(v, (list, tuple)) or len(v) != 3
+            or any(isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x)
+                   for x in v)):
+        raise ProfileError(f'{label} は有限な数 3 つ')
+
+
+def compressed_streams(d: dict) -> list:
+    """圧縮して出すストリームの一覧（`compressed:` が空・null でも空リスト）。validate と launch の共通の入口。"""
+    return list(d.get('compressed') or [])
+
+
 def _resolve(kind: str, name_or_path: str) -> Path:
     p = Path(name_or_path)
     if p.suffix in ('.yaml', '.yml') and p.exists():
         return p
-    if not NAME_RE.match(name_or_path):
+    if not is_name(name_or_path):
         raise ProfileError(f'名前は英数字とアンダースコアのみ: {name_or_path!r}')
     return config_dir(kind) / f'{name_or_path}.yaml'
 
@@ -70,14 +87,17 @@ def load_placement(name_or_path: str) -> dict:
             raise ProfileError(f'placement に必須キーがない: {k}')
     if d['mode'] != 'fixed':
         raise ProfileError("placement.mode は 'fixed' のみ対応（手先カメラは第 2 弾）")
+    for k in ('look_at', 'object', 'robot_base_in_world'):
+        if not isinstance(d[k], dict):
+            raise ProfileError(f'placement.{k} は辞書')
     for k in ('eye', 'target', 'up_hint'):
-        if len(d['look_at'].get(k, [])) != 3:
-            raise ProfileError(f'placement.look_at.{k} は 3 要素')
-    if len(d['object'].get('xyz_in_base_link', [])) != 3:
-        raise ProfileError('placement.object.xyz_in_base_link は 3 要素')
+        _vec3(d['look_at'].get(k), f'placement.look_at.{k}')
+    _vec3(d['object'].get('xyz_in_base_link'), 'placement.object.xyz_in_base_link')
+    _vec3(d['robot_base_in_world'].get('xyz'), 'placement.robot_base_in_world.xyz')
+    _vec3(d['robot_base_in_world'].get('rpy'), 'placement.robot_base_in_world.rpy')
     obj = d.get('object') or {}
     for label, v in (('name', d.get('name')), ('object.name', obj.get('name'))):
-        if v is not None and not NAME_RE.match(str(v)):
+        if v is not None and not is_name(v):
             raise ProfileError(f'{label} は英数字とアンダースコアのみ: {v!r}')
     return d
 
@@ -93,7 +113,7 @@ def validate(d: dict) -> None:
             raise ProfileError(f'必須キーがない: {k}')
     if d['schema'] != 1:
         raise ProfileError(f"未対応の schema: {d['schema']}")
-    if not NAME_RE.match(str(d['name'])):
+    if not is_name(d['name']):
         raise ProfileError(f"name は英数字とアンダースコアのみ: {d['name']!r}")
     s = d['sensor']
     if s.get('gz_type') not in GZ_TYPES:
@@ -187,7 +207,7 @@ def _check_streams(d: dict) -> None:
 
 def _check_extras(d: dict) -> None:
     streams = d['topics']['streams']
-    for sid in d.get('compressed', []) or []:
+    for sid in compressed_streams(d):
         st = streams.get(sid)
         if st is None or st['type'] != 'sensor_msgs/msg/Image':
             raise ProfileError(f'compressed: {sid} は Image のストリームでなければならない')

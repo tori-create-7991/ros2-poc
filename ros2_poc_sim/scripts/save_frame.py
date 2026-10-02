@@ -44,7 +44,7 @@ def image_to_array(encoding: str, height: int, width: int, data: bytes) -> np.nd
         d[~np.isfinite(d)] = 0
         m = d.max()
         return (d / m * 255).astype(np.uint8) if m > 0 else d.astype(np.uint8)
-    raise ValueError(f'未対応のエンコーディング: {encoding}')
+    raise ValueError(f'未対応のエンコーディング: {encoding!r}')
 
 
 def main(argv=None):

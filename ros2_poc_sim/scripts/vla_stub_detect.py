@@ -21,6 +21,7 @@ DEPTH_MIN, DEPTH_MAX = 0.2, 0.5   # 公式 color_detection と同じ有効距離
 DEPTH_OFFSET = 0.015              # 物体表面の少し奥（公式と同じ）
 MIN_PIXELS = 30
 EXPECTED_FRAME_ID = 'camera_color_optical_frame'
+MAX_PIXELS = 4096 * 4096   # DDS は無認証。巨大な画像でメモリを使い切られないよう上限を置く
 MAX_LATERAL = 1.0   # 光軸に直交する方向の妥当な上限 [m]（有効距離 0.5m の画角内に収まる）
 
 
@@ -178,6 +179,15 @@ def main(argv=None):
                 self.get_logger().error(f'camera_info の内部パラメータが不正: {k[:6]}。破棄',
                                         throttle_duration_sec=5.0)
                 return
+            if (msg.height * msg.width > MAX_PIXELS or depth_msg.height * depth_msg.width > MAX_PIXELS
+                    or msg.is_bigendian or depth_msg.is_bigendian):
+                self.get_logger().error('画像が大きすぎる・ビッグエンディアン。破棄', throttle_duration_sec=5.0)
+                return
+            if (self.info.width, self.info.height) != (msg.width, msg.height):
+                self.get_logger().error(
+                    f'camera_info {self.info.width}x{self.info.height} と画像 {msg.width}x{msg.height} が違う。破棄',
+                    throttle_duration_sec=5.0)
+                return
             try:
                 img = decode_color(msg.encoding, msg.height, msg.width, bytes(msg.data))
                 depth = decode_depth(depth_msg.encoding, depth_msg.height, depth_msg.width,
@@ -236,4 +246,5 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    main()
+    sys.exit(0)

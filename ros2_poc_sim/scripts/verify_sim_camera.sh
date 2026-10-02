@@ -36,16 +36,24 @@ done
 
 # V1: コンテナ内の単体・結合テスト（本番の DDS ドメインと混ざらないよう別ドメインで実行し、pytest の終了コードで判定する）
 # 見るのはイメージに焼かれた /opt/ros2_poc_ws/src のコピーなので、手元のソースと一致しなければ古いイメージとして不合格にする。
-SRC_FILES='find ros2_poc_sim test config launch scripts -type f ! -name "*.pyc" ! -path "*__pycache__*" | LC_ALL=C sort | xargs'
-host_sum=$(cd ros2_poc_sim && eval "$SRC_FILES shasum" | shasum | cut -d' ' -f1)
-img_sum=$(docker exec -u ubuntu "$ARM" bash -c "cd /opt/ros2_poc_ws/src/ros2_poc_sim && $SRC_FILES sha1sum | sha1sum | cut -d' ' -f1" 2>/dev/null)
-if [ "$host_sum" != "$img_sum" ]; then
-  report V1-pytest FAIL "イメージが古い（手元のソースと違う）。docker compose --profile arm build ros2arm で再ビルドしてから実行する"
+SRC_LIST='find ros2_poc_sim test config launch scripts resource setup.py setup.cfg package.xml -type f ! -name "*.pyc" ! -path "*__pycache__*" -print0 | LC_ALL=C sort -z'
+if command -v sha1sum >/dev/null 2>&1; then HOST_SHA=sha1sum; elif command -v shasum >/dev/null 2>&1; then HOST_SHA=shasum; else HOST_SHA=""; fi
+if [ -z "$HOST_SHA" ]; then
+  report V1-pytest FAIL "ホストに sha1sum も shasum も無く、イメージが古いかを判定できない"
+else
+host_list=$(cd ros2_poc_sim && eval "$SRC_LIST" | xargs -0 $HOST_SHA)
+img_list=$(docker exec -u ubuntu "$ARM" bash -c "cd /opt/ros2_poc_ws/src/ros2_poc_sim && $SRC_LIST | xargs -0 sha1sum" 2>/dev/null || true)
+if [ -z "$img_list" ]; then
+  report V1-pytest FAIL "イメージ内のソースを読めない（$ARM に /opt/ros2_poc_ws/src/ros2_poc_sim があるか）"
+elif [ "$host_list" != "$img_list" ]; then
+  diff_files=$(diff <(printf '%s\n' "$host_list") <(printf '%s\n' "$img_list") | grep '^[<>]' | awk '{print $3}' | sort -u | head -5 | tr '\n' ' ')
+  report V1-pytest FAIL "イメージが古い（手元のソースと違う: ${diff_files}）。docker compose --profile arm build ros2arm で再ビルドしてから実行する"
 else
   out=$(docker exec -u ubuntu -e ROS_DOMAIN_ID=97 "$ARM" bash -c "$ROS_ENV; cd /opt/ros2_poc_ws/src/ros2_poc_sim && PYTHONDONTWRITEBYTECODE=1 timeout 300 python3 -m pytest -q -p no:cacheprovider test 2>&1; echo PYTEST_RC=\$?")
   rc=$(printf '%s\n' "$out" | sed -n 's/^PYTEST_RC=//p' | tail -1)
   summary=$(printf '%s\n' "$out" | grep -E 'passed|failed|error' | tail -1)
   if [ "$rc" = 0 ]; then report V1-pytest ok "$summary"; else report V1-pytest FAIL "rc=${rc:-?} $summary"; fi
+fi
 fi
 
 # V3: 仮想カメラのトピックが出ている（購読者なしで一覧に出る）
@@ -69,7 +77,7 @@ fi
 docker cp ros2_poc_sim/scripts/save_frame.py "$LAB":/tmp/save_frame.py >/dev/null
 mkdir -p "$OUT_DIR"
 if out=$(docker exec "$LAB" bash -lc "python3 /tmp/save_frame.py $COLOR /tmp/sim_camera_color.png 90 2>&1 | grep -E '^(saved|ERROR)' | tail -1") \
-   && docker cp "$LAB":/tmp/sim_camera_color.png "$OUT_DIR/sim_camera_color.png" >/dev/null 2>&1; then
+   && docker exec "$LAB" cat /tmp/sim_camera_color.png > "$OUT_DIR/sim_camera_color.png" 2>/dev/null; then
   std=$(printf '%s' "$out" | sed -n 's/.*std=\([0-9.]*\).*/\1/p')
   # 真っ黒・単色（過去に灰色一色の不具合があった）を弾く。机と物体が写っていれば標準偏差はこれより大きい
   if [ -n "$std" ] && awk "BEGIN{exit !($std > 5.0)}"; then
@@ -82,8 +90,15 @@ else
 fi
 
 # V7b: 簡易検出スクリプト（realsense_d435 のみ。深度が要る）
-nodes=$(docker exec "$LAB" bash -lc 'ros2 node list 2>/dev/null' || true)
-if [ "$PROFILE" = realsense_d435 ] && printf '%s\n' "$nodes" | grep -q pick_and_place_tf; then
+# 安全のため fail-closed: ノード一覧を取れなければ（Discovery 前・失敗）アームが動かないと確認できないので中止する。
+# 名前の根拠: 公式 crane_x7_examples/launch/camera_example.launch.py の Node(name='pick_and_place_tf')。
+# 実機（ros2real）の ROS_DOMAIN_ID は同じ 42 なので、このスクリプトを実機が動いている環境で実行しない。
+nodes_ok=1
+nodes=$(docker exec "$LAB" bash -lc 'ros2 node list 2>/dev/null' ) || nodes_ok=0
+[ -n "$nodes" ] || nodes_ok=0
+if [ "$PROFILE" = realsense_d435 ] && [ "$nodes_ok" = 0 ]; then
+  report V7b-stub-detect FAIL "ros2 node list を取得できず pick_and_place_tf が動いていないと確認できないので中止（Discovery に 10〜20 秒かかる）"
+elif [ "$PROFILE" = realsense_d435 ] && printf '%s\n' "$nodes" | grep -q pick_and_place_tf; then
   # target_0 を流すと pick_and_place_tf がアームを動かす。動いている間は流さない
   report V7b-stub-detect FAIL "pick_and_place_tf が動いているので中止（アームが動く恐れ）。止めてから実行する"
 elif [ "$PROFILE" = realsense_d435 ]; then

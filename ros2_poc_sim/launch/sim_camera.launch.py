@@ -4,7 +4,9 @@
 
 Gazebo 側（Sensors システム・モデル）は何度実行しても二重にならない。bridge / adapter は
 ROS ノードなので、同じプロファイルを動かしたまま再実行しないこと（先に Ctrl-C する）。
-gz_setup が失敗しても既定では公式スタックを止めない（fail_fast:=true で launch 全体を止める）。
+gz_setup が失敗したときは、**このプロファイルのノード（bridge / adapter / republish）だけを止める**。
+公式の Gazebo / MoveIt は止めない（`fail_fast:=true` なら launch 全体を止める）。止めた後は
+`ros2 launch ros2_poc_sim sim_camera.launch.py ...` を単独で再実行すればよい（二重にならない）。
 別のプロファイルは同時に動かせる（ノード名・TF・トピックはプロファイルごとに分かれる）。
 """
 import sys
@@ -12,8 +14,10 @@ import sys
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, EmitEvent, ExecuteProcess, LogInfo,
                             OpaqueFunction, RegisterEventHandler)
-from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
+from launch.events.process import ShutdownProcess
+from launch.event_handlers import OnProcessExit
+from launch.events import matches_action
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -22,6 +26,16 @@ from ros2_poc_sim import gz_setup as Z
 from ros2_poc_sim import paths
 from ros2_poc_sim import profile as P
 from ros2_poc_sim import sdf as S
+
+
+def _positive_float(v: str, label: str) -> float:
+    try:
+        x = float(v)
+    except ValueError:
+        x = float('nan')
+    if not (x > 0 and x < float('inf')):
+        raise RuntimeError(f'{label} は正の数: {v!r}')
+    return x
 
 
 def _truthy(v: str) -> bool:
@@ -38,8 +52,10 @@ def _setup(context):
     spawn_object = _truthy(LaunchConfiguration('spawn_object').perform(context))
     ns_mode = P.check_ns_mode(LaunchConfiguration('ns_mode').perform(context))
     world = LaunchConfiguration('world').perform(context)
-    if not P.NAME_RE.match(world):
+    if not P.is_name(world):
         raise RuntimeError(f'world は英数字とアンダースコアのみ: {world!r}')
+    wait_sec = _positive_float(LaunchConfiguration('wait_sec').perform(context), 'wait_sec')
+    spawn_timeout = _positive_float(LaunchConfiguration('spawn_timeout').perform(context), 'spawn_timeout')
     fail_fast = _truthy(LaunchConfiguration('fail_fast').perform(context))
     name = prof['name']
 
@@ -53,48 +69,53 @@ def _setup(context):
     sim_time = {'use_sim_time': True}
     setup_cmd = [sys.executable, '-m', 'ros2_poc_sim.gz_setup', '--camera-sdf', cam_sdf,
                  '--camera-name', S.camera_model_name(prof), '--world', world,
-                 '--wait-sec', LaunchConfiguration('wait_sec').perform(context),
-                 '--spawn-timeout', LaunchConfiguration('spawn_timeout').perform(context),
-                 f'--camera-pose={Z.format_pose(S.camera_pose6(prof, pl))}']
+                 f'--wait-sec={wait_sec}', f'--spawn-timeout={spawn_timeout}',
+                 f'--camera-pose={S.format_pose(S.camera_pose6(prof, pl))}']
     if spawn_object:
         setup_cmd += ['--object-sdf', obj_sdf, '--object-name', pl['object']['name'],
-                      f'--object-pose={Z.format_pose(S.object_pose6(pl))}']
+                      f'--object-pose={S.format_pose(S.object_pose6(pl))}']
     gz_setup = ExecuteProcess(cmd=setup_cmd, output='screen', name=f'gz_setup_{name}')
 
-    def _on_setup_exit(event, _context):
-        if event.returncode == 0:
-            return []
-        msg = (f'[ros2_poc_sim] gz_setup が失敗した（rc={event.returncode}）。仮想カメラはまだ無い。'
-               'ログを確認し、docs/sim-camera-profile.md の終了コード表に従って対処する')
-        if fail_fast:   # 既定は止めない: 公式の Gazebo / MoveIt まで巻き込まないため
-            return [LogInfo(msg=msg + '（fail_fast=true のため launch を止める）'),
-                    EmitEvent(event=Shutdown(reason='gz_setup failed'))]
-        return [LogInfo(msg=msg + '。公式スタックはそのまま動かす。sim_camera.launch.py を再実行してよい')]
-
-    actions = [gz_setup,
-               RegisterEventHandler(OnProcessExit(target_action=gz_setup, on_exit=_on_setup_exit))]
-
-    actions.append(Node(
+    camera_nodes = []   # このプロファイルのノード。gz_setup が失敗したらこれだけを止める
+    camera_nodes.append(Node(
         package='ros_gz_bridge', executable='parameter_bridge', name=f'sim_camera_bridge_{name}',
         parameters=[{'config_file': br_yaml}, sim_time], output='screen',
         respawn=True, respawn_delay=2.0))
 
     # adapter にはユーザーが渡した値（名前またはパス）をそのまま渡す。名前だけだと別パスのプロファイルを再解決できない。
-    actions.append(Node(
+    camera_nodes.append(Node(
         package='ros2_poc_sim', executable='camera_adapter', name=f'camera_adapter_{name}',
         parameters=[{'profile': profile_arg, 'placement': placement_arg, 'pointcloud': pointcloud,
                      'ns_mode': ns_mode}, sim_time], output='screen',
         respawn=True, respawn_delay=2.0))
 
     if compressed:
-        for sid in prof.get('compressed', []):
+        for sid in P.compressed_streams(prof):
             topic = P.topic_name(prof, sid, ns_mode or None)
             # Jazzy の republish は位置引数が効かない。圧縮出力の remap は out/compressed 単位。
-            actions.append(Node(
+            camera_nodes.append(Node(
                 package='image_transport', executable='republish', name=f'rep_{name}_{sid}',
                 parameters=[{'in_transport': 'raw', 'out_transport': 'compressed'}, sim_time],
                 remappings=[('in', topic), ('out/compressed', f'{topic}/compressed')],
                 output='screen'))
+
+    def _on_setup_exit(event, _context):
+        if event.returncode == 0:
+            return []
+        msg = (f'[ros2_poc_sim] gz_setup が失敗した（rc={event.returncode}）。仮想カメラはまだ無い。'
+               '終了コードの意味と対処は docs/sim-camera-profile.md の表を参照')
+        if fail_fast:
+            return [LogInfo(msg=msg + '。fail_fast=true なので launch 全体を止める'),
+                    EmitEvent(event=Shutdown(reason='gz_setup failed'))]
+        # 既定: このプロファイルのノードだけを止める。公式の Gazebo / MoveIt は止めない。
+        # 止めてから sim_camera.launch.py を単独で再実行すれば、ノードが二重にならない
+        return ([LogInfo(msg=msg + f'。{name} の bridge / adapter / republish を止める（公式スタックは動いたまま）。'
+                                   'sim_camera.launch.py を再実行する（Gazebo の再起動が要る場合はそう案内が出ている）')]
+                + [EmitEvent(event=ShutdownProcess(process_matcher=matches_action(n))) for n in camera_nodes])
+
+    actions = [gz_setup,
+               RegisterEventHandler(OnProcessExit(target_action=gz_setup, on_exit=_on_setup_exit))]
+    actions += camera_nodes
     return actions
 
 
