@@ -15,7 +15,6 @@ setup(
         (os.path.join('share', package_name, 'config', 'profiles'), glob.glob('config/profiles/*.yaml')),
         (os.path.join('share', package_name, 'config', 'placements'), glob.glob('config/placements/*.yaml')),
         (os.path.join('share', package_name, 'config', 'contracts'), glob.glob('config/contracts/*.yaml')),
-        (os.path.join('share', package_name, 'models', 'blue_cube'), glob.glob('models/blue_cube/*')),
         (os.path.join('share', package_name, 'launch'), glob.glob('launch/*.py')),
     ],
     install_requires=['setuptools'],
