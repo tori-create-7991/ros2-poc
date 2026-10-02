@@ -106,3 +106,13 @@ def test_camera_info_fields():
     assert f['k'] == [462.14, 0.0, 320.0, 0.0, 462.14, 240.0, 0.0, 0.0, 1.0]
     assert f['p'][0] == 462.14 and f['p'][2] == 320.0 and f['p'][5] == 462.14 and f['p'][6] == 240.0
     assert len(f['p']) == 12 and len(f['d']) == 5 and f['distortion_model'] == 'plumb_bob'
+
+
+def test_profiles_do_not_share_mount_frame_names():
+    """複数のカメラを同時に置いても base_link→camera_link の静的 TF が衝突しないこと。"""
+    d435 = P.load_profile('realsense_d435')
+    usb = P.load_profile('usb_cam')
+    assert d435['frames']['camera_link'] != usb['frames']['camera_link']
+    d435_frames = set(d435['frames'].values())
+    usb_frames = set(usb['frames'].values())
+    assert not (d435_frames & usb_frames)

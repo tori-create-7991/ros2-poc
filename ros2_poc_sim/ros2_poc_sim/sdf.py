@@ -57,6 +57,7 @@ def camera_model_sdf(profile: dict, placement: dict) -> str:
     <pose>{_pose_str(pos, R)}</pose>
     <link name="link">
       <visual name="body">
+        <cast_shadows>false</cast_shadows>
         <geometry><box><size>0.02 0.09 0.025</size></box></geometry>
         <material><diffuse>0.1 0.1 0.1 1</diffuse></material>
       </visual>

@@ -25,14 +25,14 @@ intrinsics:                    # usb_cam 同梱 camera_info.yaml の fx(≈438.7
   d: [0.0, 0.0, 0.0, 0.0, 0.0]
 
 frames:
-  camera_link: camera_link
+  camera_link: usb_cam_link    # 他のカメラ（camera_link）と同時に置いても TF が衝突しないよう別名にする
   optical: camera              # usb_cam の frame_id は camera（TF はドライバが出さない）
 
 tf:
   publish: true                # 実機では利用者が付ける TF。シミュでは光学フレームとして接続する
   links:
-    - {parent: camera_link, child: camera, xyz: [0, 0, 0], rpy: [-1.5707963267948966, 0, -1.5707963267948966]}
-  gz_sensor_frame: camera_link
+    - {parent: usb_cam_link, child: camera, xyz: [0, 0, 0], rpy: [-1.5707963267948966, 0, -1.5707963267948966]}
+  gz_sensor_frame: camera_link   # frames のキー名（= usb_cam_link の位置）
 
 topics:
   root: ""                     # ros2 run usb_cam usb_cam_node_exe の直接起動形（/image_raw）
