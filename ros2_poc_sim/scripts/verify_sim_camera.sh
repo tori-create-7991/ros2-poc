@@ -36,7 +36,7 @@ done
 
 # V1: コンテナ内の単体・結合テスト（本番の DDS ドメインと混ざらないよう別ドメインで実行し、pytest の終了コードで判定する）
 # 見るのはイメージに焼かれた /opt/ros2_poc_ws/src のコピーなので、手元のソースと一致しなければ古いイメージとして不合格にする。
-SRC_LIST='find ros2_poc_sim test config launch scripts resource setup.py setup.cfg package.xml -type f ! -name "*.pyc" ! -path "*__pycache__*" -print0 | LC_ALL=C sort -z'
+SRC_LIST='find ros2_poc_sim test config launch scripts resource setup.py setup.cfg package.xml -type f ! -name "*.pyc" ! -name .DS_Store ! -path "*__pycache__*" -print0 | LC_ALL=C sort -z'
 if command -v sha1sum >/dev/null 2>&1; then HOST_SHA=sha1sum; elif command -v shasum >/dev/null 2>&1; then HOST_SHA=shasum; else HOST_SHA=""; fi
 if [ -z "$HOST_SHA" ]; then
   report V1-pytest FAIL "ホストに sha1sum も shasum も無く、イメージが古いかを判定できない"
@@ -106,7 +106,7 @@ elif [ "$PROFILE" = realsense_d435 ]; then
   log=$(docker exec "$LAB" bash -lc 'timeout -s INT 60 python3 /tmp/vla_stub_detect.py 2>&1' || true)
   line=$(printf '%s\n' "$log" | grep 'base_link=' | tail -1)
   if [ -z "$line" ]; then
-    report V7b-stub-detect FAIL "base_link 基準の target_0 が出ない: $(printf '%s\n' "$log" | grep -E 'ERROR|エラー|来ない' | tail -1)"
+    report V7b-stub-detect FAIL "base_link 基準の target_0 が出ない: $(printf '%s\n' "$log" | grep -E 'ERROR|エラー|来ない|破棄' | tail -1)"
   else
     res=$(python3 - "$line" "$EXPECT" "$TOL" <<'PY'
 import re, sys

@@ -62,9 +62,10 @@ def test_arm_with_camera_declares_exactly_the_same_arguments():
     ac = _load('arm_with_camera')
     sc = _load('sim_camera')
     pytest.importorskip('ament_index_python')
+    from ament_index_python.packages import PackageNotFoundError
     try:
         ld = ac.generate_launch_description()
-    except Exception as exc:  # crane_x7_gazebo / ros2_poc_sim が未インストールの環境
+    except PackageNotFoundError as exc:  # crane_x7_gazebo / ros2_poc_sim が未インストールの環境だけ skip
         pytest.skip(f'ament 環境が無い: {exc}')
     declared = {a.name for a in ld.entities if a.__class__.__name__ == 'DeclareLaunchArgument'}
     assert declared == set(sc.LAUNCH_ARGS)
@@ -250,3 +251,12 @@ def test_private_dir_rejects_symlinked_base(tmp_path):
 def test_private_dir_without_name_returns_base(tmp_path):
     base = str(tmp_path / 'b')
     assert paths.private_dir(base=base) == base
+
+
+def test_signal_exits_do_not_print_failure_guidance(tmp_path, monkeypatch):
+    mod = _load('sim_camera')
+    monkeypatch.setattr(paths, 'private_dir', lambda name='', base=None: str(tmp_path))
+    fn = _handler(mod._setup(_context(mod)))
+    for rc in (-2, -15, 130, 143):
+        assert fn(type('Ev', (), {'returncode': rc})(), None) == []
+    assert fn(type('Ev', (), {'returncode': 2})(), None) != []

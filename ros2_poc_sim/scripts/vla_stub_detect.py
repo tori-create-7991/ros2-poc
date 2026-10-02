@@ -21,25 +21,25 @@ DEPTH_MIN, DEPTH_MAX = 0.2, 0.5   # 公式 color_detection と同じ有効距離
 DEPTH_OFFSET = 0.015              # 物体表面の少し奥（公式と同じ）
 MIN_PIXELS = 30
 EXPECTED_FRAME_ID = 'camera_color_optical_frame'
-MAX_PIXELS = 4096 * 4096   # DDS は無認証。巨大な画像でメモリを使い切られないよう上限を置く
+MAX_PIXELS = 1920 * 1080   # DDS は無認証。巨大な画像でメモリを使い切られないよう上限を置く
 MAX_LATERAL = 1.0   # 光軸に直交する方向の妥当な上限 [m]（有効距離 0.5m の画角内に収まる）
 
 
 def decode_color(encoding, height, width, data):
     if encoding != 'rgb8':
-        raise ValueError(f'色画像は rgb8 のみ対応（受信: {encoding}）')
+        raise ValueError(f'色画像は rgb8 のみ対応（受信: {encoding!r}）')
     return np.frombuffer(data, np.uint8).reshape(height, width, 3)
 
 
 def decode_depth(encoding, height, width, data):
     if encoding != '16UC1':
-        raise ValueError(f'深度は 16UC1 (mm) のみ対応（受信: {encoding}）')
+        raise ValueError(f'深度は 16UC1 (mm) のみ対応（受信: {encoding!r}）')
     return np.frombuffer(data, '<u2').reshape(height, width)
 
 
 def rgb_to_hsv_cv(img):
     """RGB uint8 → OpenCV 流の HSV (H 0-180, S 0-255, V 0-255)。"""
-    f = img.astype(np.float32) / 255.0
+    f = img.astype(np.float32) / np.float32(255.0)
     r, g, b = f[..., 0], f[..., 1], f[..., 2]
     mx, mn = f.max(axis=-1), f.min(axis=-1)
     d = mx - mn
@@ -85,6 +85,27 @@ def backproject(u, v, z_depth, k, offset=DEPTH_OFFSET):
     return ((u - cx) / fx * z, (v - cy) / fy * z, z)
 
 
+def validate_pair(color, depth, info, expected_frame):
+    """色・深度・camera_info の組を検査する。問題があれば理由（文字列）、無ければ None。
+    引数は height/width/is_bigendian/header.frame_id/(info は width/height/k) を持つオブジェクト。
+    DDS は無認証なので、受信した値は信頼せず上限・一致・有限性を確認する。"""
+    if color.header.frame_id != expected_frame:
+        return f'frame_id が想定外: {color.header.frame_id!r} (期待 {expected_frame!r})'
+    if depth.header.frame_id != expected_frame:
+        return f'深度の frame_id が想定外: {depth.header.frame_id!r}'
+    if not intrinsics_ok(list(info.k)):
+        return f'camera_info の内部パラメータが不正: {list(info.k)[:6]}'
+    if color.height * color.width > MAX_PIXELS or depth.height * depth.width > MAX_PIXELS:
+        return '画像が大きすぎる'
+    if color.is_bigendian or depth.is_bigendian:
+        return 'ビッグエンディアンは非対応'
+    if (info.width, info.height) != (color.width, color.height):
+        return f'camera_info {info.width}x{info.height} と画像 {color.width}x{color.height} が違う'
+    if (depth.width, depth.height) != (color.width, color.height):
+        return f'色 {color.width}x{color.height} と深度 {depth.width}x{depth.height} の大きさが違う'
+    return None
+
+
 def intrinsics_ok(k):
     """fx, fy が正の有限値で、主点が有限であること。"""
     import math
@@ -98,6 +119,7 @@ def in_range(z, lo=DEPTH_MIN, hi=DEPTH_MAX):
 
 def main(argv=None):
     import rclpy
+    from rclpy.executors import ExternalShutdownException
     from geometry_msgs.msg import TransformStamped
     from rclpy.node import Node
     from rclpy.qos import qos_profile_sensor_data
@@ -169,25 +191,11 @@ def main(argv=None):
         def _process_checked(self, msg, depth_msg):
             if self.info is None:
                 return  # 同一 stamp の組だけを使う（公式 color_detection の ExactTime と同じ）
-            if msg.header.frame_id != self.expected_frame:
-                self.get_logger().error(
-                    f'frame_id が想定外: {msg.header.frame_id!r} (期待 {self.expected_frame!r})。破棄',
-                    throttle_duration_sec=5.0)
+            reason = validate_pair(msg, depth_msg, self.info, self.expected_frame)
+            if reason:
+                self.get_logger().error(f'{reason}。破棄', throttle_duration_sec=5.0)
                 return
             k = list(self.info.k)
-            if not intrinsics_ok(k):
-                self.get_logger().error(f'camera_info の内部パラメータが不正: {k[:6]}。破棄',
-                                        throttle_duration_sec=5.0)
-                return
-            if (msg.height * msg.width > MAX_PIXELS or depth_msg.height * depth_msg.width > MAX_PIXELS
-                    or msg.is_bigendian or depth_msg.is_bigendian):
-                self.get_logger().error('画像が大きすぎる・ビッグエンディアン。破棄', throttle_duration_sec=5.0)
-                return
-            if (self.info.width, self.info.height) != (msg.width, msg.height):
-                self.get_logger().error(
-                    f'camera_info {self.info.width}x{self.info.height} と画像 {msg.width}x{msg.height} が違う。破棄',
-                    throttle_duration_sec=5.0)
-                return
             try:
                 img = decode_color(msg.encoding, msg.height, msg.width, bytes(msg.data))
                 depth = decode_depth(depth_msg.encoding, depth_msg.height, depth_msg.width,
@@ -195,12 +203,8 @@ def main(argv=None):
             except ValueError as exc:
                 self.get_logger().error(str(exc), throttle_duration_sec=5.0)
                 return
-            if depth.shape != img.shape[:2]:
+            if depth.shape != img.shape[:2]:   # 上の検査と二重だが、デコード後の実寸も確認する
                 self.get_logger().error(f'色 {img.shape[:2]} と深度 {depth.shape} の大きさが違う。破棄',
-                                        throttle_duration_sec=5.0)
-                return
-            if depth_msg.header.frame_id != self.expected_frame:
-                self.get_logger().error(f'深度の frame_id が想定外: {depth_msg.header.frame_id!r}。破棄',
                                         throttle_duration_sec=5.0)
                 return
             mask = blue_mask(img)
@@ -237,7 +241,7 @@ def main(argv=None):
     node = Detector()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
@@ -246,5 +250,4 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    main()
-    sys.exit(0)
+    sys.exit(main() or 0)

@@ -342,3 +342,29 @@ def test_run_does_not_hang_if_a_grandchild_holds_the_pipe(monkeypatch):
     monkeypatch.setattr(Z.os, 'killpg', lambda pid, sig: None)
     r = Z._run(['x'], timeout=1)
     assert r.returncode == 124 and P.n == 2        # 2 回目の communicate もタイムアウトで諦める
+
+
+def test_worst_case_budget_covers_every_stage():
+    """ロック待ちの上限は、先行の最悪経路（世界待ち・状態取得・マーカー 2 回・カメラ・物体）の合計以上。"""
+    wait, sp = 300.0, 240.0
+    stages = (wait + 30) + (60 + 30) + 2 * (sp + sp) + (sp + sp) + (sp + sp)
+    assert Z.worst_case_seconds(wait, sp) >= stages
+    assert Z.worst_case_seconds(10, 5) < Z.worst_case_seconds(300, 240)
+
+
+def test_cli_numbers_must_be_finite_and_positive():
+    for bad in (['--wait-sec', 'nan'], ['--wait-sec', 'inf'], ['--spawn-timeout', '-1'], ['--spawn-timeout', '0']):
+        with pytest.raises(SystemExit):
+            Z.parse_args(['--camera-sdf', 'c', '--camera-name', 'n', '--camera-pose=0,0,0,0,0,0', *bad])
+    for pose in ('nan,0,0,0,0,0', 'inf,0,0,0,0,0'):
+        with pytest.raises(SystemExit):
+            Z.parse_args(['--camera-sdf', 'c', '--camera-name', 'n', f'--camera-pose={pose}'])
+
+
+def test_keyboard_interrupt_returns_130_and_restores_sigterm(monkeypatch):
+    import signal
+    before = signal.getsignal(signal.SIGTERM)
+    monkeypatch.setattr(Z, 'acquire_lock', lambda w, t: (_ for _ in ()).throw(KeyboardInterrupt))
+    rc = Z.main(['--camera-sdf', 'c', '--camera-name', 'n', '--camera-pose=0,0,0,0,0,0'])
+    assert rc == 130
+    assert signal.getsignal(signal.SIGTERM) == before        # ハンドラを残さない

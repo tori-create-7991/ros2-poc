@@ -46,7 +46,7 @@ def _run_with_fake_docker(tmp_path, pytest_out, mutate=None, profile='usb_cam', 
     import subprocess
     repo = SCRIPT.parents[2]
     tree = tmp_path / 'image_tree'
-    shutil.copytree(repo / 'ros2_poc_sim', tree, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    shutil.copytree(repo / 'ros2_poc_sim', tree, ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '.DS_Store'))   # .dockerignore と同じ
     if mutate:
         mutate(tree)
     out_file = tmp_path / 'pytest_out.txt'
@@ -138,3 +138,29 @@ def test_v7b_fails_closed_when_node_list_is_unavailable(tmp_path):
 
 def test_script_guards_against_arm_moving_node():
     assert 'pick_and_place_tf' in SCRIPT.read_text(encoding='utf-8')
+
+
+def test_host_file_list_excludes_what_dockerignore_excludes():
+    """イメージに入らないファイルがホスト側の一覧に残ると、再ビルドしても直らない「古い」誤判定になる。"""
+    text = SCRIPT.read_text(encoding='utf-8')
+    di = SCRIPT.parents[2] / '.dockerignore'
+    if not di.exists():   # イメージ内のコピー（.dockerignore は COPY されない）では検査できない
+        pytest.skip('.dockerignore が無い')
+    ignore = di.read_text(encoding='utf-8').split()
+    assert '**/.DS_Store' in ignore and '**/__pycache__' in ignore
+    assert '.DS_Store' in text and '__pycache__' in text and '*.pyc' in text
+
+
+@needs_tool
+def test_dot_ds_store_on_host_does_not_make_the_image_look_stale(tmp_path):
+    import shutil
+    repo = SCRIPT.parents[2]
+    junk = repo / 'ros2_poc_sim' / 'test' / '.DS_Store'
+    existed = junk.exists()
+    junk.write_bytes(b'x')
+    try:
+        out, _ = _run_with_fake_docker(tmp_path, '70 passed in 1s\nPYTEST_RC=0')
+    finally:
+        if not existed:
+            junk.unlink()
+    assert _line(out, 'V1-pytest').startswith('ok'), out

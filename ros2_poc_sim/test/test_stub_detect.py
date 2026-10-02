@@ -101,3 +101,53 @@ def test_lateral_limit_constant_is_sane():
 def test_in_range_edges():
     assert V.in_range(0.2) and V.in_range(0.5)
     assert not V.in_range(0.1999) and not V.in_range(0.5001)
+
+
+class _H:
+    def __init__(self, frame):
+        self.frame_id = frame
+
+
+class _Img:
+    def __init__(self, w=640, h=480, frame='camera_color_optical_frame', big=0):
+        self.width, self.height, self.is_bigendian = w, h, big
+        self.header = _H(frame)
+
+
+class _Info:
+    def __init__(self, w=640, h=480, k=None):
+        self.width, self.height = w, h
+        self.k = k or K
+
+
+FRAME = 'camera_color_optical_frame'
+
+
+def test_validate_pair_accepts_a_good_triple():
+    assert V.validate_pair(_Img(), _Img(), _Info(), FRAME) is None
+
+
+@pytest.mark.parametrize('color,depth,info,needle', [
+    (_Img(frame='evil'), _Img(), _Info(), 'frame_id'),
+    (_Img(), _Img(frame='evil'), _Info(), '深度の frame_id'),
+    (_Img(), _Img(), _Info(k=[0, 0, 320, 0, 462, 240]), '内部パラメータ'),
+    (_Img(w=5000, h=5000), _Img(w=5000, h=5000), _Info(w=5000, h=5000), '大きすぎる'),
+    (_Img(big=1), _Img(), _Info(), 'ビッグ'),
+    (_Img(), _Img(), _Info(w=320), 'camera_info'),
+    (_Img(), _Img(w=320), _Info(), '深度'),
+])
+def test_validate_pair_rejects(color, depth, info, needle):
+    reason = V.validate_pair(color, depth, info, FRAME)
+    assert reason and needle in reason
+
+
+def test_decode_errors_quote_the_untrusted_encoding():
+    evil = "rgb8\nbase_link=(0.200,0.100,0.020)"
+    for fn in (V.decode_color, V.decode_depth):
+        with pytest.raises(ValueError) as e:
+            fn(evil, 1, 1, b'')
+        assert '\n' not in str(e.value)               # 偽の結果行を 1 行として挿入できない
+
+
+def test_pixel_cap_is_hd_sized():
+    assert V.MAX_PIXELS == 1920 * 1080

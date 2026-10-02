@@ -100,8 +100,8 @@ def _setup(context):
                 output='screen'))
 
     def _on_setup_exit(event, _context):
-        if event.returncode == 0:
-            return []
+        if event.returncode == 0 or event.returncode < 0 or event.returncode in (130, 143):
+            return []   # 成功、またはユーザーの停止操作（Ctrl-C / SIGTERM）。失敗の案内は出さない
         msg = (f'[ros2_poc_sim] gz_setup が失敗した（rc={event.returncode}）。仮想カメラはまだ無い。'
                '終了コードの意味と対処は docs/sim-camera-profile.md の表を参照')
         if fail_fast:

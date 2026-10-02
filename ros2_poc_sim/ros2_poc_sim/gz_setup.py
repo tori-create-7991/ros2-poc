@@ -13,6 +13,7 @@ Gazebo にはシステムの有無を問い合わせる手段が無い。そこ�
 """
 import argparse
 import fcntl
+import math
 import os
 import signal
 import subprocess
@@ -232,12 +233,27 @@ def run_setup(a) -> int:
     return 0
 
 
+def _positive_finite(text: str) -> float:
+    x = float(text)
+    if not (math.isfinite(x) and x > 0):
+        raise argparse.ArgumentTypeError('正の有限な数')
+    return x
+
+
+def worst_case_seconds(wait_sec: float, spawn_timeout: float) -> float:
+    """先行する gz_setup の最悪経路の見積もり [秒]（ロック待ちの上限の根拠）。
+    世界待ち（最後の gz 呼び出し分 +30）→ 状態取得のリトライ（60 + 30）→ マーカー（スポーン + 可視化待ち を最大 2 回）
+    → カメラ・物体（それぞれ スポーン + 可視化待ち）。余裕を 60 秒足す。"""
+    one = 2 * spawn_timeout           # create の待ち + モデルが現れるまでの待ち
+    return (wait_sec + 30) + 90 + 2 * one + one + one + 60
+
+
 def _pose(text: str):
     """`x,y,z,roll,pitch,yaw`。`--opt=...` の形で渡す（Python 3.12 の argparse は
     `-1e-05` のような負の指数表記を別オプションと誤認して nargs が失敗する）。"""
     vals = [float(v) for v in text.split(',')]
-    if len(vals) != 6:
-        raise argparse.ArgumentTypeError('x,y,z,roll,pitch,yaw の 6 要素')
+    if len(vals) != 6 or not all(math.isfinite(v) for v in vals):
+        raise argparse.ArgumentTypeError('x,y,z,roll,pitch,yaw の有限な 6 要素')
     return vals
 
 
@@ -254,8 +270,8 @@ def build_parser():
     ap.add_argument('--object-name', default='')
     ap.add_argument('--world', default='default')
     ap.add_argument('--world-entity-id', type=int, default=1)
-    ap.add_argument('--wait-sec', type=float, default=300.0)
-    ap.add_argument('--spawn-timeout', type=float, default=240.0)
+    ap.add_argument('--wait-sec', type=_positive_finite, default=300.0)
+    ap.add_argument('--spawn-timeout', type=_positive_finite, default=240.0)
     return ap
 
 
@@ -293,16 +309,24 @@ def main(argv=None):
         a = parse_args(argv)
     except SystemExit as exc:
         return 0 if exc.code in (0, None) else EXIT_USAGE
-    # SIGTERM（launch の停止）でも finally とロックの解放が走るよう、例外に変える
-    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(143)))
-    # ロック待ちの上限: 先行が最悪の経路（世界待ち + 状態取得 + マーカー + カメラ + 物体）を辿る時間
-    budget = a.wait_sec + 60 + 3 * a.spawn_timeout + 120
-    lock = acquire_lock(a.world, budget)   # 複数プロファイルを同時に起動しても直列化する
-    if lock is None:
-        _log('ERROR: 他の gz_setup が終わらない。先行のログを確認する')
-        return EXIT_LOCK_TIMEOUT
-    with lock:
-        return run_setup(a)
+    # SIGTERM（launch の停止）でも finally とロックの解放が走るよう、例外に変える。終わったら元に戻す
+    prev = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(143)))
+    try:
+        lock = acquire_lock(a.world, worst_case_seconds(a.wait_sec, a.spawn_timeout))   # 複数プロファイルを同時に起動しても直列化する
+        if lock is None:
+            _log('ERROR: 他の gz_setup が終わらない。先行のログを確認する')
+            return EXIT_LOCK_TIMEOUT
+        with lock:
+            return run_setup(a)
+    except KeyboardInterrupt:
+        _log('中断された（Ctrl-C）。Sensors の追加直後から目印の確認までの間なら、Gazebo を再起動する')
+        return 130
+    except SystemExit as exc:
+        if exc.code == 143:
+            _log('停止された（SIGTERM）。Sensors の追加直後から目印の確認までの間なら、Gazebo を再起動する')
+        raise
+    finally:
+        signal.signal(signal.SIGTERM, prev)
 
 
 if __name__ == '__main__':
