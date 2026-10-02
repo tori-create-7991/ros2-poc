@@ -50,6 +50,12 @@ def parse_model_names(text: str) -> set:
     return names
 
 
+def needs_sensors_system(models: set) -> bool:
+    """このスクリプトが作った `sim_camera_*` モデルが 1 つでもあれば、Sensors システムは追加済み。
+    （Sensors システムの有無はサービス/トピックから判別できない。二重に追加すると描画が二重になる）"""
+    return not any(m.startswith('sim_camera_') for m in models)
+
+
 def add_sensors_system(world: str, world_entity_id: int) -> bool:
     r = _run(['gz', 'service', '-s', f'/world/{world}/entity/system/add',
               '--reqtype', 'gz.msgs.EntityPlugin_V', '--reptype', 'gz.msgs.Boolean',
@@ -60,7 +66,7 @@ def add_sensors_system(world: str, world_entity_id: int) -> bool:
 def spawn(world: str, name: str, sdf_path: str, pose: list) -> bool:
     # create は SDF 内の <pose> を無視して -x/-y/-z/-R/-P/-Y（既定 0）で上書きする。必ず姿勢を渡す。
     r = _run(['ros2', 'run', 'ros_gz_sim', 'create', '-world', world, '-file', sdf_path,
-              '-name', name, '-allow_renaming', 'false', *pose], timeout=60)
+              '-name', name, '-allow_renaming', 'false', *pose], timeout=240)
     sys.stdout.write(r.stdout + r.stderr)
     return r.returncode == 0
 
@@ -81,19 +87,18 @@ def main(argv=None):
     if not wait_for_service(a.world, a.wait_sec):
         print(f'ERROR: ワールド {a.world} のサービスが {a.wait_sec}s 以内に立たない（公式 launch を先に起動したか）')
         return 2
-    # 冪等性: カメラモデルが既にあるなら、このスクリプトが前回 Sensors システムも追加している。
-    # （Sensors システムの有無はサービス/トピックから判別できないため、モデルの有無で判断する。
-    #  二重に追加すると描画が二重になり不安定になる）
     models = list_models(a.world)
     if a.camera_name in models:
-        print(f'{a.camera_name} は既にある。Sensors システムの追加とスポーンをスキップ')
+        print(f'{a.camera_name} は既にある。スポーンをスキップ')
     else:
-        if add_sensors_system(a.world, a.world_entity_id):
+        if needs_sensors_system(models):
+            if not add_sensors_system(a.world, a.world_entity_id):
+                print('ERROR: Sensors システムの追加に失敗')
+                return 3
             print('Sensors システムを追加した')
             time.sleep(3.0)
         else:
-            print('ERROR: Sensors システムの追加に失敗')
-            return 3
+            print('Sensors システムは追加済み（sim_camera_* モデルあり）')
         if not spawn(a.world, a.camera_name, a.camera_sdf, S.pose_args(a.camera_pose)):
             print('ERROR: カメラモデルのスポーンに失敗')
             return 4

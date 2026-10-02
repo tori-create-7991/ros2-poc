@@ -54,3 +54,13 @@ RUN printf '%s\n' \
     'source /opt/ros/jazzy/setup.bash' \
     'source /opt/crane_ws/install/setup.bash' \
     >> /home/ubuntu/.bashrc
+
+# カメラプロファイル層（ros2_poc_sim）: Gazebo の仮想カメラを実カメラ（usb_cam / RealSense D435）と
+# 同じトピック名・型・フレームで出す。/opt/crane_ws の上に overlay ワークスペースとして重ねる
+# （公式コミットは書き換えない）。使い方は docs/sim-camera-profile.md。
+COPY ros2_poc_sim /opt/ros2_poc_ws/src/ros2_poc_sim
+RUN source /opt/ros/jazzy/setup.bash \
+    && source /opt/crane_ws/install/setup.bash \
+    && cd /opt/ros2_poc_ws && colcon build \
+    && rm -rf /opt/ros2_poc_ws/build /opt/ros2_poc_ws/log \
+    && printf '%s\n' 'source /opt/ros2_poc_ws/install/setup.bash' >> /home/ubuntu/.bashrc

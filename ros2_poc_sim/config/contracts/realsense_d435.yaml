@@ -3,10 +3,10 @@
 profile: realsense_d435
 source: .research/sim-camera-profile_20261002/01a#3, 03
 topics:
-  - {name: /camera/color/image_raw,                     type: sensor_msgs/msg/Image,      encoding: rgb8,  frame_id: camera_color_optical_frame, min_hz: 2.0}
-  - {name: /camera/color/camera_info,                   type: sensor_msgs/msg/CameraInfo,                  frame_id: camera_color_optical_frame, min_hz: 2.0}
-  - {name: /camera/aligned_depth_to_color/image_raw,    type: sensor_msgs/msg/Image,      encoding: 16UC1, frame_id: camera_color_optical_frame, min_hz: 2.0}
-  - {name: /camera/aligned_depth_to_color/camera_info,  type: sensor_msgs/msg/CameraInfo,                  frame_id: camera_color_optical_frame, min_hz: 2.0}
+  - {name: /camera/color/image_raw,                     type: sensor_msgs/msg/Image,      encoding: rgb8,  frame_id: camera_color_optical_frame, min_hz: 0.5}
+  - {name: /camera/color/camera_info,                   type: sensor_msgs/msg/CameraInfo,                  frame_id: camera_color_optical_frame, min_hz: 0.5}
+  - {name: /camera/aligned_depth_to_color/image_raw,    type: sensor_msgs/msg/Image,      encoding: 16UC1, frame_id: camera_color_optical_frame, min_hz: 0.5}
+  - {name: /camera/aligned_depth_to_color/camera_info,  type: sensor_msgs/msg/CameraInfo,                  frame_id: camera_color_optical_frame, min_hz: 0.5}
 same_stamp:        # 公式 color_detection の ExactTime 同期の前提
   - [/camera/color/image_raw, /camera/aligned_depth_to_color/image_raw, /camera/color/camera_info]
 tf:                # base_link からこれらのフレームへ TF が解決すること

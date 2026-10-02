@@ -2,8 +2,8 @@
 profile: usb_cam
 source: .research/sim-camera-profile_20261002/01a#1
 topics:
-  - {name: /image_raw,   type: sensor_msgs/msg/Image,      encoding: rgb8, frame_id: camera, min_hz: 2.0}
-  - {name: /camera_info, type: sensor_msgs/msg/CameraInfo,                 frame_id: camera, min_hz: 2.0}
+  - {name: /image_raw,   type: sensor_msgs/msg/Image,      encoding: rgb8, frame_id: camera, min_hz: 0.5}
+  - {name: /camera_info, type: sensor_msgs/msg/CameraInfo,                 frame_id: camera, min_hz: 0.5}
 same_stamp:
   - [/image_raw, /camera_info]
 tf: {}

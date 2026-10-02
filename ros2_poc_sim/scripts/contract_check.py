@@ -3,7 +3,8 @@
 
 受け手（ros2lab）から見える姿を検査するので、シミュでも実機でも同じ契約ファイルを流せる。
 ros2lab（ros-base）で動くよう rclpy / tf2_ros / PyYAML / stdlib のみ。
-  python3 contract_check.py /tmp/realsense_d435.yaml [--seconds 10] [--with-optional]
+  python3 contract_check.py /tmp/realsense_d435.yaml [--seconds 10] [--with-optional] [--min-hz 5]
+契約ファイルの min_hz は「生きている」ことの下限（シミュは CPU 描画で数 Hz）。実機では --min-hz で厳しくする。
 終了コード: 0 = 全て合格、1 = 不合格あり、2 = 実行エラー
 """
 import sys
@@ -48,9 +49,14 @@ def main(argv=None):
     path = argv[0]
     seconds = float(argv[argv.index('--seconds') + 1]) if '--seconds' in argv else 10.0
     with_optional = '--with-optional' in argv
+    min_hz_override = float(argv[argv.index('--min-hz') + 1]) if '--min-hz' in argv else None
     with open(path, encoding='utf-8') as f:
         contract = yaml.safe_load(f)
     expected = list(contract['topics']) + (list(contract.get('optional_topics', [])) if with_optional else [])
+
+    if min_hz_override is not None:
+        for e in expected:
+            e['min_hz'] = max(e.get('min_hz', 0.0), min_hz_override)
 
     rclpy.init()
     node = rclpy.create_node('contract_check')

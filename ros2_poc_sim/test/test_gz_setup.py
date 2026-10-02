@@ -36,3 +36,8 @@ def test_parse_model_names_only_top_level_models():
 
 def test_parse_model_names_empty():
     assert Z.parse_model_names('') == set()
+
+
+def test_needs_sensors_system_only_when_no_sim_camera_model():
+    assert Z.needs_sensors_system({'ground_plane', 'Table'}) is True
+    assert Z.needs_sensors_system({'ground_plane', 'sim_camera_usb_cam'}) is False
