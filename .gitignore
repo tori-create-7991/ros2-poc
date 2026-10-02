@@ -9,3 +9,10 @@ workspace/*
 .worktrees
 .logs
 mise.toml
+
+# secrets / local env (public repo)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
