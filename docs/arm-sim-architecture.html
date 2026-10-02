@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>アームシミュ構成: アーキテクチャとサービスブループリント</title>
+<style>
+  :root {
+    --bg:#ffffff; --fg:#1a1d23; --muted:#5b6472; --line:#c9d0da; --card:#f5f7fa;
+    --accent:#2457d6; --warn:#b3261e; --ok:#1b7a43;
+    --c-host:#eef1f6; --c-def:#e6f0ff; --c-lab:#fff4dc; --c-arm:#e4f6ea; --c-real:#fde7e4;
+    --stroke:#7a8699;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#14171c; --fg:#e6e9ee; --muted:#9aa4b2; --line:#2e3540; --card:#1c2027;
+      --accent:#7ea2ff; --warn:#ff8a80; --ok:#6fd49a;
+      --c-host:#1b2029; --c-def:#182a47; --c-lab:#3a2f14; --c-arm:#15332395; --c-real:#3d1d1a;
+      --stroke:#6b7686;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font:16px/1.75 -apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif; }
+  main { max-width:1080px; margin:0 auto; padding:24px 16px 80px; }
+  h1 { font-size:1.6rem; line-height:1.4; margin:0 0 8px; }
+  h2 { font-size:1.3rem; margin:48px 0 12px; padding-bottom:6px; border-bottom:2px solid var(--line); }
+  h3 { font-size:1.05rem; margin:28px 0 8px; }
+  p, li { max-width:70ch; }
+  .lead { color:var(--muted); }
+  .note { background:var(--card); border-left:4px solid var(--accent); padding:10px 14px; margin:16px 0; border-radius:4px; max-width:none; }
+  .note.warn { border-left-color:var(--warn); }
+  code, pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.88em; }
+  code { background:var(--card); padding:1px 5px; border-radius:3px; }
+  pre { background:var(--card); padding:12px 14px; border-radius:6px; overflow-x:auto; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; margin:12px 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  .card h3 { margin:0 0 4px; font-size:1rem; }
+  .card .tag { font-size:.8rem; color:var(--muted); }
+  .scroll { overflow-x:auto; border:1px solid var(--line); border-radius:6px; }
+  table { border-collapse:collapse; width:100%; font-size:.9rem; line-height:1.55; }
+  th, td { border:1px solid var(--line); padding:8px 10px; vertical-align:top; text-align:left; }
+  thead th { background:var(--card); position:sticky; top:0; }
+  .diagram { border:1px solid var(--line); border-radius:8px; padding:8px; background:var(--card); overflow-x:auto; }
+  .diagram svg { display:block; min-width:760px; width:100%; height:auto; }
+  svg text { fill:var(--fg); font-family:inherit; }
+  svg .sub { fill:var(--muted); }
+  svg .zone { stroke:var(--stroke); stroke-width:1.5; stroke-dasharray:6 4; }
+  svg .box { stroke:var(--stroke); stroke-width:1.5; }
+  svg .edge { stroke:var(--stroke); stroke-width:1.8; fill:none; }
+  svg .dds { stroke:var(--accent); stroke-width:1.8; fill:none; stroke-dasharray:5 4; }
+  svg .acc { stroke:var(--accent); stroke-width:1.8; fill:none; }
+  svg .bad { stroke:var(--warn); stroke-width:1.8; fill:none; }
+  /* blueprint */
+  .bp th.layer { background:var(--card); min-width:130px; position:sticky; left:0; }
+  .bp tr.line td, .bp tr.line th { padding:2px 10px; font-size:.78rem; color:var(--muted); background:transparent; border-left:0; border-right:0; border-top:2px dashed var(--accent); }
+  .bp td.risk { color:var(--warn); }
+  .bp tbody tr.l-front td { background:color-mix(in srgb, var(--accent) 7%, transparent); }
+  .bp tbody tr.l-back td { background:color-mix(in srgb, var(--stroke) 10%, transparent); }
+  .bp tbody tr.l-support td { background:color-mix(in srgb, var(--ok) 8%, transparent); }
+  .legend { display:flex; gap:16px; flex-wrap:wrap; font-size:.85rem; color:var(--muted); margin:6px 0 12px; }
+  .legend i { display:inline-block; width:22px; height:0; vertical-align:middle; margin-right:6px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>アームシミュ構成: Gazebo / MoveIt 2 / RViz2</h1>
+<p class="lead">Factory I/O は Windows 専用のため、Docker 上の <code>ros2arm</code> で代替している。
+3 ツールの役割、アーキテクチャ図、サービスブループリントをまとめる。
+Markdown 版: <a href="arm-sim-architecture.md">arm-sim-architecture.md</a></p>
+
+<div class="note warn">
+  <b>動作状況の前提:</b> シミュ（<code>ros2arm</code>）は動作確認済み。実機（<code>ros2real</code>）は
+  ビルド・compose 検証・モックのドライバ起動まで。実機での動作は未確認。
+</div>
+
+<h2 id="tools">1. 3 つのツールの詳細</h2>
+
+<div class="cards">
+  <div class="card">
+    <h3>Gazebo Harmonic</h3>
+    <div class="tag">物理シミュレータ ＝ 世界そのもの</div>
+    <p>重力・摩擦・接触で物体が動く。ROS 2 とは <code>ros_gz</code> と <code>gz_ros2_control</code> で繋がり、
+    関節状態を <code>/joint_states</code> として流す。描画は CPU のため重い。</p>
+  </div>
+  <div class="card">
+    <h3>MoveIt 2</h3>
+    <div class="tag">動作計画 ＝ アームの頭脳</div>
+    <p><code>move_group</code> が Planning Scene（衝突判定）・OMPL（経路探索）・IK・軌道の時間付けを担い、
+    <code>FollowJointTrajectory</code> で controller に軌道を渡す。</p>
+  </div>
+  <div class="card">
+    <h3>RViz2</h3>
+    <div class="tag">可視化 + 操作 UI ＝ 計器盤</div>
+    <p>MotionPlanning パネルで目標姿勢を指定し Plan / Execute。表示は <code>/joint_states</code>・TF・計画シーンから再構築した像で、
+    RViz2 自身はロボットを動かさない。</p>
+  </div>
+</div>
+
+<div class="note">
+  <b>Gazebo は「現実の代わり」、RViz2 は「ロボットの頭の中の表示」。</b>
+  Gazebo 画面と RViz2 画面は別物。実機に繋ぎ替えても RViz2 側の動きは同じになる。
+</div>
+
+<h3>制御の連鎖（ros2_control）</h3>
+<pre>MoveIt 2 (move_group)
+  └─ FollowJointTrajectory ─▶ crane_x7_arm_controller   (JointTrajectoryController)
+                                  └─ ros2_control (controller_manager, 200Hz 級)
+                                        └─ ハードウェア層  ← ここだけが差し替わる
+                                              ・シミュ: Gazebo (gz_ros2_control)
+                                              ・実機  : CRANE-X7 ドライバ (Dynamixel, /dev/crane_x7)</pre>
+<p><code>ros2lab</code> から送る <code>ros2 topic pub /crane_x7_arm_controller/joint_trajectory</code> は、
+MoveIt 2 を<b>経由せず</b> controller に直接軌道を渡す経路。どちらも最後は同じ controller に届く。</p>
+
+<h3>Factory I/O との差</h3>
+<div class="scroll">
+<table>
+  <thead><tr><th>観点</th><th>Factory I/O</th><th>Gazebo + MoveIt 2 + RViz2</th></tr></thead>
+  <tbody>
+    <tr><th>得意</th><td>工場ライン（コンベア・センサ・PLC の I/O）</td><td>ロボットアームの運動・物理・衝突回避</td></tr>
+    <tr><th>制御対象</th><td>PLC のタグ（入出力点）</td><td>ROS 2 のトピック / アクション（関節角）</td></tr>
+    <tr><th>動作環境</th><td>Windows 専用</td><td>Linux / Mac（Docker + ブラウザ）</td></tr>
+    <tr><th>失うもの</th><td colspan="2">PLC 連携（Modbus / OPC UA）、コンベア・ワークの既製部品。補うならコンベア等は Gazebo のモデル / プラグインで自作、PLC 連携は OpenPLC や ROS 2 ブリッジを別途検討（未実装・スコープ外）</td></tr>
+  </tbody>
+</table>
+</div>
+<p>「アームの制御・動作計画の学習」の代替としては成立する。PLC を含む工場ライン全体の模擬は、そのままでは代替できない。</p>
+
+<h2 id="arch">2. アーキテクチャ図</h2>
+
+<h3>2.1 コンテナ・ネットワーク構成</h3>
+<div class="legend">
+  <span><i style="border-top:2px solid var(--stroke)"></i>接続 / 共有</span>
+  <span><i style="border-top:2px dashed var(--accent)"></i>DDS（Domain 42, SUBNET）</span>
+  <span><i style="border-top:2px solid var(--accent)"></i>ポート公開 / デバイス</span>
+</div>
+<div class="diagram">
+<svg viewBox="0 0 960 560" role="img" aria-label="コンテナとネットワーク構成図">
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--stroke)"/></marker>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker>
+  </defs>
+
+  <rect class="zone" x="10" y="10" width="940" height="540" rx="12" fill="var(--c-host)"/>
+  <text x="26" y="32" font-size="15" font-weight="700">ホスト（Mac + Colima / Linux）</text>
+
+  <rect class="box" x="30" y="44" width="200" height="48" rx="8" fill="var(--bg)"/>
+  <text x="130" y="65" font-size="13" text-anchor="middle" font-weight="700">ブラウザ</text>
+  <text x="130" y="83" font-size="12" text-anchor="middle" class="sub">127.0.0.1:6080</text>
+
+  <rect class="box" x="30" y="132" width="200" height="56" rx="8" fill="var(--bg)"/>
+  <text x="130" y="156" font-size="13" text-anchor="middle" font-weight="700">ターミナル</text>
+  <text x="130" y="175" font-size="11" text-anchor="middle" class="sub">docker compose / scripts/*.sh</text>
+
+  <rect class="box" x="30" y="470" width="260" height="56" rx="8" fill="var(--bg)"/>
+  <text x="160" y="494" font-size="13" text-anchor="middle" font-weight="700">./workspace（共有ボリューム）</text>
+  <text x="160" y="513" font-size="11" text-anchor="middle" class="sub">ros2lab / ros2arm / ros2real に bind mount</text>
+
+  <rect class="box" x="690" y="470" width="240" height="56" rx="8" fill="var(--bg)"/>
+  <text x="810" y="494" font-size="13" text-anchor="middle" font-weight="700">CRANE-X7 実機</text>
+  <text x="810" y="513" font-size="11" text-anchor="middle" class="sub">/dev/crane_x7（Linux ホストのみ）</text>
+
+  <!-- default network -->
+  <rect class="zone" x="270" y="80" width="660" height="370" rx="12" fill="var(--c-def)"/>
+  <text x="286" y="101" font-size="14" font-weight="700">compose default ネットワーク</text>
+
+  <rect class="box" x="290" y="120" width="170" height="64" rx="8" fill="var(--bg)"/>
+  <text x="375" y="146" font-size="13" text-anchor="middle" font-weight="700">ros2lab-a</text>
+  <text x="375" y="166" font-size="11" text-anchor="middle" class="sub">クライアント（default + lab）</text>
+
+  <rect class="box" x="290" y="214" width="170" height="64" rx="8" fill="var(--bg)"/>
+  <text x="375" y="240" font-size="13" text-anchor="middle" font-weight="700">ros2lab-b</text>
+  <text x="375" y="260" font-size="11" text-anchor="middle" class="sub">クライアント（default + lab）</text>
+
+  <rect class="box" x="560" y="120" width="350" height="158" rx="8" fill="var(--c-arm)"/>
+  <text x="735" y="150" font-size="13" text-anchor="middle" font-weight="700">ros2arm（profile: arm）</text>
+  <text x="735" y="176" font-size="12" text-anchor="middle">noVNC（:80）+ Gazebo Harmonic</text>
+  <text x="735" y="196" font-size="12" text-anchor="middle">MoveIt 2 + RViz2</text>
+  <text x="735" y="220" font-size="11" text-anchor="middle" class="sub">CRANE-X7 / UR / Panda デモ</text>
+  <text x="735" y="244" font-size="11" text-anchor="middle" class="sub">default + lab に参加</text>
+
+  <rect class="box" x="560" y="320" width="350" height="100" rx="8" fill="var(--c-real)"/>
+  <text x="735" y="348" font-size="13" text-anchor="middle" font-weight="700">ros2real（profile: real）</text>
+  <text x="735" y="372" font-size="12" text-anchor="middle">crane_x7_control（ドライバのみ）</text>
+  <text x="735" y="394" font-size="11" text-anchor="middle" class="sub">default のみ / cap_drop: ALL / restart なし</text>
+
+  <text x="735" y="304" font-size="12" text-anchor="middle" style="fill:var(--warn)">✕ ros2arm と ros2real は同時起動しない</text>
+
+  <!-- lab net -->
+  <rect class="zone" x="290" y="320" width="170" height="110" rx="12" fill="var(--c-lab)"/>
+  <text x="375" y="342" font-size="12" text-anchor="middle" font-weight="700">ros2-lab-net</text>
+  <text x="375" y="358" font-size="10" text-anchor="middle" class="sub">internal / 外部出口なし</text>
+  <rect class="box" x="305" y="370" width="140" height="44" rx="8" fill="var(--bg)"/>
+  <text x="375" y="390" font-size="12" text-anchor="middle" font-weight="700">kali-vnc など</text>
+  <text x="375" y="406" font-size="10" text-anchor="middle" class="sub">任意で後付け接続</text>
+
+  <!-- browser -> arm -->
+  <path class="acc" d="M230 68 H735 V120" marker-end="url(#a2)"/>
+  <text x="250" y="62" font-size="11" style="fill:var(--accent)">127.0.0.1:6080 → 80（LAN には出さない）</text>
+
+  <!-- terminal -> lab -->
+  <path class="edge" d="M230 160 H290" marker-end="url(#a1)"/>
+
+  <!-- DDS bus -->
+  <path class="dds" d="M460 152 H475 V350 H560" marker-end="url(#a2)"/>
+  <path class="dds" d="M460 246 H475"/>
+  <path class="dds" d="M475 199 H560" marker-end="url(#a2)"/>
+  <text x="482" y="300" font-size="11" style="fill:var(--accent)">DDS</text>
+  <text x="482" y="314" font-size="10" class="sub" style="fill:var(--muted)">（実機に指令できるのは</text>
+  <text x="482" y="327" font-size="10" class="sub" style="fill:var(--muted)">default 上の ros2lab-a/b のみ）</text>
+
+  <!-- real -> usb -->
+  <path class="acc" d="M810 420 V470" marker-end="url(#a2)"/>
+  <text x="822" y="438" font-size="11" style="fill:var(--accent)">device passthrough</text>
+</svg>
+</div>
+
+<h3>2.2 <code>ros2arm</code> 内部の ROS 2 データフロー</h3>
+<div class="diagram">
+<svg viewBox="0 0 960 520" role="img" aria-label="ros2arm 内部のデータフロー図">
+  <defs>
+    <marker id="b1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--stroke)"/></marker>
+    <marker id="b2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker>
+  </defs>
+
+  <rect class="zone" x="10" y="60" width="700" height="450" rx="12" fill="var(--c-arm)"/>
+  <text x="26" y="84" font-size="14" font-weight="700">ros2arm コンテナ</text>
+
+  <!-- user -->
+  <rect class="box" x="60" y="6" width="150" height="40" rx="20" fill="var(--bg)"/>
+  <text x="135" y="31" font-size="13" text-anchor="middle" font-weight="700">利用者（noVNC）</text>
+
+  <!-- rviz -->
+  <rect class="box" x="40" y="110" width="200" height="64" rx="8" fill="var(--bg)"/>
+  <text x="140" y="136" font-size="13" text-anchor="middle" font-weight="700">RViz2</text>
+  <text x="140" y="156" font-size="11" text-anchor="middle" class="sub">MotionPlanning パネル</text>
+
+  <!-- move_group -->
+  <rect class="box" x="280" y="110" width="220" height="80" rx="8" fill="var(--bg)"/>
+  <text x="390" y="134" font-size="13" text-anchor="middle" font-weight="700">move_group（MoveIt 2）</text>
+  <text x="390" y="154" font-size="11" text-anchor="middle" class="sub">Planning Scene / OMPL / IK</text>
+  <text x="390" y="172" font-size="11" text-anchor="middle" class="sub">軌道の時間付け</text>
+
+  <!-- controller -->
+  <rect class="box" x="280" y="250" width="220" height="64" rx="8" fill="var(--bg)"/>
+  <text x="390" y="276" font-size="12" text-anchor="middle" font-weight="700">crane_x7_arm_controller</text>
+  <text x="390" y="296" font-size="11" text-anchor="middle" class="sub">JointTrajectoryController</text>
+
+  <!-- controller manager -->
+  <rect class="box" x="280" y="350" width="220" height="64" rx="8" fill="var(--bg)"/>
+  <text x="390" y="376" font-size="13" text-anchor="middle" font-weight="700">ros2_control</text>
+  <text x="390" y="396" font-size="11" text-anchor="middle" class="sub">controller_manager</text>
+
+  <!-- gazebo -->
+  <rect class="box" x="540" y="350" width="150" height="64" rx="8" fill="var(--bg)"/>
+  <text x="615" y="376" font-size="13" text-anchor="middle" font-weight="700">Gazebo Harmonic</text>
+  <text x="615" y="396" font-size="11" text-anchor="middle" class="sub">物理 + 3D ビュー</text>
+
+  <!-- jsb -->
+  <rect class="box" x="40" y="350" width="200" height="64" rx="8" fill="var(--bg)"/>
+  <text x="140" y="376" font-size="12" text-anchor="middle" font-weight="700">joint_state_broadcaster</text>
+  <text x="140" y="396" font-size="11" text-anchor="middle" class="sub">/joint_states を発行</text>
+
+  <!-- rsp -->
+  <rect class="box" x="40" y="250" width="200" height="64" rx="8" fill="var(--bg)"/>
+  <text x="140" y="276" font-size="12" text-anchor="middle" font-weight="700">robot_state_publisher</text>
+  <text x="140" y="296" font-size="11" text-anchor="middle" class="sub">URDF → /tf</text>
+
+  <!-- client -->
+  <rect class="box" x="760" y="250" width="180" height="64" rx="8" fill="var(--c-def)"/>
+  <text x="850" y="276" font-size="13" text-anchor="middle" font-weight="700">ros2lab-a</text>
+  <text x="850" y="296" font-size="11" text-anchor="middle" class="sub">ros2 topic pub / echo</text>
+
+  <!-- edges -->
+  <path class="edge" d="M135 46 V110" marker-end="url(#b1)"/>
+  <path class="acc" d="M240 142 H280" marker-end="url(#b2)"/>
+  <text x="246" y="132" font-size="10" class="sub">計画要求</text>
+
+  <path class="acc" d="M390 190 V250" marker-end="url(#b2)"/>
+  <text x="398" y="224" font-size="10" class="sub">FollowJointTrajectory</text>
+
+  <path class="edge" d="M390 314 V350" marker-end="url(#b1)"/>
+  <path class="acc" d="M500 372 H540" marker-end="url(#b2)"/>
+  <text x="500" y="364" font-size="10" class="sub">指令</text>
+  <path class="edge" d="M540 396 H500" marker-end="url(#b1)"/>
+  <text x="500" y="410" font-size="10" class="sub">関節状態</text>
+
+  <path class="edge" d="M280 382 H240" marker-end="url(#b1)"/>
+  <path class="edge" d="M140 350 V314" marker-end="url(#b1)"/>
+  <text x="148" y="338" font-size="10" class="sub">/joint_states</text>
+
+  <path class="edge" d="M140 250 V174" marker-end="url(#b1)"/>
+  <text x="148" y="214" font-size="10" class="sub">/tf</text>
+
+
+  <path class="dds" d="M760 270 H500" marker-end="url(#b2)" />
+  <text x="520" y="242" font-size="10" fill="var(--accent)" style="fill:var(--accent)">/crane_x7_arm_controller/joint_trajectory</text>
+  <path class="dds" d="M240 390 Q 240 470 640 470 Q 850 470 850 314" marker-end="url(#b2)"/>
+  <text x="420" y="462" font-size="10" fill="var(--accent)" style="fill:var(--accent)">/joint_states（DDS 越し）</text>
+
+  <text x="26" y="500" font-size="11" class="sub">実線: ros2arm 内の通信 / 点線: DDS 越し（ros2-lab-net 経由）。Panda デモは Gazebo を使わず mock ハードウェアで動く。</text>
+</svg>
+</div>
+
+<h3>2.3 シミュ ⇄ 実機の差し替え点</h3>
+<div class="scroll">
+<table>
+  <thead><tr><th>レイヤ</th><th>シミュ（<code>ros2arm</code>）</th><th>実機（<code>ros2real</code>）</th><th>共通か</th></tr></thead>
+  <tbody>
+    <tr><td>クライアント（<code>ros2lab</code>）</td><td>同じコマンド</td><td>同じコマンド</td><td>共通</td></tr>
+    <tr><td>トピック / アクション名</td><td><code>/crane_x7_arm_controller/joint_trajectory</code> ほか</td><td>同じ</td><td>共通</td></tr>
+    <tr><td>MoveIt 2 / RViz2</td><td><code>ros2arm</code> 内</td><td>このリポジトリでは含めない（ドライバのみ）</td><td>実機側は別途要検討</td></tr>
+    <tr><td><b>ハードウェア層</b></td><td>Gazebo</td><td>Dynamixel サーボ（<code>/dev/crane_x7</code>）</td><td><b>差し替え</b></td></tr>
+    <tr><td>ホスト要件</td><td>Docker のみ</td><td>Linux + udev rule + USB</td><td>差あり</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="blueprint">3. サービスブループリント</h2>
+<p>サービスブループリントは、利用者の体験を<b>見える層</b>と<b>見えない層</b>に分けて、
+各段階を支える仕組みと失敗点を並べる設計図。ここでの利用者は、ロボット制御を学ぶ開発者。
+サービスは「ブラウザだけでアームの制御・動作計画を試せる体験」。</p>
+
+<h3>3.1 シミュ編</h3>
+<div class="scroll">
+<table class="bp">
+  <thead><tr>
+    <th class="layer">層 ＼ 段階</th>
+    <th>① 準備</th><th>② 起動</th><th>③ 接続</th><th>④ デモ実行</th><th>⑤ 計画・実行</th><th>⑥ クライアント指令</th><th>⑦ 終了</th>
+  </tr></thead>
+  <tbody>
+    <tr>
+      <th class="layer">利用者の行動</th>
+      <td>Colima を起動しリソースを確認</td>
+      <td><code>bash scripts/up-arm.sh</code></td>
+      <td>ブラウザで <code>127.0.0.1:6080</code> を開き Connect</td>
+      <td>端末で <code>ros2 launch ...</code> を 1 つ実行</td>
+      <td>RViz2 で目標姿勢を動かし Plan &amp; Execute</td>
+      <td><code>ros2lab-a</code> から <code>ros2 topic pub</code></td>
+      <td>Ctrl+C → <code>docker compose --profile arm down</code></td>
+    </tr>
+    <tr>
+      <th class="layer">物理的証拠<br><small>（見えるもの）</small></th>
+      <td><code>colima status</code>、4CPU / 8GiB</td>
+      <td>ビルドログ、<code>docker ps</code></td>
+      <td>noVNC のデスクトップ画面</td>
+      <td>Gazebo と RViz2 のウィンドウ</td>
+      <td>RViz2 の軌道アニメ + Gazebo のアーム移動</td>
+      <td>コマンド結果と Gazebo の動き</td>
+      <td>コンテナ消滅</td>
+    </tr>
+    <tr class="line"><th colspan="8">── 相互作用の線（line of interaction）──</th></tr>
+    <tr class="l-front">
+      <th class="layer">フロントステージ<br><small>（利用者が触れる接点）</small></th>
+      <td>CLI</td>
+      <td><code>up-arm.sh</code> の出力・拒否メッセージ</td>
+      <td>noVNC（Web）</td>
+      <td>MATE Terminal / Terminator</td>
+      <td>RViz2 MotionPlanning パネル</td>
+      <td><code>docker compose exec</code>（CLI）</td>
+      <td>CLI</td>
+    </tr>
+    <tr class="line"><th colspan="8">── 可視性の線（line of visibility）──</th></tr>
+    <tr class="l-back">
+      <th class="layer">バックステージ<br><small>（見えない処理）</small></th>
+      <td>イメージ pull / ビルド（約 13GB、初回 10 分前後）</td>
+      <td><code>ros2real</code> 起動中か検査 → <code>compose --profile arm up</code></td>
+      <td>ポート <code>127.0.0.1:6080→80</code> の中継、VNC セッション</td>
+      <td>launch が Gazebo・MoveIt 2・RViz2 を起動</td>
+      <td><code>move_group</code> が計画 → controller → Gazebo 物理</td>
+      <td>DDS Discovery（Domain 42）→ controller が軌道を受信</td>
+      <td>コンテナ内の変更は破棄</td>
+    </tr>
+    <tr class="line"><th colspan="8">── 内部相互作用の線 ──</th></tr>
+    <tr class="l-support">
+      <th class="layer">支援プロセス<br><small>（基盤・ガード）</small></th>
+      <td><code>Dockerfile.arm</code>（digest 固定、CRANE-X7 はコミット固定）</td>
+      <td><code>up-arm.sh</code> の排他ガード</td>
+      <td>127.0.0.1 限定公開</td>
+      <td><code>shm_size: 512m</code></td>
+      <td>controller 名がシミュ・実機で共通</td>
+      <td><code>ROS_DOMAIN_ID=42</code> / <code>SUBNET</code></td>
+      <td><code>./workspace</code> だけが永続</td>
+    </tr>
+    <tr>
+      <th class="layer">失敗点・リスク</th>
+      <td class="risk">ディスク / メモリ不足</td>
+      <td class="risk">初回ビルドが長い、<code>ros2real</code> 起動中で拒否</td>
+      <td class="risk">VNC 認証なし（ローカル限定公開だけが防御）</td>
+      <td class="risk">複数デモ同時起動で CPU 逼迫</td>
+      <td class="risk">CPU 描画の遅延で操作が重い</td>
+      <td class="risk">Discovery 待ちでトピックが出ない（数秒）</td>
+      <td class="risk">保存し忘れ、<code>kali-vnc</code> 接続中の down 失敗</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3>3.2 実機編（未検証）</h3>
+<div class="scroll">
+<table class="bp">
+  <thead><tr>
+    <th class="layer">層 ＼ 段階</th>
+    <th>① ホスト準備</th><th>② 起動</th><th>③ ドライバ起動</th><th>④ 指令</th><th>⑤ 停止</th>
+  </tr></thead>
+  <tbody>
+    <tr>
+      <th class="layer">利用者の行動</th>
+      <td><code>lsusb</code> で ID 確認 → udev rule に反映</td>
+      <td><code>--profile arm down</code> → <code>up-real.sh</code></td>
+      <td><code>exec -d</code> でドライバ起動（トルクオン）</td>
+      <td><code>ros2lab-a</code> から小振幅の軌道を送る</td>
+      <td>腕を安全な姿勢へ → <code>down-real.sh</code></td>
+    </tr>
+    <tr>
+      <th class="layer">物理的証拠</th>
+      <td><code>/dev/crane_x7</code>、<code>latency_timer=1</code></td>
+      <td>コンテナ起動</td>
+      <td>ログ <code>workspace/crane_x7_control.*.log</code></td>
+      <td>実機アームが動く</td>
+      <td>トルクオフ</td>
+    </tr>
+    <tr class="line"><th colspan="6">── 相互作用の線 ──</th></tr>
+    <tr class="l-front">
+      <th class="layer">フロントステージ</th>
+      <td>CLI</td><td><code>up-real.sh</code></td><td>CLI</td><td>CLI</td><td><code>down-real.sh</code> の確認</td>
+    </tr>
+    <tr class="line"><th colspan="6">── 可視性の線 ──</th></tr>
+    <tr class="l-back">
+      <th class="layer">バックステージ</th>
+      <td>udev がシリアルに ID を紐付け</td>
+      <td>デバイス・GID・<code>cap_drop: ALL</code> を適用して起動</td>
+      <td>controller_manager が Dynamixel と通信（200Hz 級）</td>
+      <td>DDS 越しに controller へ到達</td>
+      <td>ドライバ停止（トルクが抜ける）</td>
+    </tr>
+    <tr class="line"><th colspan="6">── 内部相互作用の線 ──</th></tr>
+    <tr class="l-support">
+      <th class="layer">支援プロセス</th>
+      <td><code>99-crane-x7.rules</code>（serial で他の FTDI を除外）</td>
+      <td><code>up-real.sh</code> のガード（<code>/dev/crane_x7</code> 不在・<code>ros2arm</code> 起動中は拒否）</td>
+      <td>restart ポリシーなし</td>
+      <td><code>ros2-lab-net</code> に繋がない</td>
+      <td><code>docker compose down</code> を使わせない設計</td>
+    </tr>
+    <tr>
+      <th class="layer">失敗点・リスク</th>
+      <td class="risk">ID / serial の取り違え</td>
+      <td class="risk">USB 抜き差し後にデバイスが古くなる</td>
+      <td class="risk">停止 = トルク抜け = 腕が落下</td>
+      <td class="risk">大振幅・短時間の指令</td>
+      <td class="risk">姿勢確認なしの停止</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3>3.3 読み方のポイント</h3>
+<ul>
+  <li><b>利用者から見えているのは noVNC の画面と CLI だけ。</b>その下で compose・ガードスクリプト・DDS・ros2_control・Gazebo 物理が動く。</li>
+  <li><b>最大の安全装置は支援プロセス層</b>にある（排他ガード、<code>ros2-lab-net</code> 非接続、restart なし、<code>down-real.sh</code>）。
+      ガードを通らない操作（<code>docker compose --profile ... up</code> の直叩き、<code>docker compose down</code>）が実機編の最大のリスク。</li>
+  <li><b>シミュと実機の差し替え点はハードウェア層の 1 箇所</b>に閉じる、というのがこの構成の設計意図。実機側は未検証のため、README のチェックリストを消化するまで保証はない。</li>
+</ul>
+
+<h2 id="next">4. 次に深掘りできる点</h2>
+<ul>
+  <li>CRANE-X7 を MoveIt 2 の Pick &amp; Place で動かす（<code>crane_x7_examples</code> の利用）</li>
+  <li>Gazebo にコンベア・ワークのモデルを足し、Factory I/O 的なライン模擬を作る</li>
+  <li>実機側で MoveIt 2 / RViz2 を動かす構成（現状は <code>ros2real</code> にドライバのみ）</li>
+  <li>SROS2 による DDS の認証・暗号化（<code>ros-jazzy-sros2</code> は同梱済み）</li>
+</ul>
+
+</main>
+</body>
+</html>

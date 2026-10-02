@@ -8,6 +8,11 @@ ROS 2 (Jazzy Jalisco) の Pub/Sub・Discovery を、実機や既存の ROS グ�
 ロボットアームを動かすシミュ用コンテナ `ros2arm` も用意している
 （[アームシミュ](#アームシミュros2arm--novnc) 参照）。
 
+Gazebo / MoveIt 2 / RViz2 の役割、アーキテクチャ図、サービスブループリントは
+[docs/arm-sim-architecture.md](docs/arm-sim-architecture.md)（[HTML 版](docs/arm-sim-architecture.html)）にまとめている。
+noVNC と通常の VNC の比較、GPU 直結（X11 共有 + `--gpus all`）の検討は
+[docs/display-and-gpu.md](docs/display-and-gpu.md) にまとめている。
+
 ## 前提
 
 - [Colima](https://github.com/abiosoft/colima)（`colima start`）
