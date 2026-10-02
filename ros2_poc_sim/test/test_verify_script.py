@@ -168,31 +168,3 @@ def test_dot_ds_store_on_host_does_not_make_the_image_look_stale(tmp_path):
     assert _line(out, 'V1-pytest').startswith('ok'), out
 
 
-def test_script_guards_against_arm_moving_node():
-    assert 'pick_and_place_tf' in SCRIPT.read_text(encoding='utf-8')
-
-
-def test_host_file_list_excludes_what_dockerignore_excludes():
-    """イメージに入らないファイルがホスト側の一覧に残ると、再ビルドしても直らない「古い」誤判定になる。"""
-    text = SCRIPT.read_text(encoding='utf-8')
-    di = SCRIPT.parents[2] / '.dockerignore'
-    if not di.exists():   # イメージ内のコピー（.dockerignore は COPY されない）では検査できない
-        pytest.skip('.dockerignore が無い')
-    ignore = di.read_text(encoding='utf-8').split()
-    assert '**/.DS_Store' in ignore and '**/__pycache__' in ignore
-    assert '.DS_Store' in text and '__pycache__' in text and '*.pyc' in text
-
-
-@needs_tool
-def test_dot_ds_store_on_host_does_not_make_the_image_look_stale(tmp_path):
-    import shutil
-    repo = SCRIPT.parents[2]
-    junk = repo / 'ros2_poc_sim' / 'test' / '.DS_Store'
-    existed = junk.exists()
-    junk.write_bytes(b'x')
-    try:
-        out, _ = _run_with_fake_docker(tmp_path, '70 passed in 1s\nPYTEST_RC=0')
-    finally:
-        if not existed:
-            junk.unlink()
-    assert _line(out, 'V1-pytest').startswith('ok'), out
