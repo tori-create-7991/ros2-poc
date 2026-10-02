@@ -1,0 +1,7 @@
+# 公式 color_detection 用（物体まで 0.2〜0.5m）。座標は暫定。
+name: fixed_near_top
+mode: fixed
+parent_frame: base_link
+robot_base_in_world: {xyz: [0, 0, 1.015], rpy: [0, 0, 0]}   # 公式 launch の `-z 1.015` に一致させる
+look_at: {eye: [0.20, 0.00, 0.42], target: [0.20, 0.00, 0.0], up_hint: [1, 0, 0]}
+object: {name: blue_cube, xyz_in_base_link: [0.20, 0.00, 0.0]}
