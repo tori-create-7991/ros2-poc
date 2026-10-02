@@ -118,25 +118,32 @@ def test_profiles_do_not_share_mount_frame_names():
     assert not (d435_frames & usb_frames)
 
 
-@pytest.mark.parametrize('mutate', [
-    lambda d: d.update(name='bad/name'),
-    lambda d: d['sensor'].update(clip={'near': 1.0, 'far': 0.5}),
-    lambda d: d['sensor'].update(clip={'near': '0.2', 'far': 6.0}),
-    lambda d: d['intrinsics'].pop('fx'),
-    lambda d: d['qos'].pop('points'),
-    lambda d: d['topics']['streams']['color_info'].update(type='sensor_msgs/msg/Image'),
-    lambda d: d['topics']['streams']['aligned_depth'].pop('encoding'),
-    lambda d: d['topics']['streams']['color_image'].update(encoding='bgr8'),
-    lambda d: d['tf'].update(gz_sensor_frame='depth'),
+def _detach_sensor_frame(d):
+    d['frames']['detached'] = 'detached_frame'
+    d['tf']['gz_sensor_frame'] = 'detached'
+
+
+@pytest.mark.parametrize('mutate,match', [
+    (lambda d: d.update(name='bad/name'), '英数字'),
+    (lambda d: d['sensor'].update(clip={'near': 1.0, 'far': 0.5}), 'near < far'),
+    (lambda d: d['sensor'].update(clip={'near': '0.2', 'far': 6.0}), 'clip.near'),
+    (lambda d: d['sensor'].update(fps=float('nan')), 'sensor.fps'),
+    (lambda d: d['sensor'].update(width=True), 'sensor.width'),
+    (lambda d: d['intrinsics'].pop('fx'), 'intrinsics.fx'),
+    (lambda d: d['intrinsics'].update(fx=float('inf')), 'intrinsics.fx'),
+    (lambda d: d['qos'].pop('points'), 'qos.points'),
+    (lambda d: d['topics']['streams']['color_info'].update(type='sensor_msgs/msg/Image'), 'type は'),
+    (lambda d: d['topics']['streams']['aligned_depth'].pop('encoding'), 'encoding'),
+    (lambda d: d['topics']['streams']['color_image'].update(encoding='bgr8'), '名乗ると嘘'),
+    (lambda d: d['topics']['streams']['points'].update(enabled_by='something.else'), 'enabled_by'),
+    (lambda d: d.update(compressed=['aligned_depth_info']), 'compressed'),
+    (lambda d: d.update(compressed=['nope']), 'compressed'),
+    (_detach_sensor_frame, '辿れない'),
 ])
-def test_additional_validation_rejects(mutate):
+def test_additional_validation_rejects(mutate, match):
     d = _base()
-    if mutate.__code__.co_names and 'gz_sensor_frame' in str(mutate.__code__.co_consts):
-        d['frames']['detached'] = 'detached_frame'
-        d['tf']['gz_sensor_frame'] = 'detached'
-    else:
-        mutate(d)
-    with pytest.raises(P.ProfileError):
+    mutate(d)
+    with pytest.raises(P.ProfileError, match=match):
         P.validate(d)
 
 
@@ -153,3 +160,34 @@ def test_short_name_with_path_separator_rejected():
         P.load_profile('../profiles/usb_cam')
     with pytest.raises(P.ProfileError):
         P.load_placement('a/b')
+
+
+def test_ns_mode_argument_validation():
+    assert P.check_ns_mode('') == '' and P.check_ns_mode('nested') == 'nested'
+    with pytest.raises(P.ProfileError):
+        P.check_ns_mode('Nested')
+
+
+@pytest.mark.parametrize('patch,match', [
+    ({'mode': 'hand'}, 'mode'),
+    ({'look_at': {'eye': [0, 0], 'target': [0, 0, 0], 'up_hint': [1, 0, 0]}}, 'look_at'),
+    ({'object': {'name': 'x', 'xyz_in_base_link': [0, 0]}}, 'xyz_in_base_link'),
+])
+def test_placement_validation(tmp_path, patch, match):
+    import yaml
+    d = P.load_placement('fixed_near_top')
+    d.update(patch)
+    f = tmp_path / 'p.yaml'
+    f.write_text(yaml.safe_dump(d))
+    with pytest.raises(P.ProfileError, match=match):
+        P.load_placement(str(f))
+
+
+def test_placement_missing_key_and_empty(tmp_path):
+    f = tmp_path / 'empty.yaml'
+    f.write_text('')
+    with pytest.raises(P.ProfileError):
+        P.load_placement(str(f))
+    f.write_text('name: x\n')
+    with pytest.raises(P.ProfileError, match='必須キー'):
+        P.load_placement(str(f))

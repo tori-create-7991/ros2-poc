@@ -35,11 +35,18 @@ for c in "$ARM" "$LAB"; do
 done
 
 # V1: コンテナ内の単体・結合テスト（本番の DDS ドメインと混ざらないよう別ドメインで実行し、pytest の終了コードで判定する）
-# 注意: 見るのはイメージに焼かれた /opt/ros2_poc_ws/src のコピー。ros2_poc_sim/ を編集したらイメージを再ビルドすること。
-out=$(docker exec -u ubuntu -e ROS_DOMAIN_ID=97 "$ARM" bash -c "$ROS_ENV; cd /opt/ros2_poc_ws/src/ros2_poc_sim && PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider test 2>&1; echo PYTEST_RC=\$?")
-rc=$(printf '%s\n' "$out" | sed -n 's/^PYTEST_RC=//p' | tail -1)
-summary=$(printf '%s\n' "$out" | grep -E 'passed|failed|error' | tail -1)
-if [ "$rc" = 0 ]; then report V1-pytest ok "$summary"; else report V1-pytest FAIL "rc=${rc:-?} $summary"; fi
+# 見るのはイメージに焼かれた /opt/ros2_poc_ws/src のコピーなので、手元のソースと一致しなければ古いイメージとして不合格にする。
+SRC_FILES='find ros2_poc_sim test config launch scripts -type f ! -name "*.pyc" ! -path "*__pycache__*" | LC_ALL=C sort | xargs'
+host_sum=$(cd ros2_poc_sim && eval "$SRC_FILES shasum" | shasum | cut -d' ' -f1)
+img_sum=$(docker exec -u ubuntu "$ARM" bash -c "cd /opt/ros2_poc_ws/src/ros2_poc_sim && $SRC_FILES sha1sum | sha1sum | cut -d' ' -f1" 2>/dev/null)
+if [ "$host_sum" != "$img_sum" ]; then
+  report V1-pytest FAIL "イメージが古い（手元のソースと違う）。docker compose --profile arm build ros2arm で再ビルドしてから実行する"
+else
+  out=$(docker exec -u ubuntu -e ROS_DOMAIN_ID=97 "$ARM" bash -c "$ROS_ENV; cd /opt/ros2_poc_ws/src/ros2_poc_sim && PYTHONDONTWRITEBYTECODE=1 timeout 300 python3 -m pytest -q -p no:cacheprovider test 2>&1; echo PYTEST_RC=\$?")
+  rc=$(printf '%s\n' "$out" | sed -n 's/^PYTEST_RC=//p' | tail -1)
+  summary=$(printf '%s\n' "$out" | grep -E 'passed|failed|error' | tail -1)
+  if [ "$rc" = 0 ]; then report V1-pytest ok "$summary"; else report V1-pytest FAIL "rc=${rc:-?} $summary"; fi
+fi
 
 # V3: 仮想カメラのトピックが出ている（購読者なしで一覧に出る）
 topics=$(docker exec "$LAB" bash -lc 'ros2 topic list 2>/dev/null' || true)
@@ -75,7 +82,11 @@ else
 fi
 
 # V7b: 簡易検出スクリプト（realsense_d435 のみ。深度が要る）
-if [ "$PROFILE" = realsense_d435 ]; then
+nodes=$(docker exec "$LAB" bash -lc 'ros2 node list 2>/dev/null' || true)
+if [ "$PROFILE" = realsense_d435 ] && printf '%s\n' "$nodes" | grep -q pick_and_place_tf; then
+  # target_0 を流すと pick_and_place_tf がアームを動かす。動いている間は流さない
+  report V7b-stub-detect FAIL "pick_and_place_tf が動いているので中止（アームが動く恐れ）。止めてから実行する"
+elif [ "$PROFILE" = realsense_d435 ]; then
   docker cp ros2_poc_sim/scripts/vla_stub_detect.py "$LAB":/tmp/vla_stub_detect.py >/dev/null
   log=$(docker exec "$LAB" bash -lc 'timeout -s INT 60 python3 /tmp/vla_stub_detect.py 2>&1' || true)
   line=$(printf '%s\n' "$log" | grep 'base_link=' | tail -1)

@@ -21,24 +21,16 @@ from ros2_poc_sim import geometry as G
 from ros2_poc_sim import profile as P
 from ros2_poc_sim import transforms as T
 
-_QOS_KIND = {'color': 'image', 'depth': 'image', 'points': 'points',
-             'info_color': 'info', 'info_depth': 'info'}
 _MSG = {'sensor_msgs/msg/Image': Image, 'sensor_msgs/msg/CameraInfo': CameraInfo,
         'sensor_msgs/msg/PointCloud2': PointCloud2}
-_RAW_LEAF = {'color': 'image', 'depth': 'depth_image', 'points': 'points', 'info': 'camera_info'}
 _RAW_MSG = {'color': Image, 'depth': Image, 'points': PointCloud2, 'info': CameraInfo}
 
 
 def make_qos(profile: dict, source: str) -> QoSProfile:
-    q = profile['qos'][_QOS_KIND[source]]
+    q = profile['qos'][P.QOS_KIND[source]]
     rel = (QoSReliabilityPolicy.RELIABLE if q.get('reliability', 'reliable') == 'reliable'
            else QoSReliabilityPolicy.BEST_EFFORT)
     return QoSProfile(depth=int(q.get('depth', 10)), reliability=rel)
-
-
-def to_ros_time_msg(stamp, header):
-    header.stamp = stamp
-    return header
 
 
 class CameraAdapter(Node):
@@ -86,7 +78,7 @@ class CameraAdapter(Node):
         for raw, sids in self.by_source.items():
             wanted = any(self.pubs[s].get_subscription_count() > 0 for s in sids)
             if wanted and raw not in self.subs:
-                topic = B.raw_topic(self.profile, _RAW_LEAF[raw])
+                topic = B.raw_topic(self.profile, B.RAW_LEAF[raw])
                 handler = getattr(self, f'_on_{raw}')
                 cb = (lambda m, _r=raw, _h=handler: self._guard(_r, _h, m))
                 self.subs[raw] = self.create_subscription(
@@ -107,7 +99,7 @@ class CameraAdapter(Node):
             if raw not in self._got_frame and raw not in self._warned and now - t0 > 10.0:
                 self._warned.add(raw)
                 self.get_logger().warning(
-                    f'{B.raw_topic(self.profile, _RAW_LEAF[raw])} が 10 秒来ない。'
+                    f'{B.raw_topic(self.profile, B.RAW_LEAF[raw])} が 10 秒来ない。'
                     'gz のカメラ・bridge・RTF（gz topic -e -t /stats）を確認する')
 
     # ---- コールバック -------------------------------------------------

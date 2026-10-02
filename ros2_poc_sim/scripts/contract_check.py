@@ -5,7 +5,7 @@
 ros2lab（ros-base）で動くよう rclpy / tf2_ros / PyYAML / stdlib のみ。
   python3 contract_check.py /tmp/realsense_d435.yaml [--seconds 10] [--with-optional] [--min-hz 5]
 契約ファイルの min_hz は「生きている」ことの下限（シミュは CPU 描画で数 Hz）。実機では --min-hz で厳しくする。
-終了コード: 0 = 全て合格、1 = 不合格あり、2 = 実行エラー
+終了コード: 0 = 全て合格、1 = 不合格あり、2 = 実行エラー（契約ファイルが読めない・不正）
 """
 import sys
 import time
@@ -47,9 +47,37 @@ def check_info(exp: dict, info) -> list:
         problems.append(f"width {info['width']} != {exp['width']}")
     if 'height' in exp and info['height'] != exp['height']:
         problems.append(f"height {info['height']} != {exp['height']}")
-    if 'fx' in exp and abs(info['k'][0] - exp['fx']) > exp.get('fx_tol', 1.0):
-        problems.append(f"fx {info['k'][0]} != {exp['fx']} ±{exp.get('fx_tol', 1.0)}")
+    tol = exp.get('fx_tol', 1.0)
+    for key, idx in (('fx', 0), ('cx', 2), ('fy', 4), ('cy', 5)):
+        if key in exp and abs(info['k'][idx] - exp[key]) > tol:
+            problems.append(f"{key} {info['k'][idx]} != {exp[key]} ±{tol}")
     return problems
+
+
+def check_same_stamp(group, stamps, expected_names, min_ratio):
+    """同一 stamp の検査。戻り値は (ok, 説明)。グループの要素が契約に無い・stamp が自明（全て 0 / 1 種類）なら不合格。"""
+    missing = [n for n in group if n not in expected_names]
+    if missing:
+        return False, f'契約に無いトピックがグループにある: {missing}'
+    for n in group:
+        vals = stamps.get(n, set())
+        if not vals:
+            return False, f'{n} を受信できず検査できない'
+        if vals == {(0, 0)} or len(vals) < 2:
+            return False, f'{n} の stamp が自明（受信した種類 {len(vals)}、全て 0 の可能性）'
+    ratio = stamp_ratio(group, stamps)
+    return ratio >= min_ratio, f'共通 stamp {len(common_stamps(group, stamps))} 件（最少の {ratio:.0%}）'
+
+
+def check_image_info_size(img_name, info_name, sizes, infos):
+    if img_name not in sizes:
+        return [f'画像 {img_name} の大きさを受信できず比較できない']
+    if info_name not in infos:
+        return [f'{info_name} を受信できず比較できない']
+    i = infos[info_name]
+    if sizes[img_name] != (i['width'], i['height']):
+        return [f'画像 {sizes[img_name]} と camera_info の大きさ {(i["width"], i["height"])} が違う']
+    return []
 
 
 def common_stamps(names, stamps):
@@ -71,8 +99,14 @@ def main(argv=None):
     seconds = float(argv[argv.index('--seconds') + 1]) if '--seconds' in argv else 10.0
     with_optional = '--with-optional' in argv
     min_hz_override = float(argv[argv.index('--min-hz') + 1]) if '--min-hz' in argv else None
-    with open(path, encoding='utf-8') as f:
-        contract = yaml.safe_load(f)
+    try:
+        with open(path, encoding='utf-8') as f:
+            contract = yaml.safe_load(f)
+        if not isinstance(contract, dict) or 'topics' not in contract:
+            raise ValueError("'topics' が無い")
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f'ERROR: 契約ファイルを読めない: {path}: {exc}', file=sys.stderr)
+        return 2
     expected = list(contract['topics']) + (list(contract.get('optional_topics', [])) if with_optional else [])
 
     if min_hz_override is not None:
@@ -132,23 +166,19 @@ def main(argv=None):
         problems = evaluate(e, obs)
         failed |= bool(problems)
         print(f"{'FAIL' if problems else 'ok  '} {e['name']}"
-              + (f"  hz={obs['hz']:.1f} enc={obs['encoding']} frame={obs['frame_id']}" if obs and obs['count'] else '')
+              + (f"  hz={obs['hz']:.1f} enc={obs['encoding']!r} frame={obs['frame_id']!r}" if obs and obs['count'] else '')
               + ''.join(f'\n       - {p}' for p in problems))
+    names = {e['name'] for e in expected}
     for group in contract.get('same_stamp', []):
-        if not all(n in stamps for n in group):
-            continue
-        n = len(common_stamps(group, stamps))
-        ratio = stamp_ratio(group, stamps)
-        ok = ratio >= contract.get('same_stamp_min_ratio', 0.5)
+        if not with_optional and any(n not in names for n in group):
+            continue   # オプションのトピックを含むグループは --with-optional のときだけ
+        ok, detail = check_same_stamp(group, stamps, names, contract.get('same_stamp_min_ratio', 0.5))
         failed |= not ok
-        print(f"{'ok  ' if ok else 'FAIL'} same_stamp {group}: 共通 stamp {n} 件（最少の {ratio:.0%}）")
+        print(f"{'ok  ' if ok else 'FAIL'} same_stamp {group}: {detail}")
     for name, exp_info in (contract.get('camera_info') or {}).items():
         problems = check_info(exp_info, infos.get(name))
-        # 画像の幅・高さが camera_info と一致すること（組になる画像を contract の image キーで指定）
-        img = exp_info.get('image')
-        if img and img in sizes and name in infos:
-            if sizes[img] != (infos[name]['width'], infos[name]['height']):
-                problems.append(f'画像 {sizes[img]} と camera_info の大きさが違う')
+        if exp_info.get('image'):
+            problems += check_image_info_size(exp_info['image'], name, sizes, infos)
         failed |= bool(problems)
         print(f"{'FAIL' if problems else 'ok  '} camera_info {name}" + ''.join(f'\n       - {p}' for p in problems))
     tf = contract.get('tf') or {}

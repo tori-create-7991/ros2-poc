@@ -28,13 +28,14 @@ ros2 launch ros2_poc_sim sim_camera.launch.py profile:=realsense_d435 placement:
 | `ns_mode` | プロファイルの既定 | `nested` にすると素の realsense-ros Jazzy と同じ `/camera/camera/...` 形になる |
 | `spawn_object` | `true` | 青い立方体を置く |
 | `world` | `default` | Gazebo のワールド名 |
-| `wait_sec` / `spawn_timeout` | `300` / `240` | ワールドが立つまで待つ秒数 / 1 回のスポーンのタイムアウト。初回（Fuel のモデル取得）やホストが高負荷のときは Gazebo の起動自体が数分かかる。`ros2arm` を別に使っていると特に遅い |
+| `wait_sec` / `spawn_timeout` | `300` / `240` | ワールドが立つまで待つ秒数 / 1 回のスポーンのタイムアウト。初回（Fuel のモデル取得）やホストが高負荷のときは Gazebo の起動自体が数分から 7 分以上かかることがある（実測）。**足りないときは先に公式 launch だけを起動し、立ち上がってから `sim_camera.launch.py` を起動するか、`wait_sec` を延ばす** |
+| `fail_fast` | `false` | `gz_setup` が失敗したときに launch 全体を止める。既定は止めない（公式の Gazebo / MoveIt まで巻き込まないため） |
 
 **再実行の挙動**
 
-- **Gazebo 側は冪等**。Sensors システムは「追加した直後に置く目印のモデル（`sim_camera_sensors_marker`）」で追加済みかを判断し、カメラ・物体は名前で重複を避ける。Gazebo は Sensors システムの有無を問い合わせる手段を持たないための方式で、Gazebo を再起動すると目印も消える（そのまま起動し直してよい）。状態を取得できないとき（`gz` が重すぎる等）は、推測で追加せず `rc=6` で中止する。
-- **ROS ノード（bridge / adapter / republish）は冪等ではない**。同じプロファイルを動かしたまま `sim_camera.launch.py` を再実行しない（先に Ctrl-C する）。ノード名・republish 名はプロファイル名を含むので、**別のプロファイルを同時に動かすのは問題ない**（TF のフレーム名も重ならないよう分けてある）。
-- `gz_setup` が失敗（rc≠0）したら launch 全体を止める（bridge / adapter を空回りさせない）。
+- **Gazebo 側は冪等**。Sensors システムは「追加した直後に置く目印のモデル（`sim_camera_sensors_marker`）」で追加済みかを判断し、カメラ・物体は名前で重複を避ける。Gazebo は Sensors システムの有無を問い合わせる手段を持たないための方式。目印は Gazebo を再起動すると消えるので、**Gazebo を再起動したら `sim_camera.launch.py` も起動し直す**（bridge / adapter が動いたままでも、カメラのスポーンは起動時にしか行わない）。状態を取得できないとき（`gz` が重すぎる等）は、推測で追加せず中止する。
+- **ROS ノード（bridge / adapter / republish）は冪等ではない**。同じプロファイルを動かしたまま `sim_camera.launch.py` を再実行しない（先に Ctrl-C する）。ノード名・republish 名はプロファイル名を含むので、**別のプロファイルを同時に動かすのは問題ない**（TF のフレーム名も重ならないよう分けてある）。bridge と adapter は落ちたら 2 秒後に再起動する（`respawn`）。republish は監視していない。
+- `gz_setup` が失敗（rc≠0）しても、既定では公式スタックを止めない。ログに理由を出し、`sim_camera.launch.py` の再実行を促す。`fail_fast:=true` なら launch 全体を止める。
 - 生成物（SDF・ブリッジ設定）は `/tmp/ros2_poc_sim_<uid>/<プロファイル名>/`（0700）に出る。困ったときはここを見る。
 
 ### 出るトピック
@@ -76,7 +77,7 @@ docker compose exec ros2lab-a bash -lc 'python3 /tmp/vla_stub_detect.py'
 OpenVLA の代わりの簡易スクリプト。色画像・整列深度・camera_info から青い立方体を検出し、TF **`target_0`**（親 = 画像の `frame_id`）を配信する。公式 `crane_x7_examples` の `color_detection` と同じ規約（青の HSV 範囲、有効距離 0.2〜0.5m、`target_0`）なので、後段の `pick_and_place_tf` や本物の VLA ノードと差し替えられる。`ros2lab`（OpenCV なし）で動くよう numpy だけで書いてある。
 
 - 受け取るのは `rgb8` の色画像と `16UC1`(mm) の深度。実機でもシミュでも同じ（これが「受け手無改変」の確認）。深度が無い `usb_cam` プロファイルでは、10 秒たっても深度が来ないとエラーを出す。
-- 入力は信頼しない（DDS は無認証）: 画像の `frame_id` が `camera_color_optical_frame` でない、`camera_info` の `fx, fy` が不正（0・負・NaN）なら破棄する。色と深度は stamp が同じ組だけを使い、どちらが先に着いても組になる。
+- 入力は信頼しない（DDS は無認証）: 色・深度の `frame_id` が `camera_color_optical_frame` でない、色と深度の大きさが違う、`camera_info` の `fx, fy` が不正（0・負・NaN）、位置が横方向 ±1m を超える、のいずれかなら破棄し、1 つの不正な組で落ちない。色と深度は stamp が同じ組だけを使い、どちらが先に着いても組になる。
 - `base_link` から見た位置が分かれば INFO に出す（例: `base_link=(0.200,0.101,0.025)`）。
 - アームには何も送らない。
 
@@ -96,7 +97,9 @@ bash ros2_poc_sim/scripts/verify_sim_camera.sh realsense_d435   # または usb_
 
 V1（pytest。本番の DDS ドメインに混ざらないよう `ROS_DOMAIN_ID=97` で実行し、終了コードで判定）、V3（ros2lab から見える）、出力契約（型・エンコーディング・frame_id・Hz・同一 stamp・CameraInfo の内容・TF）、画像の保存（ほぼ単色なら不合格）、簡易検出スクリプトの位置誤差（±1.5cm）を順に確認する。
 
-自動化していないもの（手で確認）: 公式 `color_detection`（V7、上の単独起動）、ロボットの位置（V2）、点群（V9）、TF の値（連結だけ確認）。V1 が見るのはイメージに焼かれたコピーなので、編集後は再ビルドしてから実行する。Hz の下限は「生きている」ことの確認（0.5Hz）で、実機に流すときは `--min-hz` で厳しくする。契約ファイルは [../ros2_poc_sim/config/contracts](../ros2_poc_sim/config/contracts)。**同じ契約を実機にも流せる**（`--min-hz 5` などで Hz の下限を厳しくする）。
+`pick_and_place_tf` が動いている間は V7b を実行しない（`target_0` を流すとアームが動く）。スクリプトは検出して不合格で中止する。
+
+自動化していないもの（手で確認）: 公式 `color_detection`（V7、上の単独起動）、ロボットの位置（V2）、点群（V9）、TF の値（連結だけ確認）。V1 が見るのはイメージに焼かれたコピーなので、手元のソースとイメージ内のコピーが違えば（編集後に再ビルドしていなければ）不合格にする。Hz の下限は「生きている」ことの確認（0.5Hz）で、実機に流すときは `--min-hz` で厳しくする。契約ファイルは [../ros2_poc_sim/config/contracts](../ros2_poc_sim/config/contracts)。**同じ契約を実機にも流せる**（`--min-hz 5` などで Hz の下限を厳しくする）。
 
 ## プロファイルの形式（YAML）
 
@@ -134,11 +137,25 @@ V1（pytest。本番の DDS ドメインに混ざらないよう `ROS_DOMAIN_ID=
 | D435i の IMU、infra1/infra2、`depth/image_rect_raw`（非整列深度）、metadata、extrinsics | 第 1 弾の対象外 |
 | ローリングシャッター、レンズフレア、照明変化 | レンダラが対象外 |
 
+## `gz_setup` の終了コード
+
+| rc | 意味 | そのまま再実行してよいか |
+|---|---|---|
+| 0 | 成功 | — |
+| 2 | ワールド（`/world/<w>/entity/system/add`）が `wait_sec` 以内に立たない。公式 launch 未起動、Gazebo の起動が遅い（初回の Fuel 取得・高負荷）、`GZ_PARTITION` / `GZ_IP` の食い違い。ログに最後の `gz` の失敗理由と環境変数を出す | はい（Gazebo の状態は変えていない） |
+| 3 | Sensors システムの追加を確認できない、または目印のモデルを確認できない（追加後に Ctrl-C した場合も同じ状態になる）。**追加済みかもしれず、再実行すると二重になりうる** | **いいえ。Gazebo を再起動してから** |
+| 4 | カメラのスポーンに失敗（Sensors と目印は作成済み） | はい |
+| 5 | 物体のスポーンに失敗（カメラは作成済み） | はい |
+| 6 | ワールドの状態（`scene/info`）を取得できない。60 秒リトライしても取れない | はい |
+| 7 | 先行する別の `gz_setup` が終わらず、ロックを取れない | 先行のログを確認してから |
+
+`ros2 run ros_gz_sim create` がタイムアウトしても、Gazebo 側で後から完了することがある（子プロセスごと止めるが、要求が受理済みの場合）。ログに「後から完了するかもしれない」と出る。
+
 ## 隔離方針との関係
 
 - 仮想カメラのトピックは `ros2arm` が参加する既存の経路（`default` と `ros2-lab-net`）で `ros2lab` に届く。compose の変更は不要。
 - **DDS は無認証**。`ros2-lab-net` に `kali-vnc` などを接続すると、そこからカメラトピックを購読でき、偽の画像・深度・CameraInfo や `/tf`・`/tf_static` を注入できる。簡易検出スクリプトは入力を信頼して `target_0` を出す（公式の `pick_and_place_tf` は `target_0` を読む）ので、**注入されるとシミュ上のアームが攻撃者の指定した位置へ動きうる**。VLA の入力も同様に信頼してはならない。
-- **Gazebo の通信（gz-transport）も無認証**。`gz_setup` が使う `entity/system/add` は、同じ Gazebo パーティションにいる誰でも呼べ、任意のライブラリをロードさせられる（ワールドの変更も同様）。`ros2-lab-net` を越えて gz-transport の Discovery が届くかは**未検証**。届く場合は `GZ_PARTITION` の固定値化や `GZ_IP` での絞り込みを検討する。この PR は compose を変えていないので、従来のリスクが増えるわけではないが、このサービスを使い始める。
+- **Gazebo の通信（gz-transport）も無認証**。`gz_setup` が使う `entity/system/add` は、同じ Gazebo の通信網にいる誰でも呼べ、任意のライブラリをロードさせられる（ワールドの変更も同様）。`ros2-lab-net` を越えて gz-transport の Discovery が届くかは**未検証**（ros2lab には `gz` が無いので、`kali-vnc` などから `gz service -l` を実行して確かめる）。**`GZ_PARTITION` は名前空間の分離であって認証ではない**（知っていれば合わせられる）ので緩和にならない。届く場合の候補は、`ros2arm` 内の gz を `GZ_IP=127.0.0.1` で動かして外に出さないこと（未検証。別 PR で compose / イメージの設定として扱う）。この PR は compose を変えていないので従来のリスクが増えるわけではないが、このサービスを使い始める。
 - 実カメラを接続するときは `ros2real` 側で動かし、画像を `ros2-lab-net` に出さない構成を維持する（`ros2real` は `lab` に繋がない）。
 
 ## トラブルシュート
@@ -146,8 +163,7 @@ V1（pytest。本番の DDS ドメインに混ざらないよう `ROS_DOMAIN_ID=
 | 症状 | 原因・対処 |
 |---|---|
 | トピックは見えるが画像が来ない・1Hz 未満 | 負荷。`gz topic -e -t /stats` で RTF を見る。adapter は購読後 10 秒来ないと警告を出す。`ros2 topic hz /sim_camera/<プロファイル名>/raw/image` で bridge の手前から切り分ける。センサは `always_on` なので、購読者がいなくても Gazebo は描画し続ける（lazy で省けるのは bridge と adapter の変換・転送だけ） |
-| `gz_setup` が rc=6 で止まる | Gazebo が重くてワールドの状態を取得できない。待つか、Gazebo を再起動してから再実行 |
-| `gz_setup` が rc=3/4 | Sensors システムの追加またはスポーンが失敗。ログを確認し、不安なら Gazebo を再起動してから再実行（目印のモデルが無いまま Sensors だけ追加されていると、再実行で二重になりうる） |
+| `gz_setup` が終了コード付きで止まる | 下の表を参照 |
 | `ros2lab` にトピックが出ない | Discovery に 10〜20 秒かかる。`ros2arm` で launch が動いているか、同じ `ROS_DOMAIN_ID`（42）かを確認 |
 | `gz_setup` が `ワールド default のサービスが立たない` で終わる | 公式 launch を先に起動していない、または Fuel のモデルダウンロード待ち（外向き HTTP が必要）。待ってから `sim_camera.launch.py` を再実行 |
 | 画像が灰色一色 | 古い版では `ros_gz_sim create` が SDF の姿勢を無視していた。最新の `ros2_poc_sim` を使う（姿勢を `-x -y -z -R -P -Y` で明示している） |

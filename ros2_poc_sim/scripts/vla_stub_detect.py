@@ -21,6 +21,7 @@ DEPTH_MIN, DEPTH_MAX = 0.2, 0.5   # 公式 color_detection と同じ有効距離
 DEPTH_OFFSET = 0.015              # 物体表面の少し奥（公式と同じ）
 MIN_PIXELS = 30
 EXPECTED_FRAME_ID = 'camera_color_optical_frame'
+MAX_LATERAL = 1.0   # 光軸に直交する方向の妥当な上限 [m]（有効距離 0.5m の画角内に収まる）
 
 
 def decode_color(encoding, height, width, data):
@@ -159,6 +160,12 @@ def main(argv=None):
             self._process(msg, depth_msg)
 
         def _process(self, msg, depth_msg):
+            try:
+                self._process_checked(msg, depth_msg)
+            except Exception as exc:  # noqa: BLE001  入力は信頼しない。1 つの不正な組で落ちない
+                self.get_logger().error(f'処理できず破棄: {exc!r}', throttle_duration_sec=5.0)
+
+        def _process_checked(self, msg, depth_msg):
             if self.info is None:
                 return  # 同一 stamp の組だけを使う（公式 color_detection の ExactTime と同じ）
             if msg.header.frame_id != self.expected_frame:
@@ -178,6 +185,14 @@ def main(argv=None):
             except ValueError as exc:
                 self.get_logger().error(str(exc), throttle_duration_sec=5.0)
                 return
+            if depth.shape != img.shape[:2]:
+                self.get_logger().error(f'色 {img.shape[:2]} と深度 {depth.shape} の大きさが違う。破棄',
+                                        throttle_duration_sec=5.0)
+                return
+            if depth_msg.header.frame_id != self.expected_frame:
+                self.get_logger().error(f'深度の frame_id が想定外: {depth_msg.header.frame_id!r}。破棄',
+                                        throttle_duration_sec=5.0)
+                return
             mask = blue_mask(img)
             c = centroid(mask)
             if c is None:
@@ -188,6 +203,10 @@ def main(argv=None):
                                        throttle_duration_sec=5.0)
                 return
             x, y, zz = backproject(c[0], c[1], z, k)
+            if abs(x) > MAX_LATERAL or abs(y) > MAX_LATERAL:
+                self.get_logger().error(f'位置が範囲外 ({x:.2f},{y:.2f})。内部パラメータが不正？ 破棄',
+                                        throttle_duration_sec=5.0)
+                return
             t = TransformStamped()
             t.header = msg.header
             t.child_frame_id = 'target_0'

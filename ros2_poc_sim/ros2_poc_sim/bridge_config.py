@@ -12,6 +12,10 @@ _SOURCE = {
 }
 
 
+# 生トピックの末尾名（camera_adapter も同じ対応を使う）
+RAW_LEAF = {src: v[3] for src, v in _SOURCE.items()}
+
+
 def raw_topic(profile: dict, leaf: str) -> str:
     return f"/sim_camera/{profile['name']}/raw/{leaf}"
 

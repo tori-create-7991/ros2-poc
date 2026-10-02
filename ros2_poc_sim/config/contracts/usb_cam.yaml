@@ -8,5 +8,5 @@ same_stamp:
   - [/image_raw, /camera_info]
 same_stamp_min_ratio: 0.5
 camera_info:
-  /camera_info: {width: 640, height: 480, fx: 438.78, fx_tol: 1.0, image: /image_raw}
+  /camera_info: {width: 640, height: 480, fx: 438.78, fy: 438.78, cx: 320.0, cy: 240.0, fx_tol: 1.0, image: /image_raw}
 tf: {}

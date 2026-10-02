@@ -11,8 +11,8 @@ same_stamp:        # 公式 color_detection の ExactTime 同期の前提
   - [/camera/color/image_raw, /camera/aligned_depth_to_color/image_raw, /camera/color/camera_info]
 same_stamp_min_ratio: 0.5
 camera_info:       # CameraInfo の内容。fx はプロファイルの暫定値（実機入手後に実測へ。実機に流すときは外すか値を差し替える）
-  /camera/color/camera_info: {width: 640, height: 480, fx: 462.14, fx_tol: 1.0, image: /camera/color/image_raw}
-  /camera/aligned_depth_to_color/camera_info: {width: 640, height: 480, fx: 462.14, fx_tol: 1.0, image: /camera/aligned_depth_to_color/image_raw}
+  /camera/color/camera_info: {width: 640, height: 480, fx: 462.14, fy: 462.14, cx: 320.0, cy: 240.0, fx_tol: 1.0, image: /camera/color/image_raw}
+  /camera/aligned_depth_to_color/camera_info: {width: 640, height: 480, fx: 462.14, fy: 462.14, cx: 320.0, cy: 240.0, fx_tol: 1.0, image: /camera/aligned_depth_to_color/image_raw}
 tf:                # base_link からこれらのフレームへ TF が解決すること
   parent: base_link
   frames: [camera_link, camera_color_optical_frame, camera_depth_optical_frame]

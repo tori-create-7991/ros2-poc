@@ -22,7 +22,7 @@ REQUIRED_TOP = ('schema', 'name', 'based_on', 'sensor', 'intrinsics', 'frames', 
 
 
 NAME_RE = re.compile(r'^[A-Za-z0-9_]+$')
-_QOS_KIND = {'color': 'image', 'depth': 'image', 'points': 'points',
+QOS_KIND = {'color': 'image', 'depth': 'image', 'points': 'points',
              'info_color': 'info', 'info_depth': 'info'}
 _TYPE_FOR_SOURCE = {
     'color': 'sensor_msgs/msg/Image', 'depth': 'sensor_msgs/msg/Image',
@@ -38,6 +38,11 @@ class ProfileError(ValueError):
 def _load_yaml(path: Path) -> dict:
     with open(path, encoding='utf-8') as f:
         return yaml.safe_load(f)
+
+
+def _finite_positive(v) -> bool:
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v) and v > 0)
 
 
 def _resolve(kind: str, name_or_path: str) -> Path:
@@ -58,6 +63,18 @@ def load_profile(name_or_path: str) -> dict:
 
 def load_placement(name_or_path: str) -> dict:
     d = _load_yaml(_resolve('placements', name_or_path))
+    if not isinstance(d, dict):
+        raise ProfileError('placement が空か不正')
+    for k in ('name', 'mode', 'parent_frame', 'robot_base_in_world', 'look_at', 'object'):
+        if k not in d:
+            raise ProfileError(f'placement に必須キーがない: {k}')
+    if d['mode'] != 'fixed':
+        raise ProfileError("placement.mode は 'fixed' のみ対応（手先カメラは第 2 弾）")
+    for k in ('eye', 'target', 'up_hint'):
+        if len(d['look_at'].get(k, [])) != 3:
+            raise ProfileError(f'placement.look_at.{k} は 3 要素')
+    if len(d['object'].get('xyz_in_base_link', [])) != 3:
+        raise ProfileError('placement.object.xyz_in_base_link は 3 要素')
     obj = d.get('object') or {}
     for label, v in (('name', d.get('name')), ('object.name', obj.get('name'))):
         if v is not None and not NAME_RE.match(str(v)):
@@ -82,17 +99,18 @@ def validate(d: dict) -> None:
     if s.get('gz_type') not in GZ_TYPES:
         raise ProfileError(f"sensor.gz_type は {sorted(GZ_TYPES)} のどれか")
     for k in ('width', 'height', 'fps'):
-        if not isinstance(s.get(k), (int, float)) or s[k] <= 0:
+        if not _finite_positive(s.get(k)):
             raise ProfileError(f'sensor.{k} が不正')
     clip = s.get('clip') or {}
     for k in ('near', 'far'):
-        if not isinstance(clip.get(k), (int, float)) or clip[k] <= 0:
+        if not _finite_positive(clip.get(k)):
             raise ProfileError(f'sensor.clip.{k} が不正')
     if clip['near'] >= clip['far']:
         raise ProfileError('sensor.clip.near < far でなければならない')
     _check_intrinsics(d)
     _check_tf(d)
     _check_streams(d)
+    _check_extras(d)
     if d['topics'].get('ns_mode', 'flat') not in ('flat', 'nested'):
         raise ProfileError('topics.ns_mode は flat か nested')
 
@@ -100,7 +118,7 @@ def validate(d: dict) -> None:
 def _check_intrinsics(d: dict) -> None:
     i, s = d['intrinsics'], d['sensor']
     for k in ('fx', 'fy', 'cx', 'cy'):
-        if not isinstance(i.get(k), (int, float)) or i[k] <= 0:
+        if not _finite_positive(i.get(k)):
             raise ProfileError(f'intrinsics.{k} が不正')
     # Gazebo は fx==fy・主点が画像中心・歪みゼロの理想ピンホールしか描画できない。
     if abs(i['fx'] - i['fy']) > 1e-6:
@@ -161,10 +179,27 @@ def _check_streams(d: dict) -> None:
             raise ProfileError(f'{sid}: Image には encoding が要る')
         if st['source'] == 'color' and tr in (None, 'passthrough') and st.get('encoding') != 'rgb8':
             raise ProfileError(f"{sid}: gz の色は rgb8。passthrough で {st.get('encoding')} と名乗ると嘘になる（変換を足す）")
-        if _QOS_KIND[st['source']] not in d['qos']:
-            raise ProfileError(f"{sid}: qos.{_QOS_KIND[st['source']]} が無い")
+        if QOS_KIND[st['source']] not in d['qos']:
+            raise ProfileError(f"{sid}: qos.{QOS_KIND[st['source']]} が無い")
         if st['source'] in ('depth', 'info_depth', 'points') and d['sensor']['gz_type'] != 'rgbd_camera':
             raise ProfileError(f'{sid}: {st["source"]} は rgbd_camera が必要')
+
+
+def _check_extras(d: dict) -> None:
+    streams = d['topics']['streams']
+    for sid in d.get('compressed', []) or []:
+        st = streams.get(sid)
+        if st is None or st['type'] != 'sensor_msgs/msg/Image':
+            raise ProfileError(f'compressed: {sid} は Image のストリームでなければならない')
+    for sid, st in streams.items():
+        if st.get('enabled_by') not in (None, 'pointcloud.enable'):
+            raise ProfileError(f"{sid}: 未知の enabled_by {st['enabled_by']!r}")
+
+
+def check_ns_mode(ns_mode: str) -> str:
+    if ns_mode not in ('', 'flat', 'nested'):
+        raise ProfileError(f"ns_mode は flat か nested（空で既定）: {ns_mode!r}")
+    return ns_mode
 
 
 def topic_name(d: dict, stream_id: str, ns_mode: str = None) -> str:

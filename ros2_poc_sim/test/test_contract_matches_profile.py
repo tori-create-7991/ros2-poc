@@ -9,7 +9,9 @@ ROOT = Path(__file__).resolve().parents[1] / 'config'
 
 
 def _contract(name):
-    return yaml.safe_load((ROOT / 'contracts' / f'{name}.yaml').read_text(encoding='utf-8'))
+    f = ROOT / 'contracts' / f'{name}.yaml'
+    assert f.exists(), f'{name} の契約ファイルが無い'
+    return yaml.safe_load(f.read_text(encoding='utf-8'))
 
 
 def test_each_profile_has_a_matching_contract():
@@ -42,3 +44,32 @@ def test_no_two_profiles_share_a_frame_name():
         for real in P.load_profile(path.stem)['frames'].values():
             assert real not in seen, f'{real} を {seen.get(real)} と {path.stem} が共有（TF が衝突する）'
             seen[real] = path.stem
+
+
+def test_every_contract_topic_is_produced_by_the_profile():
+    for path in sorted((ROOT / 'profiles').glob('*.yaml')):
+        prof = P.load_profile(path.stem)
+        produced = {P.topic_name(prof, sid) for sid in prof['topics']['streams']}
+        for t in _contract(path.stem)['topics']:
+            assert t['name'] in produced, f"{path.stem}: 契約の {t['name']} をプロファイルが出さない"
+
+
+def test_contract_tf_frames_exist_in_profile():
+    for path in sorted((ROOT / 'profiles').glob('*.yaml')):
+        prof = P.load_profile(path.stem)
+        known = set(prof['frames'].values())
+        for fr in (_contract(path.stem).get('tf') or {}).get('frames', []):
+            assert fr in known, f'{path.stem}: 契約の TF フレーム {fr} がプロファイルに無い'
+
+
+def test_contract_same_stamp_members_are_contract_topics():
+    for path in sorted((ROOT / 'profiles').glob('*.yaml')):
+        c = _contract(path.stem)
+        names = {t['name'] for t in c['topics']}
+        for group in c.get('same_stamp', []):
+            assert set(group) <= names
+
+
+def test_every_profile_has_a_contract_file():
+    for path in sorted((ROOT / 'profiles').glob('*.yaml')):
+        assert (ROOT / 'contracts' / path.name).exists(), f'{path.name} の契約ファイルが無い'

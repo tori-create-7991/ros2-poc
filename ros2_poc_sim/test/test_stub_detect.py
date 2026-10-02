@@ -91,3 +91,13 @@ def test_shaded_cube_faces_still_detected():
     for c in [(13, 25, 230), (10, 20, 150), (5, 10, 60)]:
         m = V.blue_mask(_img((10, 10, 30, 30), color=c))
         assert m[15, 15], c
+
+
+def test_lateral_limit_constant_is_sane():
+    # 有効距離 0.5m・画角 ±35° なら横方向は 0.35m 程度。上限はその数倍で十分
+    assert 0.5 <= V.MAX_LATERAL <= 2.0
+
+
+def test_in_range_edges():
+    assert V.in_range(0.2) and V.in_range(0.5)
+    assert not V.in_range(0.1999) and not V.in_range(0.5001)

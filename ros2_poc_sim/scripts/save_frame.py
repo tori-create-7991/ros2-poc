@@ -74,7 +74,7 @@ def main(argv=None):
     with open(out, 'wb') as f:
         f.write(encode_png(arr))
     std = float(np.asarray(arr, dtype=np.float64).std())
-    print(f'saved {out}: {m.width}x{m.height} {m.encoding} frame_id={m.header.frame_id} std={std:.1f}')
+    print(f'saved {out}: {m.width}x{m.height} {m.encoding} frame_id={m.header.frame_id!r} std={std:.1f}')
     return 0
 
 

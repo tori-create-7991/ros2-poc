@@ -3,3 +3,9 @@
 .git
 .plans
 .research
+.claude
+.worktrees
+.logs
+workspace
+mise.toml
+.env*

@@ -61,6 +61,8 @@ RUN printf '%s\n' \
 COPY ros2_poc_sim /opt/ros2_poc_ws/src/ros2_poc_sim
 RUN source /opt/ros/jazzy/setup.bash \
     && source /opt/crane_ws/install/setup.bash \
+    && apt-get update \
+    && rosdep install -y -i --from-paths /opt/ros2_poc_ws/src --rosdistro jazzy --skip-keys crane_x7_gazebo \
     && cd /opt/ros2_poc_ws && colcon build \
-    && rm -rf /opt/ros2_poc_ws/build /opt/ros2_poc_ws/log \
+    && rm -rf /opt/ros2_poc_ws/build /opt/ros2_poc_ws/log /var/lib/apt/lists/* \
     && printf '%s\n' 'source /opt/ros2_poc_ws/install/setup.bash' >> /home/ubuntu/.bashrc
