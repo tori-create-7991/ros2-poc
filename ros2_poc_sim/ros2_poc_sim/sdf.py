@@ -22,6 +22,25 @@ def _pose_str(pos, R) -> str:
     return ' '.join(f'{v:.9g}' for v in (*pos, *rpy))
 
 
+def camera_pose6(profile: dict, placement: dict):
+    """ワールド上のセンサ姿勢 (x, y, z, roll, pitch, yaw)。"""
+    pos, R = G.sensor_pose_in_world(profile, placement)
+    return (*[float(v) for v in pos], *G.matrix_to_rpy(R))
+
+
+def object_pose6(placement: dict):
+    obj = placement['object']
+    base = G.world_to_base_offset(placement)
+    return tuple(float(base[i] + obj['xyz_in_base_link'][i]) for i in range(3)) + (0.0, 0.0, 0.0)
+
+
+def pose_args(pose6) -> list:
+    """`ros_gz_sim create` は -x/-y/-z/-R/-P/-Y（既定 0）でモデル姿勢を上書きするので明示的に渡す。"""
+    x, y, z, r, p, yw = pose6
+    return ['-x', f'{x:.9g}', '-y', f'{y:.9g}', '-z', f'{z:.9g}',
+            '-R', f'{r:.9g}', '-P', f'{p:.9g}', '-Y', f'{yw:.9g}']
+
+
 def _color_frame_id(profile: dict) -> str:
     st = profile['topics']['streams']['color_image']
     return profile['frames'][st['frame']]

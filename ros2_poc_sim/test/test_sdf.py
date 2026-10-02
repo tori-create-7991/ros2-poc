@@ -64,7 +64,7 @@ def test_object_sdf_is_dynamic_blue_cube():
     assert float(model.findtext('.//inertial/mass')) == pytest.approx(0.05)
     assert float(model.findtext('.//surface/friction/ode/mu')) == pytest.approx(1.0)
     x, y, z = (float(v) for v in model.findtext('pose').split()[:3])
-    assert (x, y, z) == pytest.approx((0.20, 0.0, 1.015))
+    assert (x, y, z) == pytest.approx((0.20, 0.10, 1.045))
 
 
 def test_cube_color_is_inside_color_detection_hsv_range():
@@ -79,3 +79,20 @@ def test_cube_color_is_inside_color_detection_hsv_range():
 def test_sensors_system_request_text():
     req = S.sensors_system_request(world_entity_id=1)
     assert 'gz-sim-sensors-system' in req and 'ogre2' in req and 'id: 1' in req
+
+
+def test_pose_args_for_create_match_sdf_pose():
+    prof = P.load_profile('realsense_d435')
+    pl = P.load_placement('fixed_near_top')
+    pose = S.camera_pose6(prof, pl)
+    root = ET.fromstring(S.camera_model_sdf(prof, pl))
+    vals = [float(v) for v in root.find('model').findtext('pose').split()]
+    assert vals == pytest.approx(list(pose), abs=1e-6)
+    args = S.pose_args(pose)
+    assert args[0::2] == ['-x', '-y', '-z', '-R', '-P', '-Y']
+    assert float(args[5]) == pytest.approx(1.015 + 0.42, abs=1e-6)  # eye z + base 1.015
+
+
+def test_object_pose6_is_base_offset_plus_placement():
+    pl = P.load_placement('fixed_near_top')
+    assert S.object_pose6(pl) == pytest.approx((0.20, 0.10, 1.045, 0, 0, 0))

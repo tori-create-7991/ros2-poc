@@ -27,11 +27,27 @@ def wait_for_service(world: str, timeout: float) -> bool:
     return False
 
 
-def sensors_system_present(world: str) -> bool:
-    """`/world/<w>/system/info` が返すシステム一覧に Sensors があるか。取れなければ False（追加を試みる）。"""
-    r = _run(['gz', 'service', '-s', f'/world/{world}/system/info', '--reqtype', 'gz.msgs.Empty',
-              '--reptype', 'gz.msgs.EntityPlugin_V', '--timeout', '5000', '--req', ''], timeout=15)
-    return 'gz::sim::systems::Sensors' in (r.stdout + r.stderr)
+def list_models(world: str) -> set:
+    """ワールドにあるトップレベルモデル名。`scene/info` の `model { name: "..." }` から取る。"""
+    r = _run(['gz', 'service', '-s', f'/world/{world}/scene/info', '--reqtype', 'gz.msgs.Empty',
+              '--reptype', 'gz.msgs.Scene', '--timeout', '5000', '--req', ''], timeout=15)
+    return parse_model_names(r.stdout)
+
+
+def parse_model_names(text: str) -> set:
+    names, depth, pending = set(), 0, False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.endswith('{'):
+            if depth == 0 and line == 'model {':
+                pending = True
+            depth += 1
+        elif line == '}':
+            depth -= 1
+        elif pending and depth == 1 and line.startswith('name:'):
+            names.add(line.split('"')[1])
+            pending = False
+    return names
 
 
 def add_sensors_system(world: str, world_entity_id: int) -> bool:
@@ -41,9 +57,10 @@ def add_sensors_system(world: str, world_entity_id: int) -> bool:
     return 'true' in r.stdout
 
 
-def spawn(world: str, name: str, sdf_path: str) -> bool:
+def spawn(world: str, name: str, sdf_path: str, pose: list) -> bool:
+    # create は SDF 内の <pose> を無視して -x/-y/-z/-R/-P/-Y（既定 0）で上書きする。必ず姿勢を渡す。
     r = _run(['ros2', 'run', 'ros_gz_sim', 'create', '-world', world, '-file', sdf_path,
-              '-name', name, '-allow_renaming', 'false'], timeout=60)
+              '-name', name, '-allow_renaming', 'false', *pose], timeout=60)
     sys.stdout.write(r.stdout + r.stderr)
     return r.returncode == 0
 
@@ -52,6 +69,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--camera-sdf', required=True)
     ap.add_argument('--camera-name', required=True)
+    ap.add_argument('--camera-pose', nargs=6, type=float, required=True, metavar=('X', 'Y', 'Z', 'R', 'P', 'YAW'))
+    ap.add_argument('--object-pose', nargs=6, type=float, metavar=('X', 'Y', 'Z', 'R', 'P', 'YAW'))
     ap.add_argument('--object-sdf', default='')
     ap.add_argument('--object-name', default='')
     ap.add_argument('--world', default='default')
@@ -62,20 +81,28 @@ def main(argv=None):
     if not wait_for_service(a.world, a.wait_sec):
         print(f'ERROR: ワールド {a.world} のサービスが {a.wait_sec}s 以内に立たない（公式 launch を先に起動したか）')
         return 2
-    if sensors_system_present(a.world):
-        print('Sensors システムは追加済み')
-    elif add_sensors_system(a.world, a.world_entity_id):
-        print('Sensors システムを追加した')
-        time.sleep(3.0)
+    # 冪等性: カメラモデルが既にあるなら、このスクリプトが前回 Sensors システムも追加している。
+    # （Sensors システムの有無はサービス/トピックから判別できないため、モデルの有無で判断する。
+    #  二重に追加すると描画が二重になり不安定になる）
+    models = list_models(a.world)
+    if a.camera_name in models:
+        print(f'{a.camera_name} は既にある。Sensors システムの追加とスポーンをスキップ')
     else:
-        print('ERROR: Sensors システムの追加に失敗')
-        return 3
-    if not spawn(a.world, a.camera_name, a.camera_sdf):
-        print('ERROR: カメラモデルのスポーンに失敗')
-        return 4
-    if a.object_sdf and not spawn(a.world, a.object_name, a.object_sdf):
-        print('ERROR: 物体のスポーンに失敗')
-        return 5
+        if add_sensors_system(a.world, a.world_entity_id):
+            print('Sensors システムを追加した')
+            time.sleep(3.0)
+        else:
+            print('ERROR: Sensors システムの追加に失敗')
+            return 3
+        if not spawn(a.world, a.camera_name, a.camera_sdf, S.pose_args(a.camera_pose)):
+            print('ERROR: カメラモデルのスポーンに失敗')
+            return 4
+    if a.object_sdf:
+        if a.object_name in models:
+            print(f'{a.object_name} は既にある。スキップ')
+        elif not spawn(a.world, a.object_name, a.object_sdf, S.pose_args(a.object_pose)):
+            print('ERROR: 物体のスポーンに失敗')
+            return 5
     print('gz_setup 完了')
     return 0
 

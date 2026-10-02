@@ -41,9 +41,11 @@ def _setup(context):
     sim_time = {'use_sim_time': True}
     actions = []
     setup_cmd = [sys.executable, '-m', 'ros2_poc_sim.gz_setup', '--camera-sdf', cam_sdf,
-                 '--camera-name', f"sim_camera_{prof['name']}", '--world', world]
+                 '--camera-name', f"sim_camera_{prof['name']}", '--world', world,
+                 '--camera-pose', *[repr(v) for v in S.camera_pose6(prof, pl)]]
     if spawn_object:
-        setup_cmd += ['--object-sdf', obj_sdf, '--object-name', pl['object']['name']]
+        setup_cmd += ['--object-sdf', obj_sdf, '--object-name', pl['object']['name'],
+                      '--object-pose', *[repr(v) for v in S.object_pose6(pl)]]
     actions.append(ExecuteProcess(cmd=setup_cmd, output='screen', name='gz_setup'))
 
     actions.append(Node(

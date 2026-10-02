@@ -7,6 +7,7 @@
 """
 import numpy as np
 import rclpy
+from rclpy.clock import Clock, ClockType
 from geometry_msgs.msg import TransformStamped
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
@@ -70,7 +71,9 @@ class CameraAdapter(Node):
             self.get_logger().info(f'{sid}: {topic}')
 
         self.subs = {}  # raw source -> subscription
-        self.create_timer(float(self.get_parameter('lazy_poll_sec').value), self._poll_subscribers)
+        # use_sim_time でも /clock が来ない間に止まらないよう、購読者の監視は壁時計で回す
+        self.create_timer(float(self.get_parameter('lazy_poll_sec').value), self._poll_subscribers,
+                          clock=Clock(clock_type=ClockType.SYSTEM_TIME))
         self._publish_static_tf()
 
     # ---- lazy 購読 ----------------------------------------------------
