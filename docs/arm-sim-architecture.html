@@ -259,8 +259,8 @@ MoveIt 2 を<b>経由せず</b> controller に直接軌道を渡す経路。ど�
 
   <!-- jsb -->
   <rect class="box" x="40" y="350" width="200" height="64" rx="8" fill="var(--bg)"/>
-  <text x="140" y="376" font-size="12" text-anchor="middle" font-weight="700">joint_state_broadcaster</text>
-  <text x="140" y="396" font-size="11" text-anchor="middle" class="sub">/joint_states を発行</text>
+  <text x="140" y="376" font-size="12" text-anchor="middle" font-weight="700">joint_state_controller</text>
+  <text x="140" y="396" font-size="11" text-anchor="middle" class="sub">JointStateBroadcaster / /joint_states</text>
 
   <!-- rsp -->
   <rect class="box" x="40" y="250" width="200" height="64" rx="8" fill="var(--bg)"/>
@@ -302,6 +302,8 @@ MoveIt 2 を<b>経由せず</b> controller に直接軌道を渡す経路。ど�
   <text x="26" y="500" font-size="11" class="sub">実線: ros2arm 内の通信 / 点線: DDS 越し（ros2-lab-net 経由）。Panda デモは Gazebo を使わず mock ハードウェアで動く。</text>
 </svg>
 </div>
+
+<p class="note">補足: <code>gz_ros2_control</code> 利用時、<code>controller_manager</code> は Gazebo プロセス内（プラグイン）で動く。図では役割を分けるため別ボックスで描いている。controller 名は上流の <code>crane_x7_controllers.yaml</code> に合わせた（<code>joint_state_controller</code> / <code>crane_x7_arm_controller</code> / <code>crane_x7_gripper_controller</code>）。</p>
 
 <h3>2.3 シミュ ⇄ 実機の差し替え点</h3>
 <div class="scroll">

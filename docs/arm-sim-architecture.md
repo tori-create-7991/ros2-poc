@@ -32,7 +32,7 @@ TF・計画シーン）から再構築した像。実機に繋ぎ替えても RV
 
 - gz-sim 系の後継シミュレータ。物理エンジン（既定 DART）、センサ、レンダリング、プラグインを持つ。
 - ROS 2 とは **`ros_gz`（ブリッジ）** と **`gz_ros2_control`（ros2_control のハードウェア層をシミュで置き換えるプラグイン）** で繋がる。
-- アームの関節は Gazebo 側の物理で動き、`joint_state_broadcaster` が `/joint_states` を ROS 2 に流す。
+- アームの関節は Gazebo 側の物理で動き、`joint_state_controller`（型は `JointStateBroadcaster`）が `/joint_states` を ROS 2 に流す。
 - このリポジトリでは Gazebo 本体はベースイメージ（`tiryoh/ros2-desktop-vnc`）に同梱。
   CRANE-X7（`crane_x7_gazebo`）と UR（`ur_simulation_gz`）が Gazebo 上でアームを動かす。
 - 描画は CPU（noVNC 経由）なので重い。デモは同時に 1 つだけ起動する運用にしている。
@@ -149,7 +149,7 @@ flowchart TB
     MG["move_group (MoveIt 2)<br/>Planning Scene / OMPL / IK"]
     CM["ros2_control<br/>controller_manager"]
     JTC["crane_x7_arm_controller<br/>(JointTrajectoryController)"]
-    JSB["joint_state_broadcaster"]
+    JSB["joint_state_controller<br/>(JointStateBroadcaster)"]
     RSP["robot_state_publisher<br/>(URDF → TF)"]
     GZ["Gazebo Harmonic<br/>物理 + 3D ビュー"]
   end
@@ -169,6 +169,11 @@ flowchart TB
   RSP -- "/tf" --> RVIZ
   JSB -. "/joint_states (DDS 越し)" .-> CLIENT
 ```
+
+> 補足: `gz_ros2_control` 利用時、`controller_manager` は Gazebo プロセス内（プラグイン）で動く。
+> 図では役割を分けるため別ボックスで描いている。controller 名は上流の
+> `crane_x7_control/config/crane_x7_controllers.yaml` に合わせた（`joint_state_controller` /
+> `crane_x7_arm_controller` / `crane_x7_gripper_controller`）。
 
 ### 2.3 シミュ ⇄ 実機の差し替え点
 
