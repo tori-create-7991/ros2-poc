@@ -12,6 +12,8 @@ Gazebo / MoveIt 2 / RViz2 の役割、アーキテクチャ図、サービスブ
 [docs/arm-sim-architecture.md](docs/arm-sim-architecture.md)（[HTML 版](docs/arm-sim-architecture.html)）にまとめている。
 noVNC と通常の VNC の比較、GPU 直結（X11 共有 + `--gpus all`）の検討は
 [docs/display-and-gpu.md](docs/display-and-gpu.md) にまとめている。
+Gazebo の仮想カメラを実カメラ（usb_cam / RealSense D435）と同じトピック名・型・フレームで出す
+カメラプロファイルは [docs/sim-camera-profile.md](docs/sim-camera-profile.md) にまとめている。
 
 ## 前提
 

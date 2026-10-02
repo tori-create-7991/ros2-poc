@@ -1,0 +1,305 @@
+"""camera_adapter の結合テスト（rclpy が必要。無ければ skip）。
+gz の代わりに生トピックへ合成メッセージを流し、出力のエンコーディング・frame・stamp を確認する。"""
+import os
+import time
+
+import numpy as np
+import pytest
+
+rclpy = pytest.importorskip('rclpy')
+
+from rclpy.executors import SingleThreadedExecutor  # noqa: E402
+from rclpy.parameter import Parameter  # noqa: E402
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy  # noqa: E402
+from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField  # noqa: E402
+from builtin_interfaces.msg import Time  # noqa: E402
+from tf2_msgs.msg import TFMessage  # noqa: E402
+from rclpy.qos import QoSDurabilityPolicy  # noqa: E402
+
+from ros2_poc_sim.camera_adapter import CameraAdapter  # noqa: E402
+
+RAW = '/sim_camera/realsense_d435/raw'
+STAMP = Time(sec=12, nanosec=300000000)
+REL = QoSProfile(depth=10, reliability=QoSReliabilityPolicy.RELIABLE)
+
+
+@pytest.fixture(scope='module')
+def ctx():
+    saved = {k: os.environ.get(k) for k in ('ROS_DOMAIN_ID', 'ROS_AUTOMATIC_DISCOVERY_RANGE')}
+    os.environ['ROS_DOMAIN_ID'] = '97'   # 稼働中のドメイン（42）に混ざらないよう無条件に上書きする
+    os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] = 'LOCALHOST'
+    rclpy.init()
+    yield
+    rclpy.shutdown()
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
+def _spin(ex, sec=1.5, until=None):
+    end = time.time() + sec
+    while time.time() < end:
+        ex.spin_once(timeout_sec=0.05)
+        if until and until():
+            return
+
+
+def _raw_image(w=4, h=3, enc='rgb8'):
+    m = Image()
+    m.header.stamp = STAMP
+    m.header.frame_id = 'cam/link/sensor'
+    m.height, m.width, m.encoding, m.step = h, w, enc, w * 3
+    m.data = bytes(range(w * h * 3))
+    return m
+
+
+def test_outputs(ctx):
+    adapter = CameraAdapter(parameter_overrides=[Parameter('pointcloud', value=True)])
+    helper = rclpy.create_node('helper')
+    ex = SingleThreadedExecutor()
+    ex.add_node(adapter)
+    ex.add_node(helper)
+
+    got = {}
+
+    def keep(name):
+        return lambda m: got.__setitem__(name, m)
+
+    helper.create_subscription(Image, '/camera/color/image_raw', keep('color'), REL)
+    helper.create_subscription(CameraInfo, '/camera/color/camera_info', keep('cinfo'), REL)
+    helper.create_subscription(Image, '/camera/aligned_depth_to_color/image_raw', keep('depth'), REL)
+    helper.create_subscription(CameraInfo, '/camera/aligned_depth_to_color/camera_info', keep('dinfo'), REL)
+    pub_color = helper.create_publisher(Image, f'{RAW}/image', REL)
+    pub_depth = helper.create_publisher(Image, f'{RAW}/depth_image', REL)
+    pub_info = helper.create_publisher(CameraInfo, f'{RAW}/camera_info', REL)
+
+    # lazy: 購読者が付くと adapter が生トピックを購読し始めるまで待つ
+    _spin(ex, 10.0, until=lambda: len(adapter.subs) >= 3)
+    assert {'color', 'depth', 'info'} <= set(adapter.subs)
+    assert 'points' not in adapter.subs  # 点群の購読者がいない間は購読しない
+
+    depth = Image()
+    depth.header.stamp = STAMP
+    depth.header.frame_id = 'cam/link/sensor'
+    depth.height, depth.width, depth.encoding, depth.step = 1, 3, '32FC1', 12
+    depth.data = np.array([0.5, float('inf'), 1.0], dtype='<f4').tobytes()
+    info = CameraInfo()
+    info.header.stamp = STAMP
+    info.header.frame_id = 'cam/link/sensor'
+
+    for _ in range(20):
+        pub_color.publish(_raw_image())
+        pub_depth.publish(depth)
+        pub_info.publish(info)
+        _spin(ex, 0.1, until=lambda: len(got) == 4)
+        if len(got) == 4:
+            break
+
+    c, d = got['color'], got['depth']
+    assert c.encoding == 'rgb8' and c.header.frame_id == 'camera_color_optical_frame'
+    assert d.encoding == '16UC1' and d.step == 6
+    assert np.frombuffer(bytes(d.data), '<u2').tolist() == [500, 0, 1000]
+    assert d.header.frame_id == 'camera_color_optical_frame'
+    # 3 本が同一 stamp（ExactTime 同期の前提）
+    assert (c.header.stamp == d.header.stamp == got['cinfo'].header.stamp == got['dinfo'].header.stamp == STAMP)
+    ci = got['cinfo']
+    assert list(ci.k)[0] == pytest.approx(462.14) and ci.width == 640 and ci.height == 480
+    assert ci.header.frame_id == 'camera_color_optical_frame'
+    adapter.destroy_node()
+    helper.destroy_node()
+
+
+def test_points_are_rotated_and_framed(ctx):
+    adapter = CameraAdapter(parameter_overrides=[Parameter('pointcloud', value=True)])
+    helper = rclpy.create_node('helper2')
+    ex = SingleThreadedExecutor()
+    ex.add_node(adapter)
+    ex.add_node(helper)
+    got = {}
+    helper.create_subscription(PointCloud2, '/camera/depth/color/points',
+                               lambda m: got.__setitem__('p', m), REL)
+    pub = helper.create_publisher(PointCloud2, f'{RAW}/points', REL)
+    _spin(ex, 10.0, until=lambda: 'points' in adapter.subs)
+    assert 'points' in adapter.subs
+
+    m = PointCloud2()
+    m.header.stamp = STAMP
+    m.header.frame_id = 'cam/link/sensor'
+    m.height, m.width, m.point_step, m.row_step = 1, 1, 24, 24
+    m.fields = [PointField(name=n, offset=o, datatype=7, count=1)
+                for n, o in (('x', 0), ('y', 4), ('z', 8), ('rgb', 16))]
+    raw = np.zeros(24, np.uint8)
+    raw[0:12] = np.array([2.0, 0.5, 0.25], dtype='<f4').view(np.uint8)
+    m.data = raw.tobytes()
+    for _ in range(20):
+        pub.publish(m)
+        _spin(ex, 0.1, until=lambda: 'p' in got)
+        if 'p' in got:
+            break
+    out = got['p']
+    xyz = np.frombuffer(bytes(out.data), '<f4')[:3]
+    assert xyz.tolist() == [-0.5, -0.25, 2.0]
+    assert out.header.frame_id == 'camera_color_optical_frame'
+    adapter.destroy_node()
+    helper.destroy_node()
+
+
+def test_static_tf_published(ctx):
+    helper = rclpy.create_node('helper3')
+    frames = []
+    helper.create_subscription(
+        TFMessage, '/tf_static',
+        lambda m: frames.extend((x.header.frame_id, x.child_frame_id) for x in m.transforms),
+        QoSProfile(depth=100, reliability=QoSReliabilityPolicy.RELIABLE,
+                   durability=QoSDurabilityPolicy.TRANSIENT_LOCAL))
+    adapter = CameraAdapter(parameter_overrides=[Parameter('placement', value='fixed_near_top')])
+    ex = SingleThreadedExecutor()
+    ex.add_node(helper)
+    ex.add_node(adapter)
+    _spin(ex, 10.0, until=lambda: ('camera_color_frame', 'camera_color_optical_frame') in frames)
+    assert ('base_link', 'camera_link') in frames
+    assert ('camera_link', 'camera_color_frame') in frames
+    assert ('camera_color_frame', 'camera_color_optical_frame') in frames
+    adapter.destroy_node()
+    helper.destroy_node()
+
+
+def _make_adapter(profile, **extra):
+    params = [Parameter('profile', value=profile)] + [Parameter(k, value=v) for k, v in extra.items()]
+    return CameraAdapter(parameter_overrides=params)
+
+
+def test_usb_cam_profile_has_no_depth_and_passes_pixels(ctx):
+    adapter = _make_adapter('usb_cam')
+    helper = rclpy.create_node('helper4')
+    ex = SingleThreadedExecutor()
+    ex.add_node(adapter)
+    ex.add_node(helper)
+    got = {}
+    helper.create_subscription(Image, '/image_raw', lambda m: got.__setitem__('c', m), REL)
+    helper.create_subscription(CameraInfo, '/camera_info', lambda m: got.__setitem__('i', m), REL)
+    pub = helper.create_publisher(Image, '/sim_camera/usb_cam/raw/image', REL)
+    pub_i = helper.create_publisher(CameraInfo, '/sim_camera/usb_cam/raw/camera_info', REL)
+    _spin(ex, 10.0, until=lambda: len(adapter.subs) >= 2)
+    assert set(adapter.subs) == {'color', 'info'}     # depth / points は存在しない
+    src = _raw_image()
+    info = CameraInfo()
+    info.header.stamp = STAMP
+    for _ in range(20):
+        pub.publish(src)
+        pub_i.publish(info)
+        _spin(ex, 0.1, until=lambda: len(got) == 2)
+        if len(got) == 2:
+            break
+    assert bytes(got['c'].data) == bytes(src.data)               # ピクセルはそのまま
+    assert got['c'].encoding == 'rgb8'
+    assert got['c'].header.frame_id == 'camera'
+    assert got['i'].header.frame_id == 'camera' and list(got['i'].k)[0] == pytest.approx(438.78)
+    adapter.destroy_node()
+    helper.destroy_node()
+
+
+def test_each_output_keeps_its_own_input_stamp(ctx):
+    adapter = _make_adapter('realsense_d435')
+    helper = rclpy.create_node('helper5')
+    ex = SingleThreadedExecutor()
+    ex.add_node(adapter)
+    ex.add_node(helper)
+    got = {}
+    helper.create_subscription(Image, '/camera/color/image_raw', lambda m: got.__setitem__('c', m), REL)
+    helper.create_subscription(Image, '/camera/aligned_depth_to_color/image_raw',
+                               lambda m: got.__setitem__('d', m), REL)
+    pc = helper.create_publisher(Image, f'{RAW}/image', REL)
+    pd = helper.create_publisher(Image, f'{RAW}/depth_image', REL)
+    _spin(ex, 10.0, until=lambda: len(adapter.subs) >= 2)
+    color = _raw_image()
+    color.header.stamp = Time(sec=1, nanosec=1)
+    depth = Image()
+    depth.header.stamp = Time(sec=2, nanosec=2)
+    depth.height, depth.width, depth.encoding, depth.step = 1, 1, '32FC1', 4
+    depth.data = np.array([1.0], dtype='<f4').tobytes()
+    for _ in range(20):
+        pc.publish(color)
+        pd.publish(depth)
+        _spin(ex, 0.1, until=lambda: len(got) == 2)
+        if len(got) == 2:
+            break
+    assert got['c'].header.stamp.sec == 1 and got['d'].header.stamp.sec == 2
+    adapter.destroy_node()
+    helper.destroy_node()
+
+
+def test_malformed_messages_are_dropped_not_fatal(ctx):
+    adapter = _make_adapter('realsense_d435')
+    helper = rclpy.create_node('helper6')
+    ex = SingleThreadedExecutor()
+    ex.add_node(adapter)
+    ex.add_node(helper)
+    got = []
+    helper.create_subscription(Image, '/camera/aligned_depth_to_color/image_raw', got.append, REL)
+    pd = helper.create_publisher(Image, f'{RAW}/depth_image', REL)
+    _spin(ex, 10.0, until=lambda: 'depth' in adapter.subs)
+    bad = Image()
+    bad.header.stamp = STAMP
+    bad.height, bad.width, bad.encoding, bad.step = 4, 4, '32FC1', 16
+    bad.data = b'\x00' * 7                    # 大きさが合わない
+    wrong_enc = Image()
+    wrong_enc.header.stamp = STAMP
+    wrong_enc.height, wrong_enc.width, wrong_enc.encoding, wrong_enc.step = 1, 1, 'rgb8', 3
+    wrong_enc.data = b'\x00\x00\x00'
+    good = Image()
+    good.header.stamp = STAMP
+    good.height, good.width, good.encoding, good.step = 1, 1, '32FC1', 4
+    good.data = np.array([0.5], dtype='<f4').tobytes()
+    for _ in range(3):
+        pd.publish(bad)
+        pd.publish(wrong_enc)
+        _spin(ex, 0.1)
+    for _ in range(20):
+        pd.publish(good)
+        _spin(ex, 0.1, until=lambda: bool(got))
+        if got:
+            break
+    assert got and np.frombuffer(bytes(got[0].data), '<u2').tolist() == [500]  # 壊れた入力の後も動く
+    adapter.destroy_node()
+    helper.destroy_node()
+
+
+def test_nested_ns_mode_topics(ctx):
+    adapter = _make_adapter('realsense_d435', ns_mode='nested')
+    names = {t for t, _ in adapter.get_publisher_names_and_types_by_node('camera_adapter', '/')}
+    assert '/camera/camera/color/image_raw' in names
+    adapter.destroy_node()
+
+
+def test_lazy_subscription_is_released_when_subscribers_leave(ctx):
+    adapter = _make_adapter('usb_cam', lazy_poll_sec=0.2)
+    helper = rclpy.create_node('helper7')
+    ex = SingleThreadedExecutor()
+    ex.add_node(adapter)
+    ex.add_node(helper)
+    sub = helper.create_subscription(Image, '/image_raw', lambda m: None, REL)
+    _spin(ex, 10.0, until=lambda: 'color' in adapter.subs)
+    assert 'color' in adapter.subs
+    helper.destroy_subscription(sub)
+    _spin(ex, 10.0, until=lambda: 'color' not in adapter.subs)
+    assert 'color' not in adapter.subs          # 購読者がいなくなれば生トピックの購読も止める
+    adapter.destroy_node()
+    helper.destroy_node()
+
+
+def test_no_frames_warning_is_raised_once(ctx):
+    adapter = _make_adapter('usb_cam', lazy_poll_sec=0.2)
+    helper = rclpy.create_node('helper8')
+    ex = SingleThreadedExecutor()
+    ex.add_node(adapter)
+    ex.add_node(helper)
+    helper.create_subscription(Image, '/image_raw', lambda m: None, REL)
+    _spin(ex, 10.0, until=lambda: 'color' in adapter.subs)
+    adapter._sub_started['color'] -= 11.0        # 10 秒経過したことにする
+    _spin(ex, 3.0, until=lambda: 'color' in adapter._warned)
+    assert 'color' in adapter._warned
+    adapter.destroy_node()
+    helper.destroy_node()

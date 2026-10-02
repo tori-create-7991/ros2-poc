@@ -1,0 +1,66 @@
+schema: 1
+name: realsense_d435
+description: Intel RealSense D435 の realsense-ros(Jazzy 4.58.4) 互換。公式 crane_x7_examples が購読する形。
+based_on:
+  driver: realsense2_camera
+  version: "4.58.4"
+  source: .research/sim-camera-profile_20261002/01a#3, 03
+  verified: source-read        # 実機未検証（実機入手後に確認）
+
+sensor:
+  gz_type: rgbd_camera
+  width: 640
+  height: 480
+  fps: 10                      # 上限。CPU 描画のため実効 6〜7Hz
+  clip: {near: 0.2, far: 6.0}  # 暫定
+  noise: null                  # 深度ノイズ・欠けは再現しない
+
+intrinsics:
+  provisional: true            # 公称 HFOV 69.4° から逆算。640x480 の実効 fx は未確認
+  fx: 462.14
+  fy: 462.14
+  cx: 320.0
+  cy: 240.0
+  distortion_model: plumb_bob
+  d: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+frames:
+  camera_link: camera_link
+  color: camera_color_frame
+  color_optical: camera_color_optical_frame
+  depth: camera_depth_frame
+  depth_optical: camera_depth_optical_frame
+  aligned_depth: camera_aligned_depth_to_color_frame
+
+tf:                            # realsense2_description の公称値。校正値ではない
+  publish: true
+  links:
+    - {parent: camera_link, child: camera_depth_frame, xyz: [0, 0, 0], rpy: [0, 0, 0]}
+    - {parent: camera_link, child: camera_color_frame, xyz: [0, 0.015, 0], rpy: [0, 0, 0]}
+    - {parent: camera_link, child: camera_aligned_depth_to_color_frame, xyz: [0, 0.015, 0], rpy: [0, 0, 0]}
+    - {parent: camera_depth_frame, child: camera_depth_optical_frame, xyz: [0, 0, 0], rpy: [-1.5707963267948966, 0, -1.5707963267948966]}
+    - {parent: camera_color_frame, child: camera_color_optical_frame, xyz: [0, 0, 0], rpy: [-1.5707963267948966, 0, -1.5707963267948966]}
+  gz_sensor_frame: color       # Gazebo センサを置く位置 = camera_color_frame
+
+topics:
+  root: /camera
+  ns_mode: flat                # flat: /camera/...（公式例） / nested: /camera/camera/...（Jazzy apt の既定）
+  streams:
+    color_image:        {source: color,      name: color/image_raw,                    type: sensor_msgs/msg/Image,       encoding: rgb8,  frame: color_optical, transform: passthrough}
+    color_info:         {source: info_color, name: color/camera_info,                  type: sensor_msgs/msg/CameraInfo,                   frame: color_optical}
+    aligned_depth:      {source: depth,      name: aligned_depth_to_color/image_raw,   type: sensor_msgs/msg/Image,       encoding: 16UC1, frame: color_optical, transform: depth_to_16uc1_mm}
+    aligned_depth_info: {source: info_depth, name: aligned_depth_to_color/camera_info, type: sensor_msgs/msg/CameraInfo,                  frame: color_optical}
+    points:             {source: points,     name: depth/color/points,                 type: sensor_msgs/msg/PointCloud2,                  frame: color_optical, transform: points_to_optical, enabled_by: pointcloud.enable}
+
+qos:
+  image:  {reliability: reliable, depth: 10}
+  info:   {reliability: reliable, depth: 10}
+  points: {reliability: reliable, depth: 2}   # 7.4MB/枚。公式 point_cloud_detection は RELIABLE で購読するので best_effort にはできない。depth だけ絞って滞留を抑える
+
+compressed: [color_image]
+
+not_reproduced:
+  - 露出・ゲイン・ホワイトバランス（enable_auto_exposure ほか）
+  - depth/image_rect_raw（非整列の深度。FOV が色と異なる。第 1 弾は出さない）
+  - infra1/infra2、IMU（D435i の gyro/accel/imu）、extrinsics、metadata、rgbd
+  - 深度の欠け・ノイズ・ホールフィリング等のフィルタ、USB の挙動

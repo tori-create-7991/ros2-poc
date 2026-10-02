@@ -9,3 +9,8 @@ workspace/*
 .worktrees
 .logs
 mise.toml
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
