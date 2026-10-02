@@ -34,9 +34,12 @@ services:
       context: .
       dockerfile: Dockerfile.arm
     container_name: ros2arm
-    # noVNC。LAN には出さずホストのローカルからのみ接続させる
+    # noVNC (6080) とネイティブ VNC (5901)。どちらも LAN には出さずホストのローカルからのみ接続させる。
+    # VNC はコンテナ側 5900（Dockerfile.arm の socat ブリッジ）。ホスト側を 5901 にしているのは、
+    # macOS の画面共有サーバー（既定 5900）と衝突させないため。
     ports:
       - "127.0.0.1:6080:80"
+      - "127.0.0.1:5901:5900"
     # Gazebo / RViz が共有メモリを使うため既定の 64MB では不足する
     shm_size: 512m
     # ROS_DOMAIN_ID / ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET は Dockerfile.arm 側で設定済み。
