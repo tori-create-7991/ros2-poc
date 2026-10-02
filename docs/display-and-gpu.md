@@ -33,7 +33,7 @@ noVNC は「ブラウザで動く VNC クライアント + websockify（WebSocke
 - 自分専用で快適に使いたい → 通常の VNC（`127.0.0.1` 限定）
 - どちらでも CPU 描画の重さは残る。根本対策は次節の GPU 直結
 
-両対応にする作業は別セッションで進行中（compose に `127.0.0.1` 限定の VNC ポートを追加し、noVNC は残す）。
+noVNC と通常の VNC は両対応している（compose で `127.0.0.1` 限定の VNC ポートを公開し、noVNC も残している）。
 
 ## 3. GPU 直結（X11 共有 + `--gpus all`）
 
@@ -55,13 +55,13 @@ noVNC は「ブラウザで動く VNC クライアント + websockify（WebSocke
 
 | 項目 | 内容 |
 |---|---|
-| ホスト OS | **Linux 必須**。Mac + Colima は GPU パススルーがないため不可 |
+| ホスト OS | **Linux 必須**。macOS 上の Docker VM（Colima 等）は GPU パススルーがないため不可 |
 | GPU | NVIDIA が事実上前提。AMD / Intel は `--device /dev/dri` + Mesa の別方式 |
 | ドライバ | ホストに NVIDIA ドライバ + Container Toolkit |
 | ディスプレイ | ホストに X サーバーが必要。ヘッドレスなら仮想 X を別途用意 |
-| アーキテクチャ | NVIDIA 構成は amd64 前提。現行イメージの動作確認は arm64（Colima）のみ |
+| アーキテクチャ | NVIDIA 構成は amd64 前提。現行イメージの動作確認は arm64（macOS 上の Colima）のみ |
 
-**現在の Mac + Colima 運用では実現できない。** Linux + NVIDIA のホストを用意する場合の話。
+**macOS + Colima 構成では実現できない。** Linux + NVIDIA のホストを用意する場合の話。
 
 ### 3.3 メリット
 
@@ -84,7 +84,7 @@ noVNC は「ブラウザで動く VNC クライアント + websockify（WebSocke
 | 現状維持（CPU 描画、デモは 1 つずつ） | なし | 遅いが動く |
 | Colima の CPU / メモリを増やす | 小 | CPU 描画が多少改善 |
 | Linux + NVIDIA マシンで X11 共有 | 中〜大 | 描画は快適。隔離方針が弱まる |
-| クラウド GPU（Linux VM）に置き、Sunshine 等で配信 | 大 | 手元の Mac から快適に使える。費用が出る |
+| クラウド GPU（Linux VM）に置き、Sunshine 等で配信 | 大 | 手元の PC から快適に使える。費用が出る |
 
 重さが実用上の問題になるまでは、現状維持（デモを 1 つずつ起動）で足りる。
 問題になった時点で、Linux GPU ホストを用意するかを決める。
