@@ -27,6 +27,7 @@ setup(
         'console_scripts': [
             'camera_adapter = ros2_poc_sim.camera_adapter:main',
             'contract_check = ros2_poc_sim.contract_check:main',
+            'gz_setup = ros2_poc_sim.gz_setup:main',
         ],
     },
 )
