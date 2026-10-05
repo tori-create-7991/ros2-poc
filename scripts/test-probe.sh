@@ -18,14 +18,15 @@ no_() { if "$@"; then fail "偽のはずが真: $*"; fi; }
 # --- 数値・文字列の述語 ---
 yes_ eq a a; no_ eq a b
 yes_ gt_zero 3; no_ gt_zero 0; no_ gt_zero ""; no_ gt_zero abc
-yes_ le 90 91; no_ le 92 91; no_ le abc 91
+yes_ le 90 91; yes_ le 91 91; no_ le 92 91; no_ le abc 91
 yes_ nonempty_and_differ x y; no_ nonempty_and_differ "" y; no_ nonempty_and_differ x x
-yes_ bash_ge14 "cert=89 crl=179"; no_ bash_ge14 "cert=13 crl=179"; no_ bash_ge14 "cert=89 crl=3"; no_ bash_ge14 ""
+yes_ bash_ge14 "cert=89 crl=179"; yes_ bash_ge14 "cert=14 crl=14"   # 境界（14 日ちょうどは通る）
+no_ bash_ge14 "cert=13 crl=179"; no_ bash_ge14 "cert=89 crl=3"; no_ bash_ge14 "cert=14 crl=13"; no_ bash_ge14 ""
 
 # --- publisher の起動と拒否の判定 ---
 echo "PUB_UP" > "$TMP/up.log"
 : > "$TMP/down.log"
-yes_ pub_started "$TMP/up.log"; no_ pub_started "$TMP/down.log"; no_ pub_started "$TMP/none.log"
+yes_ pub_started "$TMP/up.log"; no_ pub_started "$TMP/down.log"; no_ pub_started "$TMP/none.log"; no_ pub_started ""
 # 0 件受信でも、publisher が起動していなければ「拒否された」とは言わない（空振りを防ぐ）
 yes_ rejected 0 "$TMP/up.log"
 no_ rejected 0 "$TMP/down.log"
@@ -53,6 +54,8 @@ yes_ gov_ok "$GOV_OK"
 no_ gov_ok "${GOV_OK//false/true}"                          # 未認証を許可
 no_ gov_ok "${GOV_OK//rtps_protection_kind>ENCRYPT/rtps_protection_kind>NONE}"   # RTPS 保護なし
 no_ gov_ok "${GOV_OK//rtps_protection_kind>ENCRYPT/rtps_protection_kind>SIGN}"   # 暗号化まで行っていない
+no_ gov_ok "${GOV_OK//discovery_protection_kind>ENCRYPT/discovery_protection_kind>SIGN}"   # discovery が暗号化されていない
+no_ gov_ok "${GOV_OK//discovery_protection_kind>ENCRYPT/discovery_protection_kind>NONE}"
 no_ gov_ok "$GOV_OK
 <data_protection_kind>NONE</data_protection_kind>"          # 保護なしのトピックがある
 

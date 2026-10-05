@@ -14,8 +14,8 @@ le() { [ "$1" -le "$2" ] 2>/dev/null; }
 # 空でなく、2 つが異なる
 nonempty_and_differ() { [ -n "$1" ] && [ "$1" != "$2" ]; }
 
-# publisher が起動できたか（ログに PUB_UP が出ている）。引数がなければ LAST_PUB_LOG
-pub_started() { grep -q PUB_UP "${1:-${LAST_PUB_LOG:-/dev/null}}" 2>/dev/null; }
+# publisher が起動できたか（ログに PUB_UP が出ている）。 pub_started <publisher のログ>
+pub_started() { [ -n "${1:-}" ] && grep -q PUB_UP "$1" 2>/dev/null; }
 
 # 拒否された: 受信が 0 件で、publisher は起動できていた（起動していないための 0 件を除く）。
 #   rejected <受信数> <publisher のログ>

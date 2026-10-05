@@ -8,9 +8,11 @@
 #   - ROS_SECURITY_ENABLE は大文字小文字を区別せず true を有効とみなす。true / false / 空以外は拒否する
 #     （ros2 側が有効と解釈する値を、ここで見逃さないため）。
 #   - 鍵ファイルは空でないこと（空ファイルを弾く）。
-#   - SROS2_REQUIRE_CRL=true のとき（環境 c）は crl.pem も必須。
+#   - SROS2_REQUIRE_CRL=true のとき（環境 c）は crl.pem も必須。true / false / 空以外は拒否する。
 # SROS2_SRC / SROS2_DST / SROS2_NEXT はテスト用の上書き。
 set -eu
+# 作るディレクトリ・ファイルを自分だけが読める権限にする（途中のディレクトリも 0700）
+umask 077
 
 SRC="${SROS2_SRC:-/sros2/src}"
 DST="${SROS2_DST:-/run/sros2/keystore}"
@@ -28,6 +30,8 @@ case "$enable" in
     required="cert.pem key.pem identity_ca.cert.pem permissions_ca.cert.pem governance.p7s permissions.p7s"
     case "$(printf '%s' "${SROS2_REQUIRE_CRL:-}" | tr '[:upper:]' '[:lower:]')" in
       true) required="$required crl.pem" ;;
+      "" | false) ;;
+      *) die "SROS2_REQUIRE_CRL の値が不正: '${SROS2_REQUIRE_CRL:-}'（true / false か未設定にすること）" ;;
     esac
     for f in $required; do
       [ -s "$SRC/$f" ] || die "$SRC/$f が無い、または空。鍵が揃っていないため起動しない。"

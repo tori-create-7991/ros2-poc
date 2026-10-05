@@ -84,9 +84,9 @@ verify_c() {
   local ea="$ks/ros2lab_a" eb="$ks/ros2lab_b"
 
   check C1 "ros2lab-a/b の環境ラベルが c" eq "$(label_of "$LAB_A")$(label_of "$LAB_B")" "cc"
-  check C2 "ros2lab-a/b とも STRATEGY=Enforce / ENABLE=true / RMW=rmw_fastrtps_cpp" eq \
-    "$(env_of "$LAB_A" ROS_SECURITY_STRATEGY)/$(env_of "$LAB_A" ROS_SECURITY_ENABLE)/$(env_of "$LAB_A" RMW_IMPLEMENTATION) $(env_of "$LAB_B" ROS_SECURITY_STRATEGY)/$(env_of "$LAB_B" ROS_SECURITY_ENABLE)/$(env_of "$LAB_B" RMW_IMPLEMENTATION)" \
-    "Enforce/true/rmw_fastrtps_cpp Enforce/true/rmw_fastrtps_cpp"
+  check C2 "ros2lab-a/b とも STRATEGY=Enforce / ENABLE=true / RMW=rmw_fastrtps_cpp / REQUIRE_CRL=true（鍵と CRL が無ければ起動しない）" eq \
+    "$(env_of "$LAB_A" ROS_SECURITY_STRATEGY)/$(env_of "$LAB_A" ROS_SECURITY_ENABLE)/$(env_of "$LAB_A" RMW_IMPLEMENTATION)/$(env_of "$LAB_A" SROS2_REQUIRE_CRL) $(env_of "$LAB_B" ROS_SECURITY_STRATEGY)/$(env_of "$LAB_B" ROS_SECURITY_ENABLE)/$(env_of "$LAB_B" RMW_IMPLEMENTATION)/$(env_of "$LAB_B" SROS2_REQUIRE_CRL)" \
+    "Enforce/true/rmw_fastrtps_cpp/true Enforce/true/rmw_fastrtps_cpp/true"
 
   # 正規の通信
   pub_bg "$LAB_A" "$TOPIC_STATE" 14
@@ -119,7 +119,7 @@ verify_c() {
     fi
   done
   # 期限切れ: 期限内に提示側を起動し、期限（EXPIRES_EPOCH）を過ぎてから検証側を起動する
-  must_gen_rogue c expired 60 || return 1
+  must_gen_rogue c expired 90 || return 1
   local EXPIRES_EPOCH=""
   # shellcheck disable=SC1091
   . sros2/rogue/c/expired/meta.env
@@ -246,7 +246,7 @@ probe_B_AU_05() {
   sleep 3
   r="$(sub_run "$LAB_A" "$TOPIC_STATE" 7)"
   wait
-  pub_started || return 1
+  pub_started "$LAST_PUB_LOG" || return 1
   gt_zero "${r%% *}" || return 1
   # shellcheck disable=SC2046
   pub_bg "$DIAG" "$TOPIC_STATE" 14 $(rogue_args b wrongca /lab/shared)

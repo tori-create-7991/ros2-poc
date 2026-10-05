@@ -65,7 +65,8 @@ grep -q "ENV SROS2_ENV=a" <<<"$LOG" || fail "a: SROS2_ENV=a が渡らない: $LO
 
 # (b) b / c → override と SROS2_ENV と戦略が渡る
 # keystore の置き場は <SROS2_KEYSTORE_ROOT>/<env>
-run_case "" "$TMP/keystores" b
+# 呼び出し元に SROS2_REQUIRE_CRL=true が残っていても、環境 b には渡らない
+SROS2_REQUIRE_CRL=true run_case "" "$TMP/keystores" b
 [ "$RC" -eq 0 ] || fail "b: exit 0 のはずが $RC: $ERR"
 grep -q -- "-f docker-compose.yml -f docker-compose.sros2.yml" <<<"$LOG" || fail "b: override が付かない: $LOG"
 grep -q "ENV SROS2_ENV=b SROS2_STRATEGY=Permissive" <<<"$LOG" || fail "b: SROS2_ENV/STRATEGY が違う: $LOG"

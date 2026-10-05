@@ -55,7 +55,7 @@ pub_bg() {
   # 「0 件 = 拒否」と誤判定するのを防ぐ。プロセスが終わった（起動に失敗した）ときは待たない。最大 60 秒
   local pid=$!
   for _ in $(seq 1 120); do
-    grep -q PUB_UP "$LAST_PUB_LOG" 2>/dev/null && break
+    pub_started "$LAST_PUB_LOG" && break
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.5
   done

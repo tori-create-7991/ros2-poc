@@ -49,6 +49,8 @@ esac
 
 export SROS2_ENV="$ENV_NAME"
 export SROS2_KEYSTORE_ROOT="$KS_ROOT"
+# 呼び出し元の環境に残っていても、環境 b に crl.pem の要求が渡らないようにする（c のときだけ下で設定する）
+unset SROS2_REQUIRE_CRL
 
 # 診断コンテナが mount する場所。無いと docker が root 所有の空ディレクトリを作ってしまう
 mkdir -p sros2/rogue

@@ -27,11 +27,28 @@ CA_OUT="$BASE/ca-private/$ENV_NAME"
 ROGUE_OUT="$BASE/rogue/$ENV_NAME"
 [ -f "$POLICY" ] || { echo "policy が無い: $POLICY" >&2; exit 1; }
 
+# 相対パスだと、このあと cd したときに STAGE などの指す先が変わる。絶対パスだけを受け付ける
+case "$BASE" in /*) ;; *) echo "sros2 ディレクトリは絶対パスで渡すこと: $BASE" >&2; exit 2 ;; esac
+case "$WORKSPACE_DIR" in "" | /*) ;; *) echo "workspace ディレクトリは絶対パスで渡すこと: $WORKSPACE_DIR" >&2; exit 2 ;; esac
+
 # 出力は同じファイルシステム上の一時ディレクトリ（STAGE）に作ってから入れ替える。中断しても残さない
 STAGE="$BASE/.stage-$ENV_NAME"
 OLD="$BASE/.old-$ENV_NAME"
+LOCK="$BASE/.lock-$ENV_NAME"
+
+# 同じ環境の生成が同時に走ると、STAGE や OLD を壊し合うので排他する
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "別の生成が実行中（$LOCK がある）。残骸なら削除してから再実行すること。" >&2
+  exit 1
+fi
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK" "$STAGE"' EXIT
+trap 'rm -rf "$WORK" "$STAGE" "$LOCK"' EXIT
+
+# 前回の入れ替えが途中で失敗していると、旧データが OLD に残っている。黙って消さずに中止する
+if [ -e "$OLD" ]; then
+  echo "$OLD がある。前回の入れ替えが途中で失敗している。中身（旧の keystore / ca-private / rogue）を元の場所へ戻すか、不要なら削除してから再実行すること。" >&2
+  exit 1
+fi
 
 # 環境 b は ./workspace に鍵のコピーを置く（B-AU-07）。同名の別のディレクトリがあるなら、何もせず中止する
 if [ "$ENV_NAME" = "b" ] && [ -n "$WORKSPACE_DIR" ] \
@@ -191,7 +208,7 @@ fi
 FINAL_KS="$KS_OUT"
 FINAL_CA="$CA_OUT"
 FINAL_ROGUE="$ROGUE_OUT"
-rm -rf "$STAGE" "$OLD"
+rm -rf "$STAGE"
 KS_OUT="$STAGE/keystores"
 CA_OUT="$STAGE/ca-private"
 ROGUE_OUT="$STAGE/rogue"
@@ -234,31 +251,59 @@ chmod -R go-rwx "$CA_OUT"
 # 失効済みの不正証明書（診断コンテナだけに渡す）
 cp -r "$WORK/rogue-revoked" "$ROGUE_OUT/revoked"
 
-# 入れ替え（ここまで来たら全部できている）。旧ディレクトリは .old へ退避してから新しいものを入れ、最後に消す
-swap() { # <最終の場所> <新しいもの> <退避名>
-  mkdir -p "$OLD" "$(dirname "$1")"
-  if [ -e "$1" ]; then mv "$1" "$OLD/$3"; fi
-  mv "$2" "$1"
+# 入れ替え（ここまで来たら全部できている）。旧ディレクトリは OLD へ退避してから新しいものを入れる。
+# 途中で失敗したら、入れた新しいものを消して、退避した旧を元の場所へ戻す（keystore と ca-private が食い違わないように）
+final_of() { case "$1" in ks) echo "$FINAL_KS" ;; ca) echo "$FINAL_CA" ;; rogue) echo "$FINAL_ROGUE" ;; esac; }
+new_of() { case "$1" in ks) echo "$KS_OUT" ;; ca) echo "$CA_OUT" ;; rogue) echo "$ROGUE_OUT" ;; esac; }
+MOVED=""  # 旧を OLD へ退避した名前
+DONE=""   # 新しいものを入れた名前
+swap_one() {
+  # SROS2_TEST_FAIL_SWAP=<ks|ca|rogue> は、その名前の入れ替えを失敗させる（復元のテスト用。通常は使わない）
+  [ "${SROS2_TEST_FAIL_SWAP:-}" != "$1" ] || return 1
+  local name="$1" f n
+  f="$(final_of "$name")"
+  n="$(new_of "$name")"
+  mkdir -p "$(dirname "$f")"
+  if [ -e "$f" ]; then
+    mv "$f" "$OLD/$name" || return 1
+    MOVED="$MOVED $name"
+  fi
+  mv "$n" "$f" || return 1
+  DONE="$DONE $name"
 }
-swap "$FINAL_KS" "$KS_OUT" ks
-swap "$FINAL_CA" "$CA_OUT" ca
-swap "$FINAL_ROGUE" "$ROGUE_OUT" rogue
+rollback() {
+  local name
+  for name in $DONE; do rm -rf "$(final_of "$name")"; done
+  for name in $MOVED; do mv "$OLD/$name" "$(final_of "$name")"; done
+  rmdir "$OLD" 2>/dev/null || true
+}
+if ! { mkdir -p "$OLD" && swap_one ks && swap_one ca && swap_one rogue; }; then
+  echo "keystore の入れ替えに失敗した。元に戻す。" >&2
+  rollback
+  exit 1
+fi
 rm -rf "$OLD"
 
 # ./workspace の鍵のコピーは、入れ替えのあとに触る（途中で失敗しても keystore と食い違わないように）。
 # 目印ファイルがあるもの（このスクリプトが作ったもの）だけを消す・作り直す
 if [ -n "$WORKSPACE_DIR" ]; then
   ws="$WORKSPACE_DIR/sros2-keystore"
+  # 共有領域（全コンテナから書き込める）なので、シンボリックリンクを置かれていたら辿らずに中止する
+  if [ -L "$ws" ]; then
+    echo "$ws がシンボリックリンク。辿らずに中止する。手で確認して削除すること。" >&2
+    exit 1
+  fi
   if [ "$ENV_NAME" = "c" ] && [ -f "$ws/.sros2-generated" ]; then
     # 環境 c では、環境 b が置いた鍵のコピーが全コンテナから読めてしまうため消す
-    rm -rf "$ws"
+    rm -rf "$ws" || { echo "$ws を削除できなかった。手で削除すること（環境 c では全コンテナから読めてしまう）。" >&2; exit 1; }
   elif [ "$ENV_NAME" = "b" ]; then
-    rm -rf "$ws"
+    rm -rf "$ws" || { echo "$ws を削除できなかった。手で削除してから再実行すること。" >&2; exit 1; }
     mkdir -p "$ws"
+    # 目印を先に置く。コピーの途中で失敗しても、up-env.sh と環境 c の生成が消せるように
+    : > "$ws/.sros2-generated"
     cp -r "$FINAL_KS/containers/ros2lab-a/." "$ws/"
     chmod 0755 "$ws"
     chmod 0644 "$ws"/*
-    : > "$ws/.sros2-generated"
   fi
 fi
 

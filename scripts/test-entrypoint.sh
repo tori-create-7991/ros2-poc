@@ -81,6 +81,7 @@ for bad in "" "../x" "relative/path" "/lab/a b" "/"; do
   printf 'PLACE_AT=%s\n' "$bad" > "$TMP/badplace/enclave.env"
   run "$TMP/badplace" ROS_SECURITY_ENABLE=true
   [ "$RC" -eq 1 ] || fail "PLACE_AT='$bad': exit 1 のはずが $RC"
+  grep -q "PLACE_AT" <<<"$ERR" || fail "PLACE_AT='$bad': stderr に PLACE_AT が無い（別の理由で失敗している）: $ERR"
 done
 : > "$TMP/badplace/enclave.env"
 run "$TMP/badplace" ROS_SECURITY_ENABLE=true
@@ -94,6 +95,17 @@ run "$TMP/nocrl" ROS_SECURITY_ENABLE=true SROS2_REQUIRE_CRL=true
 grep -q "crl.pem" <<<"$ERR" || fail "crl.pem 欠け: stderr に crl.pem が無い: $ERR"
 run "$TMP/nocrl" ROS_SECURITY_ENABLE=true
 [ "$RC" -eq 0 ] || fail "crl.pem なし（要求なし）: exit 0 のはずが $RC: $ERR"
+run "$TMP/nocrl" ROS_SECURITY_ENABLE=true SROS2_REQUIRE_CRL=false
+[ "$RC" -eq 0 ] || fail "REQUIRE_CRL=false: exit 0 のはずが $RC: $ERR"
+# REQUIRE_CRL の不正値（1 や typo）は「不要」扱いにせず拒否する
+for v in 1 ture yes; do
+  run "$TMP/nocrl" ROS_SECURITY_ENABLE=true SROS2_REQUIRE_CRL=$v
+  [ "$RC" -eq 1 ] || fail "REQUIRE_CRL=$v: exit 1 のはずが $RC"
+  grep -q "SROS2_REQUIRE_CRL" <<<"$ERR" || fail "REQUIRE_CRL=$v: 不正の説明が無い: $ERR"
+done
+# 4g) 途中のディレクトリも 0700（umask 077）
+run "$TMP/full" ROS_SECURITY_ENABLE=true
+[ "$(mode "$TMP/dst/enclaves/lab")" = "700" ] || fail "途中のディレクトリが 0700 でない: $(mode "$TMP/dst/enclaves/lab")"
 
 # 5) SROS2 無効 → 鍵が無くても素通し
 run "$TMP/none"

@@ -23,7 +23,7 @@ jobs:
           bash scripts/test-probe.sh
       - name: SROS2 ledger check
         run: |
-          python3 -c 'import yaml' || sudo apt-get install -y python3-yaml
+          python3 -c 'import yaml' || (sudo apt-get update && sudo apt-get install -y python3-yaml)
           bash scripts/sros2/check-ledger.sh
           bash scripts/sros2/check-ledger.sh --selftest
       - name: python syntax

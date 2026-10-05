@@ -7,7 +7,7 @@
 検査する内容:
   - 必須欄、ID の形式と重複、列挙値、根拠が 1 件以上あること
   - coupled_with が存在する ID を指していること
-  - ground_truth_probe が scripts/verify-env.sh に関数として存在すること
+  - ground_truth_probe が scripts/verify-env.sh か scripts/sros2/lib/*.sh に関数として存在すること
   - expected-results.yaml の環境 b が台帳と矛盾しないこと（台帳の check が FAIL で、because に ID があること）
   - 公開リポジトリに置いてはいけない語（個人パス・私的アドレス・外部サービスの URL。社内資料由来の名称は局所ファイルから読む）が含まれないこと
   - docs/sros2/defect-ledger.md が台帳から生成した内容と一致すること（ファイルがある場合）
@@ -68,7 +68,9 @@ def check(root: Path) -> list:
     ledger, expected = load(root)
     defects = ledger.get("defects", [])
     ids = [d.get("id") for d in defects]
-    verify = (root / "scripts/verify-env.sh").read_text(encoding="utf-8") if (root / "scripts/verify-env.sh").exists() else ""
+    # ground_truth_probe は scripts/verify-env.sh か scripts/sros2/lib/*.sh に関数として定義する
+    sources = [root / "scripts/verify-env.sh"] + sorted((root / "scripts/sros2/lib").glob("*.sh"))
+    verify = "\n".join(f.read_text(encoding="utf-8") for f in sources if f.exists())
 
     if len(ids) != len(set(ids)):
         errors.append("ID が重複している")
@@ -96,7 +98,7 @@ def check(root: Path) -> list:
                 errors.append(f"{did}: coupled_with の {c} が台帳に無い")
         probe = d.get("ground_truth_probe", "")
         if probe and not re.search(rf"^{re.escape(probe)}\(\)", verify, re.M):
-            errors.append(f"{did}: ground_truth_probe {probe} が scripts/verify-env.sh に無い")
+            errors.append(f"{did}: ground_truth_probe {probe} が scripts/verify-env.sh か scripts/sros2/lib/*.sh に無い")
 
     # expected-results との整合
     checks = expected.get("checks", {})
