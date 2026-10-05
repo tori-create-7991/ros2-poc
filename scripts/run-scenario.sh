@@ -12,10 +12,11 @@ cd "$(dirname "$0")/.."
 
 usage() {
   cat >&2 <<'EOF'
-usage: bash scripts/run-scenario.sh [--scenario <名前|YAMLのパス>] [--repeat N] [--start-sim] [--timeout 秒]
+usage: bash scripts/run-scenario.sh [--scenario <名前|YAMLのパス>] [--repeat N] [--start-sim] [--light] [--timeout 秒]
   --scenario   default（既定）/ fail_demo / examples、または YAML ファイルのパス
   --repeat     シナリオ全体の繰り返し回数（YAML の repeat を上書き）
   --start-sim  シミュ（Gazebo + 仮想カメラ、三人称視点）が動いていなければ起動する
+  --light      軽量モード: シミュが流れ始めたあと RViz と Gazebo の GUI を止める（CPU を減らす。録画の左側は空になる）
   --timeout    トピックが流れ始めるまで待つ秒数（既定 120、--start-sim 時 900）
 EOF
   exit 64
@@ -24,12 +25,14 @@ EOF
 SCENARIO=default
 REPEAT=""
 START_SIM=0
+LIGHT=0
 TIMEOUT=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --scenario) [ "$#" -ge 2 ] || usage; SCENARIO="$2"; shift 2 ;;
     --repeat) [ "$#" -ge 2 ] || usage; REPEAT="$2"; shift 2 ;;
     --start-sim) START_SIM=1; shift ;;
+    --light) LIGHT=1; shift ;;
     --timeout) [ "$#" -ge 2 ] || usage; TIMEOUT="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "不明な引数: $1" >&2; usage ;;
@@ -204,6 +207,14 @@ if ! sim_ready; then
     fi
     sleep 5
   done
+fi
+
+if [ "$LIGHT" = 1 ]; then
+  # カメラは Gazebo のサーバー側で描画するので、GUI（gz sim gui）と RViz は止めても判定には影響しない
+  echo "軽量モード: RViz と Gazebo の GUI を止める（デスクトップ録画の左側は空になる）"
+  arm "pkill -x rviz2; pkill -f '[g]z sim gui'; true" < /dev/null || true
+  sleep 3
+  sim_ready || fail_env "RViz / Gazebo の GUI を止めたらシミュのトピックが止まった。--light を付けずにシミュを起動し直す"
 fi
 
 lab true < /dev/null > /dev/null || fail_env "ros2lab-a でコマンドを実行できない"
