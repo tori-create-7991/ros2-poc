@@ -1,27 +1,57 @@
 """シナリオ実行の補助コマンド（scripts/run-scenario.sh から ros2arm 内で呼ぶ）。
 
+  scenario_cli doctor                 録画・合成に要る外部コマンド・フォントがあるか確かめる
   scenario_cli commands <scenario.yaml> [--repeat N] [--steps-out steps.json]
-      1 行 1 ステップで「名前 TAB 送信先 TAB 待ち秒 TAB コマンド」を出す
-  scenario_cli wait <run_dir> <index>  ステップ index の送信後、腕が止まって判定できる時刻まで待つ
-  scenario_cli judge <run_dir>     記録を判定して result.json を書く（全 PASS で 0、FAIL で 1）
-  scenario_cli compose <run_dir>   desktop.mp4 / camera.mp4 と判定から scenario.mp4 を作る
+      1 行 1 ステップで「名前 TAB 送信先(lab|sim) TAB 待ち秒 TAB コマンド」を出す
+  scenario_cli budget <run_dir>       記録の最大秒数（記録プロセスの安全弁）を出す
+  scenario_cli wait <run_dir> <index> ステップ index の送信後、腕が止まって判定できる時刻まで待つ
+  scenario_cli judge <run_dir>        記録を判定して result.json を書く（全 PASS で 0、FAIL で 1）
+  scenario_cli compose <run_dir>      desktop.mp4 / camera.mp4 と判定から scenario.mp4 を作る
+終了コード: 0 / 1（FAIL あり）/ 2（環境・記録の問題）/ 64（シナリオ・引数の誤り）
 """
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+import yaml
+
 from ros2_poc_sim import compose_video as C
 from ros2_poc_sim import motion_judge as M
 from ros2_poc_sim import scenario as S
+
+# 動画の下帯に出す送信先の表示名（実際の振り分けは scripts/run-scenario.sh）
+TARGET_LABELS = {S.LAB: 'ros2lab-a', S.SIM: 'ros2arm'}
+BUDGET_MARGIN_SEC = 300.0
+
+
+def cmd_doctor(a):
+    problems = []
+    for exe in ('ffmpeg', 'xdpyinfo'):
+        if shutil.which(exe) is None:
+            problems.append(f'{exe} が無い')
+    if shutil.which('ffmpeg'):
+        enc = subprocess.run(['ffmpeg', '-hide_banner', '-encoders'], capture_output=True, text=True).stdout
+        flt = subprocess.run(['ffmpeg', '-hide_banner', '-filters'], capture_output=True, text=True).stdout
+        if 'libx264' not in enc:
+            problems.append('ffmpeg に libx264 エンコーダが無い')
+        for f in ('drawtext', 'drawbox', 'hstack', 'tpad'):
+            if f' {f} ' not in flt:
+                problems.append(f'ffmpeg に {f} フィルタが無い')
+    if not Path(a.font).is_file():
+        problems.append(f'フォントが無い: {a.font}')
+    for p in problems:
+        print(p, file=sys.stderr)
+    return 2 if problems else 0
 
 
 def cmd_commands(a):
     try:
         steps = S.load_scenario(a.scenario, a.repeat)
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, yaml.YAMLError) as e:
         print(f'シナリオが読めない: {e}', file=sys.stderr)
         return 64
     if a.steps_out:
@@ -33,36 +63,49 @@ def cmd_commands(a):
     return 0
 
 
-def cmd_wait(a):
-    """observer が書く joints.jsonl を見て、静止 + 判定用の後続フレームぶんまで待つ。"""
+def _load_steps(d):
+    return json.loads((Path(d) / 'steps.json').read_text(encoding='utf-8'))
+
+
+def cmd_budget(a):
+    """全ステップが上限まで止まらず、フレームも最大間隔で来た場合の秒数 + 余裕。"""
+    total = BUDGET_MARGIN_SEC
+    for st in _load_steps(a.run_dir):
+        total += (M.settle_deadline(0.0, st['duration']) + 40.0      # 40 = 送信のタイムアウト 30 + 余裕
+                  + M.STILL_WINDOW + M.SETTLE_WINDOW_SEC + 2 * M.FRAME_MAX_GAP_SEC)
+    print(int(total))
+    return 0
+
+
+def cmd_wait(a, now=time.time, sleep=time.sleep):
+    """observer が書く joints.jsonl / camera_frames.csv を見て、判定に要る記録が揃うまで待つ。"""
     d = Path(a.run_dir)
-    st = json.loads((d / 'steps.json').read_text(encoding='utf-8'))[a.index]
+    st = _load_steps(d)[a.index]
     ev = {e['index']: e for e in M.read_jsonl(d / 'events.jsonl')}.get(a.index)
     if ev is None:
         print(f'events.jsonl にステップ {a.index} が無い', file=sys.stderr)
         return 2
-    deadline = M.settle_deadline(ev['t_sent'], st['duration'])
-    t_end = None
+    decided = None
     while True:
-        now = time.time()
-        if t_end is None:
-            t = M.settle_time(M.read_jsonl(d / 'joints.jsonl'), st['joints'], st['expect'],
-                              st['tolerance'], ev['t_sent'], st['duration'])
-            if t is not None:
-                t_end = t + S.SETTLE_SEC
-                print(f'静止 {t - ev["t_sent"]:.1f}s 後')
-            elif now > deadline:
-                t_end = deadline
-                print(f'静止しない（{deadline - ev["t_sent"]:.0f}s 待った）。判定で FAIL になる', file=sys.stderr)
-        if t_end is not None:
+        t = now()
+        if decided is None:
+            decided = M.judge_time(M.read_jsonl(d / 'joints.jsonl'), st, ev, now=t)
+            if decided is not None:
+                t_end, settled = decided
+                if settled:
+                    print(f'静止 {t_end - M.SETTLE_SEC - ev["t_sent"]:.1f}s 後')
+                else:
+                    print(f'静止しない（{t_end - ev["t_sent"]:.0f}s 待った）。判定で FAIL になる', file=sys.stderr)
+        if decided is not None:
             # 判定に使うフレーム（判定時刻以後の 1 枚と、その後の静止確認の 1 枚）が記録されるまで待つ
+            t_end = decided[0]
             frames = M.Series(M.read_frames_csv(d / 'camera_frames.csv'))
             if M.judge_frames(frames, ev['t_start'], t_end)[2] is not None:
                 return 0
-            if now > t_end + S.SETTLE_WINDOW_SEC + 2 * M.FRAME_MAX_GAP_SEC:
+            if t > t_end + M.SETTLE_WINDOW_SEC + 2 * M.FRAME_MAX_GAP_SEC:
                 print('判定に使うカメラフレームが来ない。判定で FAIL になる', file=sys.stderr)
                 return 0
-        time.sleep(0.3)
+        sleep(0.3)
 
 
 def cmd_judge(a):
@@ -85,31 +128,35 @@ def _first_frame_t(run_dir):
 def cmd_compose(a):
     d = Path(a.run_dir)
     res = json.loads((d / 'result.json').read_text(encoding='utf-8'))
-    steps = [S.Step.from_dict(x) for x in json.loads((d / 'steps.json').read_text(encoding='utf-8'))]
+    steps = [S.Step.from_dict(x) for x in _load_steps(d)]
     info = json.loads((d / 'camera_info.json').read_text(encoding='utf-8'))
     cam_t0 = _first_frame_t(d)
-    if cam_t0 is None or not (d / 'camera.mp4').exists():
-        print('camera.mp4 / camera_frames.csv が無いので合成できない', file=sys.stderr)
+    if cam_t0 is None or not (d / 'camera.mp4').exists() or not info.get('height'):
+        print('camera.mp4 / camera_frames.csv / camera_info.json が無いか不正なので合成できない', file=sys.stderr)
         return 2
     has_desktop = (d / 'desktop.mp4').exists() and (d / 'desktop_t0.txt').exists()
     t0 = float((d / 'desktop_t0.txt').read_text().strip()) if has_desktop else cam_t0
-    graph, texts = C.build(results=res['steps'], commands=[(S.to_command(s)[0], S.display_lines(s)) for s in steps],
-                           t0=t0, cam_t0=cam_t0, cam_h=info['height'],
-                           has_desktop=has_desktop, font=a.font)
+    commands = [(TARGET_LABELS[S.to_command(s)[0]], S.display_lines(s)) for s in steps]
+    graph, texts = C.build(results=res['steps'], commands=commands, t0=t0, cam_t0=cam_t0,
+                           cam_h=info['height'], has_desktop=has_desktop, font=a.font)
     C.write_texts(d, texts)
     (d / 'overlay' / 'filtergraph.txt').write_text(graph + '\n', encoding='utf-8')
     if not has_desktop:
         print('desktop.mp4 が無いので、カメラ映像だけで合成する', file=sys.stderr)
-    return subprocess.run(C.ffmpeg_args(graph, has_desktop), cwd=d).returncode
+    return 0 if subprocess.run(C.ffmpeg_args(graph, has_desktop), cwd=d).returncode == 0 else 2
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog='scenario_cli')
     sub = p.add_subparsers(dest='cmd', required=True)
+    o = sub.add_parser('doctor')
+    o.add_argument('--font', default=C.FONT)
     c = sub.add_parser('commands')
     c.add_argument('scenario')
     c.add_argument('--repeat', type=int)
     c.add_argument('--steps-out')
+    b = sub.add_parser('budget')
+    b.add_argument('run_dir')
     w = sub.add_parser('wait')
     w.add_argument('run_dir')
     w.add_argument('index', type=int)
@@ -119,8 +166,13 @@ def main(argv=None):
     m.add_argument('run_dir')
     m.add_argument('--font', default=C.FONT)
     a = p.parse_args(argv)
-    return {'commands': cmd_commands, 'wait': cmd_wait, 'judge': cmd_judge,
-            'compose': cmd_compose}[a.cmd](a)
+    handler = {'doctor': cmd_doctor, 'commands': cmd_commands, 'budget': cmd_budget, 'wait': cmd_wait,
+               'judge': cmd_judge, 'compose': cmd_compose}[a.cmd]
+    try:
+        return handler(a)
+    except Exception as e:   # noqa: BLE001 — 想定外の失敗は「FAIL」(1) ではなく環境・記録の問題 (2) にする
+        print(f'scenario_cli {a.cmd} が失敗した: {type(e).__name__}: {e}', file=sys.stderr)
+        return 2
 
 
 if __name__ == '__main__':

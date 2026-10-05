@@ -165,7 +165,7 @@ def test_judge_run_end_to_end_with_fake_video(tmp_path):
     assert res['total'] == 2 and res['passed'] == 1 and res['verdict'] == 'FAIL'
     a, b = res['steps']
     assert a['verdict'] == 'PASS', a['reasons']
-    assert a['t_end'] == pytest.approx(12.0 + S.SETTLE_SEC)   # 期待値に届いて静止した時刻 + SETTLE
+    assert a['t_end'] == pytest.approx(12.0 + M.SETTLE_SEC)   # 期待値に届いて静止した時刻 + SETTLE
     assert b['verdict'] == 'FAIL' and 'rc=1' in b['reasons'][0]
 
 
@@ -233,3 +233,22 @@ def test_judge_frames_uses_frames_after_judge_time_even_when_sparse():
     assert (before['n'], after['n'], settled['n']) == (1, 3, 4)   # 9.5 は判定時刻より前なので使わない
     assert M.judge_frames(frames, t_start=5.0, t_end=17.5)[2] is None   # 17.5 以後は 30.0 だけ（間隔超過）
     assert M.judge_frames(M.Series([]), 1.0, 2.0) == (None, None, None)
+
+
+def test_settle_time_ignores_stillness_after_deadline():
+    # 上限（1 + 1*5 + 10 = 16）を過ぎて 40 秒に止まっても、次のステップの区間なので静止とみなさない
+    recs = _traj(1.0, 40.0, HOME, POSE_A, until=50.0)
+    assert M.settle_time(recs, J, POSE_A, 0.05, t_sent=1.0, duration=1.0) is None
+    t_end, settled = M.judge_time(recs, {'joints': J, 'expect': POSE_A, 'tolerance': 0.05, 'duration': 1.0},
+                                  {'t_sent': 1.0})
+    assert not settled and t_end == pytest.approx(M.settle_deadline(1.0, 1.0))
+
+
+def test_judge_time_undecided_while_waiting_then_decided():
+    st = {'joints': J, 'expect': POSE_A, 'tolerance': 0.05, 'duration': 3.0}
+    moving = _traj(10.0, 30.0, HOME, POSE_A, until=14.0)
+    assert M.judge_time(moving, st, {'t_sent': 10.0}, now=14.0) is None           # 上限前: まだ決めない
+    assert M.judge_time(moving, st, {'t_sent': 10.0}, now=100.0)[1] is False       # 上限後: 止まらず
+    done = _traj(10.0, 12.0, HOME, POSE_A, until=16.0)
+    t_end, settled = M.judge_time(done, st, {'t_sent': 10.0}, now=16.0)
+    assert settled and t_end == pytest.approx(12.0 + M.SETTLE_SEC, abs=0.3)   # 12 秒で届いて静止

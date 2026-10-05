@@ -10,6 +10,7 @@ ros2arm の cv2 は NumPy 2 と非互換なので使わない。条件（全部 
 import bisect
 import csv
 import json
+import math
 import subprocess
 from pathlib import Path
 
@@ -28,6 +29,8 @@ STILL_EPS = 0.002          # 静止とみなす関節角の変化 [rad]（STILL_
 STILL_WINDOW = 0.8         # 静止判定の区間 [s]（/joint_states は負荷時 2Hz 程度まで落ちる）
 SETTLE_TIMEOUT_FACTOR = 5  # 静止を待つ上限 = 指令時間 × これ + SETTLE_TIMEOUT_EXTRA（シミュは実時間より遅い）
 SETTLE_TIMEOUT_EXTRA = 10.0
+SETTLE_SEC = 1.5           # 関節が静止してから判定するまでの待ち（カメラ映像は /joint_states より 1〜1.5s 遅れる。実測）
+SETTLE_WINDOW_SEC = 1.0    # 静止確認のフレームを、判定時刻からこれ以上あとに取る
 
 
 def diff_mask(a, b, thresh=DIFF_THRESH):
@@ -172,7 +175,7 @@ def judge_frames(frames, t_start, t_end):
     after = frames.after(t_end, FRAME_MAX_GAP_SEC)
     settled = None
     if after is not None:
-        settled = frames.after(max(t_end + S.SETTLE_WINDOW_SEC, after['t'] + 1e-6), FRAME_MAX_GAP_SEC)
+        settled = frames.after(max(t_end + SETTLE_WINDOW_SEC, after['t'] + 1e-6), FRAME_MAX_GAP_SEC)
     return before, after, settled
 
 
@@ -199,28 +202,35 @@ def read_frames_csv(path):
         return [{'n': int(r['n']), 't': float(r['t'])} for r in csv.DictReader(f)]
 
 
-def settle_time(records, joints, expected, tolerance, t_sent, duration):
-    """送信後に腕が止まった時刻（無ければ None）。
+def settle_time(records, joints, expected, tolerance, t_sent, duration, t_limit=None):
+    """送信後に腕が止まった時刻（t_limit までに止まらなければ None）。
 
     シミュは実時間より遅い（RTF < 1）ので、指令の time_from_start ではなく /joint_states の静止で決める。
     「STILL_WINDOW の間の変化が STILL_EPS 以下」かつ「期待値に届いた、または指令時間が過ぎた」最初の時刻。
     指令が届く前の静止（送信直後）を拾わないよう、期待値に届くか指令時間が過ぎるまでは待つ。
+    t_limit（既定は settle_deadline）より後の記録は見ない。上限を過ぎてから止まった場合に、
+    次のステップの区間で判定してしまわないため。
     """
-    rs = [r for r in records if r['t'] >= t_sent]
+    if t_limit is None:
+        t_limit = settle_deadline(t_sent, duration)
+    rs = sorted((r for r in records if t_sent <= r['t'] <= t_limit + STILL_WINDOW), key=lambda r: r['t'])
+    ts = [r['t'] for r in rs]
     for i, r in enumerate(rs):
+        if r['t'] > t_limit:
+            break
         pos = dict(zip(r['name'], r['position']))
         if any(j not in pos for j in joints):
             continue
         reached = max(abs(pos[j] - e) for j, e in zip(joints, expected)) <= tolerance
         if not reached and r['t'] < t_sent + duration:
             continue
-        window = [x for x in rs[i:] if x['t'] <= r['t'] + STILL_WINDOW]
-        if window[-1]['t'] - r['t'] < STILL_WINDOW * 0.6:
-            if len(window) == len(rs) - i:
+        k = bisect.bisect_right(ts, r['t'] + STILL_WINDOW)   # 区間の末尾（rs[i:k]）
+        if ts[k - 1] - r['t'] < STILL_WINDOW * 0.6:
+            if k == len(rs):
                 return None   # 記録の末尾: まだ区間ぶんの記録が無い
             continue          # 記録の途中の欠け（負荷で /joint_states が途切れる）: この時刻は判定しない
         still = True
-        for x in window[1:]:
+        for x in rs[i + 1:k]:
             p = dict(zip(x['name'], x['position']))
             if any(abs(p.get(j, pos[j]) - pos[j]) > STILL_EPS for j in joints):
                 still = False
@@ -232,6 +242,22 @@ def settle_time(records, joints, expected, tolerance, t_sent, duration):
 
 def settle_deadline(t_sent, duration):
     return t_sent + duration * SETTLE_TIMEOUT_FACTOR + SETTLE_TIMEOUT_EXTRA
+
+
+def judge_time(records, step, event, now=math.inf):
+    """判定時刻 (t_end, 静止したか)。まだ決められない（静止待ちで上限前）なら None。
+
+    scenario_cli wait（実行中、now = 現在時刻）と judge_run（事後、now = ∞）が同じ規則を使う。
+    静止したら 静止時刻 + SETTLE_SEC、上限まで止まらなければ上限時刻（静止条件で FAIL になる）。
+    """
+    deadline = settle_deadline(event['t_sent'], step['duration'])
+    t = settle_time(records, step['joints'], step['expect'], step['tolerance'],
+                    event['t_sent'], step['duration'], deadline)
+    if t is not None:
+        return t + SETTLE_SEC, True
+    if now >= deadline + STILL_WINDOW:
+        return deadline, False
+    return None
 
 
 def joints_at(series, t):
@@ -280,11 +306,7 @@ def judge_run(run_dir, run=subprocess.run):
                             'codes': [f'send_failed rc={rc}'],
                             **({'t_start': ev['t_start'], 't_sent': ev['t_sent']} if ev else {})})
             continue
-        t_still = settle_time(joints.records, st['joints'], st['expect'], st['tolerance'],
-                              ev['t_sent'], st['duration'])
-        settled = t_still is not None
-        # 止まらなかったときは待ちの上限時刻で判定する（静止条件が FAIL になる）
-        t_end = (t_still + S.SETTLE_SEC) if settled else settle_deadline(ev['t_sent'], st['duration'])
+        t_end, settled = judge_time(joints.records, st, ev)
         fb, fa, fs = judge_frames(frames, ev['t_start'], t_end)
         ee_rec = ee.nearest(t_end)
         r = judge_step(

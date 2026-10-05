@@ -18,8 +18,16 @@ bash scripts/run-scenario.sh --scenario <path/to/my.yaml>
 | `--start-sim` | なし | シミュ（公式 Gazebo + MoveIt + 仮想カメラ、視点 `fixed_front_wide`）が動いていなければ起動する |
 | `--timeout` | 120（`--start-sim` 時 900） | トピックが流れ始めるまで待つ秒数 |
 
-終了コード: `0` = 全ステップ PASS / `1` = FAIL あり / `2` = 環境・実行時の問題 / `64` = 引数・シナリオの誤り。
-`ros2real`（実機ドライバ）が起動中なら実行しない。
+終了コード: `0` = 全ステップ PASS / `1` = FAIL あり / `2` = 環境・記録の問題（判定できなかった）/ `64` = 引数・シナリオの誤り。
+合成（scenario.mp4）に失敗しても終了コードは判定結果のまま（判定の正は `result.json`）。
+
+実行前に次を確かめ、満たさなければ `2` で止まる。
+
+- `ros2real`（実機ドライバ）が起動していない
+- ros2arm に ffmpeg（libx264・drawtext 等）・xdpyinfo・フォントがある（`scenario_cli doctor`）
+- 別の run-scenario が実行中でない（ros2arm 内の `/tmp/run-scenario.lock`）、前回の記録プロセスが残っていない
+- ros2lab-a からアームのコントローラ（`crane_x7_arm_controller`）が見える（Discovery 待ち）
+- 送るコマンドが想定の形（`ros2 topic pub` / `ros2 action send_goal` と数値・記号のみ）
 
 ## 出力（`workspace/runs/<日時>/`）
 
@@ -30,6 +38,10 @@ bash scripts/run-scenario.sh --scenario <path/to/my.yaml>
 | `commands.log` | 実際に送ったコマンドの全文と送信先 |
 | `camera.mp4` / `desktop.mp4` | 記録の元データ |
 | `camera_frames.csv` / `joints.jsonl` / `ee.jsonl` / `camera_info.json` / `events.jsonl` / `steps.json` | 判定の入力（`scenario_cli judge` で判定し直せる） |
+
+1 回あたり 3〜5MB（デスクトップ録画が大半。既定シナリオの実測）。`workspace/runs/` は自動では消えないので、
+不要になったら `workspace/runs/<日時>` を消す（ros2arm が作ったファイルなので、ホストで消せないときは
+`docker exec -u ubuntu ros2arm rm -rf /workspace/runs/<日時>`）。
 
 判定や合成だけをやり直す:
 
@@ -85,7 +97,7 @@ steps:
 
 - フレームは「送信開始以前の最後の 1 枚」「判定時刻以後の最初の 1 枚」「その 1.0 秒以上あとの 1 枚」を使う。ホストが重いとカメラは 1fps 以下（間隔 7 秒）まで落ちるので、間隔は 10 秒まで許容する（実測）。
 - 期待姿勢が送信前と同じ（動かない指令）なら、2 は「映像が変化しないこと」に反転し、3 は見ない。
-- **判定時刻は指令時間ではなく `/joint_states` の静止で決める**。CPU 描画ではシミュの実時間比（RTF）が 0.2〜0.4 まで落ち、
+- **判定時刻は指令時間ではなく `/joint_states` の静止で決める**（実行中の待ち `scenario_cli wait` と事後の判定が同じ規則を使う）。CPU 描画ではシミュの実時間比（RTF）が 0.2〜0.4 まで落ち、
   3 秒の指令が実際には 7〜15 秒かかる（実測）。静止（0.8 秒間の変化 ≤ 0.002 rad）を検出してから、
   カメラ映像の遅れ（関節より 1〜1.5 秒遅れる。実測）ぶん 1.5 秒待って判定する。
   `指令時間 × 5 + 10` 秒たっても止まらなければ、その時刻で判定し `joints_not_still` で FAIL にする。
@@ -97,7 +109,12 @@ steps:
 腕全体（真上に伸ばした home 姿勢の手先まで）と机上の物体が画角に入る三人称視点。
 既存の `fixed_front_oblique` は机に近く低いため、手先が縦の画角（±27°）の外に出て条件 3 が成り立たない。
 すでに別の視点でシミュが動いている場合は、そのまま使われる（`--start-sim` は動いていないときだけ起動する）。
-視点を変えるときは、公式 launch ごと止めてから `--start-sim` で起動し直す。
+視点を変えるときは、シミュを止めてから `--start-sim` で起動し直す。`--start-sim` で起動したシミュは実行後も動き続け、
+ログは `workspace/runs/sim-<日時>.log` に出る。止めるには:
+
+```bash
+docker exec ros2arm pkill -INT -f '[r]os2 launch ros2_poc_sim'   # 数秒で Gazebo / MoveIt / RViz ごと止まる
+```
 
 ## トラブルシュート
 
@@ -109,9 +126,13 @@ steps:
 | `joints_not_still` | シミュが極端に遅い、またはコントローラが目標に届かない。`gz topic -e -t /stats` で RTF を確認 |
 | 動画の左側が RViz で、Gazebo の GUI が見えない | デスクトップをそのまま録画しているため。Gazebo のシーンは右側の仮想カメラで見える。必要なら noVNC で Gazebo のウィンドウを前に出してから実行する |
 | `合成に失敗した` | `overlay/filtergraph.txt` と ffmpeg のメッセージを確認 |
+| `別の run-scenario が実行中` | 前回を強制終了した。実行中でなければ `docker exec ros2arm rmdir /tmp/run-scenario.lock` |
+| `前回の記録プロセスが残っている` | 前回を強制終了した。案内のコマンドで止めてから再実行する。記録プロセスは停止の指示が届かなくても、シナリオから計算した上限時間で止まる |
+| `記録プロセスを止められない` | 判定に使う camera.mp4 が未完の可能性があるので判定しない（終了コード 2） |
 
 ## 制約
 
 - シミュ専用。実機（ros2real）では使わない（スクリプトが拒否する）。
 - グリッパの命令は ros2arm から送る。実機でグリッパを動かすには、ros2lab に `control_msgs` を入れるか ros2real 側から送る必要がある（未対応）。
-- DDS は無認証（[sim-camera-profile.md](sim-camera-profile.md) の「隔離方針との関係」と同じ）。`ros2-lab-net` に信頼できないコンテナを繋いだまま実行すると、記録・判定の入力を偽装されうる。
+- DDS は無認証（[sim-camera-profile.md](sim-camera-profile.md) の「隔離方針との関係」と同じ）。同じドメインの誰でも画像・CameraInfo・TF・`/joint_states` を偽装でき、判定（PASS / FAIL）を変えられる。**判定が意味を持つのは信頼できるネットワーク内だけ**。`ros2-lab-net` に信頼できないコンテナを繋いだまま実行しない。記録ノードは画像の大きさ（1920×1080 まで）・頻度（30fps まで）・CameraInfo の値を検査し、記録時間にも上限を置いている。
+- 録画・合成の ffmpeg・xdpyinfo・フォントはベースイメージ由来（Dockerfile では宣言していない）。ベースイメージを更新して無くなった場合は `scenario_cli doctor` で実行前に止まる。

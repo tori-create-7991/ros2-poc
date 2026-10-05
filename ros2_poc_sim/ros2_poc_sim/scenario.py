@@ -33,14 +33,19 @@ GRIPPER_CLOSE = 0.0
 
 ARM_TOLERANCE = 0.05
 GRIPPER_TOLERANCE = 0.1   # crane_x7_gripper_controller の goal_tolerance と同じ
+MAX_TOLERANCE = 0.5       # これより緩いと「動かない指令」と誤判定しうる
 RANDOM_SCALE = 0.5        # random はリミット幅の中央 50% だけを使う（机や自分への衝突を避ける）
-SETTLE_SEC = 1.5          # 関節が静止してから判定するまでの待ち（カメラ映像は /joint_states より 1〜1.5s 遅れる。実測）
-SETTLE_WINDOW_SEC = 1.0   # 静止判定に使う、判定時刻の後ろの区間（カメラは 2〜3fps なので別のフレームになる長さ）
+# --once だと送信直後に終了し、相手側の Discovery が終わっていないと落ちることがある（実測）。
+# 0.5 秒間隔で 3 回送る。コントローラは同じ目標の軌道に置き換えるだけなので最終姿勢は変わらない
+ARM_PUB_OPTS = '-w 1 --times 3 -r 2'
+FALLBACK_WAIT_SEC = 4.0   # scenario_cli wait が使えないときに、指令時間に足して待つ秒数
 NAME_RE = re.compile(r'^[A-Za-z0-9_\-]{1,40}$')
 MAX_STEPS = 200
 MAX_TIME_FROM_START = 60.0
 
 ARM, GRIPPER = 'arm', 'gripper'
+# 送信先は論理名で返す（コンテナ名への対応は scripts/run-scenario.sh だけが持つ）
+LAB, SIM = 'lab', 'sim'
 
 
 @dataclass
@@ -96,6 +101,13 @@ def _time(v, where):
     return t
 
 
+def _tolerance(v, where):
+    t = _num(v, where)
+    if not 0 < t <= MAX_TOLERANCE:
+        raise ValueError(f'{where}: 0 より大きく {MAX_TOLERANCE} 以下（{t}）')
+    return t
+
+
 def _gripper_angle(v, where):
     if v == 'open':
         return GRIPPER_OPEN
@@ -126,10 +138,10 @@ def _parse_step(d, idx):
     if kind == 'gripper':
         angle = _gripper_angle(d['gripper'], f'{where}.gripper')
         expect = (_gripper_angle(d['expect'], f'{where}.expect'),) if 'expect' in d else (angle,)
-        tol = _num(d.get('tolerance', GRIPPER_TOLERANCE), f'{where}.tolerance')
+        tol = _tolerance(d.get('tolerance', GRIPPER_TOLERANCE), f'{where}.tolerance')
         return [Step(name, GRIPPER, [((angle,), 0.0)], expect, tol, [GRIPPER_JOINT])]
 
-    tol = _num(d.get('tolerance', ARM_TOLERANCE), f'{where}.tolerance')
+    tol = _tolerance(d.get('tolerance', ARM_TOLERANCE), f'{where}.tolerance')
     if kind == 'random':
         r = d['random']
         if not isinstance(r, dict):
@@ -137,7 +149,13 @@ def _parse_step(d, idx):
         n = r.get('n', 1)
         if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 50:
             raise ValueError(f'{where}.random.n: 1〜50 の整数（{n!r}）')
-        rng = random.Random(r.get('seed', 0))
+        seed = r.get('seed', 0)
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            raise ValueError(f'{where}.random.seed: 整数（{seed!r}）')
+        unknown_r = set(r) - {'n', 'seed', 'time_from_start'}
+        if unknown_r:
+            raise ValueError(f'{where}.random: 不明なキー {sorted(unknown_r)}')
+        rng = random.Random(seed)
         t = _time(r.get('time_from_start', 3), f'{where}.random.time_from_start')
         steps = []
         for i in range(n):
@@ -209,19 +227,18 @@ def _duration_msg(t):
 
 
 def to_command(step):
-    """(送信先コンテナ, コマンド文字列)。アームは ros2lab-a から README と同じ topic pub、
-    グリッパは ros2lab に control_msgs が無いので ros2arm から action send_goal。"""
+    """(送信先, コマンド文字列)。送信先は LAB（クライアント = ros2lab-a）か SIM（シミュ = ros2arm）。
+    アームはクライアントから README と同じ topic pub、グリッパは ros2lab に control_msgs が
+    無いのでシミュ側から action send_goal。"""
     if step.kind == GRIPPER:
         goal = (f'{{command: {{name: [{GRIPPER_JOINT}], '
                 f'position: [{fmt(step.points[0][0][0])}]}}}}')
-        return 'ros2arm', (f'ros2 action send_goal {GRIPPER_ACTION} '
+        return SIM, (f'ros2 action send_goal {GRIPPER_ACTION} '
                            f'control_msgs/action/ParallelGripperCommand "{goal}"')
     pts = ', '.join(f'{{positions: [{", ".join(fmt(x) for x in p)}], '
                     f'time_from_start: {_duration_msg(t)}}}' for p, t in step.points)
     msg = f'{{joint_names: [{", ".join(ARM_JOINTS)}], points: [{pts}]}}'
-    # --once だと送信直後に終了し、相手側の Discovery が終わっていないと落ちることがある（実測）。
-    # 0.5 秒間隔で 3 回送る。コントローラは同じ目標の軌道に置き換えるだけなので最終姿勢は変わらない
-    return 'ros2lab-a', (f'ros2 topic pub -w 1 --times 3 -r 2 {ARM_TOPIC} '
+    return LAB, (f'ros2 topic pub {ARM_PUB_OPTS} {ARM_TOPIC} '
                          f'trajectory_msgs/msg/JointTrajectory "{msg}"')
 
 
@@ -231,10 +248,10 @@ def display_lines(step):
         return [f'$ ros2 action send_goal {GRIPPER_ACTION} control_msgs/action/ParallelGripperCommand',
                 f'    {GRIPPER_JOINT} -> {fmt(step.points[0][0][0])} rad']
     pts = '  '.join(f'[{", ".join(fmt(x) for x in p)}] @{fmt(t)}s' for p, t in step.points)
-    return [f'$ ros2 topic pub -w 1 --times 3 -r 2 {ARM_TOPIC} trajectory_msgs/msg/JointTrajectory',
+    return [f'$ ros2 topic pub {ARM_PUB_OPTS} {ARM_TOPIC} trajectory_msgs/msg/JointTrajectory',
             f'    positions: {pts}']
 
 
 def wait_after_send(step):
-    """送信完了からの最低の待ち秒（目安）。実際は scenario_cli wait が /joint_states の静止まで待つ。"""
-    return step.duration + SETTLE_SEC + SETTLE_WINDOW_SEC + 0.5
+    """scenario_cli wait が使えないときの待ち秒（目安）。通常は wait が /joint_states の静止まで待つ。"""
+    return step.duration + FALLBACK_WAIT_SEC

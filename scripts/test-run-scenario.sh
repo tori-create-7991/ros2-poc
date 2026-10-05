@@ -11,6 +11,10 @@ trap 'rm -rf "$TMP"' EXIT
 cat > "$TMP/docker" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$STUB_LOG"
+# STUB_EXEC_FAIL（正規表現）に一致する docker exec は rc=2 で失敗させる
+if [ "${1:-}" = "exec" ] && [ -n "${STUB_EXEC_FAIL:-}" ] && [[ "$*" =~ $STUB_EXEC_FAIL ]]; then
+  exit 2
+fi
 if [ "${1:-}" = "ps" ]; then
   for arg in "$@"; do
     case "$arg" in
@@ -70,5 +74,17 @@ for missing in ros2arm ros2lab-a; do
   grep -q "up-arm.sh" <<<"$ERR" || fail "$missing: up-arm.sh の案内が無い: $ERR"
   no_exec "$missing 未起動"
 done
+
+# 録画・合成の前提（ffmpeg 等）が無い → 出力先も作らずに exit 2
+STUB_EXEC_FAIL='scenario_cli doctor' run_case "$ALL"
+[ "$RC" -eq 2 ] || fail "doctor 失敗は exit 2 のはずが $RC: $ERR"
+grep -q "前提が揃っていない" <<<"$ERR" || fail "doctor: 案内が無い: $ERR"
+if grep -q "mkdir -p /workspace/runs" <<<"$LOG"; then fail "doctor 失敗で出力先が作られた: $LOG"; fi
+
+# 別の run-scenario が実行中（ロックが取れない）→ exit 2、記録もシミュも触らない
+STUB_EXEC_FAIL='mkdir /tmp/run-scenario.lock' run_case "$ALL"
+[ "$RC" -eq 2 ] || fail "ロック取得失敗は exit 2 のはずが $RC: $ERR"
+grep -q "別の run-scenario が実行中" <<<"$ERR" || fail "ロック: 案内が無い: $ERR"
+if grep -qE "scenario_observer|x11grab -t|ros2 launch" <<<"$LOG"; then fail "ロック失敗で記録・シミュが動いた: $LOG"; fi
 
 echo "OK: run-scenario guard tests passed"

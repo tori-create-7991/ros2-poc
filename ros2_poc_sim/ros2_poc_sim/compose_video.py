@@ -17,10 +17,6 @@ FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
 GREEN, RED, YELLOW = '0x33dd55', '0xff4040', 'yellow'
 
 
-def even(x):
-    return int(round(x / 2.0)) * 2
-
-
 def wrap_lines(text, width=WRAP, max_lines=3):
     lines = textwrap.wrap(text, width, break_long_words=True, break_on_hyphens=False) or ['']
     if len(lines) > max_lines:
@@ -51,6 +47,8 @@ def build(*, results, commands, t0, cam_t0, cam_h, has_desktop=True, font=FONT):
     入力は 0 = desktop.mp4（has_desktop のとき）、最後 = camera.mp4。
     """
     texts = {}
+    if cam_h <= 0:
+        raise ValueError(f'カメラの高さが不正（{cam_h}）')
     scale = HEIGHT / cam_h
     cam_in = 1 if has_desktop else 0
     off = cam_t0 - t0

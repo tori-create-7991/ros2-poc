@@ -65,14 +65,61 @@ done
 ROS_ENV='source /opt/ros/jazzy/setup.bash; source /opt/crane_ws/install/setup.bash; source /opt/ros2_poc_ws/install/setup.bash'
 arm() { docker exec -u ubuntu -e DISPLAY=:1 ros2arm bash -c "$ROS_ENV; $1"; }
 arm_bg() { docker exec -d -u ubuntu -e DISPLAY=:1 ros2arm bash -c "$ROS_ENV; $1"; }
-lab() { docker compose exec -T ros2lab-a bash -lc "$1"; }
+# compose のプロジェクト名（= ディレクトリ名）に依存しないよう、コンテナ名で直接入る
+lab() { docker exec ros2lab-a bash -lc "$1"; }
+# scenario_cli の送信先（論理名）とコンテナの対応はここだけが持つ
+send() {
+  case "$1" in
+    lab) lab "$2" ;;
+    sim) arm "$2" ;;
+    *) echo "不明な送信先: $1" >&2; return 2 ;;
+  esac
+}
+fail_env() { echo "$1" >&2; exit 2; }
+
+# 録画・合成に要る外部コマンド・フォント（ベースイメージ由来）を先に確かめる
+arm "ros2 run ros2_poc_sim scenario_cli doctor" < /dev/null \
+  || fail_env "ros2arm に録画・合成の前提が揃っていない（上のメッセージ参照。'bash scripts/up-arm.sh' でイメージを作り直す）"
+
+# 同時実行の拒否（同じアームに 2 本の指令が混ざる）。ロックはコンテナ内に置き、コンテナを作り直せば消える
+LOCK=/tmp/run-scenario.lock
+arm "mkdir $LOCK" < /dev/null 2>/dev/null \
+  || fail_env "別の run-scenario が実行中（終わっているなら: docker exec ros2arm rmdir $LOCK）"
+# 前回の記録プロセスが残っていたら止めてもらう（残るとシミュがさらに遅くなる）
+if arm "pgrep -f '[s]cenario_observer --out |[x]11grab -i :1|[x]11grab.*desktop.mp4'" > /dev/null 2>&1 < /dev/null; then
+  arm "rmdir $LOCK" < /dev/null || true
+  fail_env "前回の記録プロセスが残っている。止めてから再実行する: docker exec ros2arm pkill -INT -f '[s]cenario_observer --out|[x]11grab'"
+fi
 
 TS="$(date +%Y%m%d-%H%M%S)"
 RUN_HOST="workspace/runs/$TS"
 RUN="/workspace/runs/$TS"
+RECORDERS="[s]cenario_observer --out $RUN|[x]11grab.*$RUN/desktop.mp4"
+
+stop_recorders() {
+  # [s] / [x] は pkill 自身を呼ぶ bash -c のコマンドラインに一致させないため。
+  # observer は ffmpeg の書き出しを最大 60 秒待つので、それより長く待ってから TERM → KILL に上げる
+  local sig
+  for sig in INT TERM KILL; do
+    arm "pkill -$sig -f '$RECORDERS'" < /dev/null > /dev/null 2>&1 || true
+    for _ in $(seq 1 "$([ "$sig" = INT ] && echo 90 || echo 10)"); do
+      arm "pgrep -f '$RECORDERS'" > /dev/null 2>&1 < /dev/null || return 0
+      sleep 1
+    done
+    echo "記録プロセスが SIG$sig で止まらない" >&2
+  done
+  return 1
+}
+# shellcheck disable=SC2329  # trap から呼ぶ
+cleanup() {
+  stop_recorders || true
+  arm "rmdir $LOCK" < /dev/null > /dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
 # ros2arm の ubuntu が書けるよう、ディレクトリはコンテナ側で作る（/workspace は root と ubuntu が混在する）
-arm "mkdir -p $RUN"
-cp "$SCENARIO_FILE" "$RUN_HOST/scenario.yaml"
+arm "mkdir -p $RUN" < /dev/null || fail_env "出力先を作れない: $RUN_HOST"
+cp "$SCENARIO_FILE" "$RUN_HOST/scenario.yaml" || fail_env "シナリオをコピーできない"
 echo "出力先: $RUN_HOST"
 
 topic_ok() {
@@ -82,20 +129,22 @@ sim_ready() { topic_ok /joint_states && topic_ok /camera/color/image_raw; }
 
 if ! sim_ready; then
   if [ "$START_SIM" = 1 ]; then
-    echo "シミュを起動する（初回やホストが重いときは数分〜十数分かかる）。ログ: $RUN_HOST/sim.log"
-    arm_bg "exec ros2 launch ros2_poc_sim arm_with_camera.launch.py placement:=fixed_front_wide > $RUN/sim.log 2>&1"
+    # シミュは実行の後も動き続けるので、ログは実行ごとのディレクトリの外に置く
+    SIM_LOG="workspace/runs/sim-$TS.log"
+    echo "シミュを起動する（初回やホストが重いときは数分〜十数分かかる）。ログ: $SIM_LOG"
+    arm_bg "exec ros2 launch ros2_poc_sim arm_with_camera.launch.py placement:=fixed_front_wide > /$SIM_LOG 2>&1"
   fi
   echo "トピック（/joint_states, /camera/color/image_raw）を待つ（最大 ${TIMEOUT} 秒）"
   deadline=$(( $(date +%s) + TIMEOUT ))
   until sim_ready; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
-      echo "トピックが流れない。シミュを起動していなければ --start-sim を付ける（docs/sim-scenario-recording.md）。" >&2
-      exit 2
+      fail_env "トピックが流れない。シミュを起動していなければ --start-sim を付ける（docs/sim-scenario-recording.md）。"
     fi
     sleep 5
   done
 fi
 
+lab true < /dev/null > /dev/null || fail_env "ros2lab-a でコマンドを実行できない"
 # ros2lab-a からアームのコントローラが見えるまで待つ。`ros2 topic pub -w 1` は「誰か 1 つ」の購読者で
 # 送ってしまうので、Discovery が遅れている（同じネットワークの別コンテナが多いと起きる）と指令が届かない
 controller_seen() {
@@ -105,8 +154,7 @@ controller_seen() {
 deadline=$(( $(date +%s) + TIMEOUT ))
 until controller_seen; do
   if [ "$(date +%s)" -ge "$deadline" ]; then
-    echo "ros2lab-a から crane_x7_arm_controller が見えない（Discovery の問題）。数十秒待ってから再実行する。" >&2
-    exit 2
+    fail_env "ros2lab-a から crane_x7_arm_controller が見えない（Discovery の問題）。数十秒待ってから再実行する。"
   fi
   echo "ros2lab-a から crane_x7_arm_controller が見えるのを待つ"
   sleep 5
@@ -114,40 +162,36 @@ done
 
 REPEAT_ARG=""
 [ -n "$REPEAT" ] && REPEAT_ARG="--repeat $REPEAT"
-if ! arm "ros2 run ros2_poc_sim scenario_cli commands $RUN/scenario.yaml $REPEAT_ARG --steps-out $RUN/steps.json" \
-    > "$RUN_HOST/commands.tsv" < /dev/null; then
+rc=0
+arm "ros2 run ros2_poc_sim scenario_cli commands $RUN/scenario.yaml $REPEAT_ARG --steps-out $RUN/steps.json" \
+  > "$RUN_HOST/commands.tsv" < /dev/null || rc=$?
+if [ "$rc" = 64 ]; then
   echo "シナリオの検証に失敗した（上のメッセージ参照）" >&2
   exit 64
 fi
-
-stop_recorders() {
-  # [s] / [x] は pkill 自身を呼ぶ bash -c のコマンドラインに一致させないため
-  arm "pkill -INT -f '[s]cenario_observer --out $RUN' ; pkill -INT -f '[x]11grab.*$RUN/desktop.mp4'" < /dev/null || true
-  for _ in $(seq 1 30); do
-    arm "pgrep -f '[s]cenario_observer --out $RUN|[x]11grab.*$RUN/desktop.mp4'" > /dev/null 2>&1 < /dev/null || return 0
-    sleep 1
-  done
-  echo "記録プロセスが止まらない（30 秒）" >&2
-}
-trap stop_recorders EXIT
+[ "$rc" = 0 ] || fail_env "シナリオを展開できない（rc=$rc）"
+# 送るコマンドは scenario.py が作る 2 種類の形に限る（YAML の値は数値に変換済み。生成側の検証が漏れても
+# ここで止める）。bash -c の文字列に入るので、シェルの特殊文字が混ざったら実行しない
+CMD_RE='^ros2 (topic pub|action send_goal) [-A-Za-z0-9_ /.:{},"#]+$'
+while IFS=$'\t' read -r _ _ _ cmd; do
+  [[ "$cmd" =~ $CMD_RE ]] || fail_env "想定外の形のコマンドなので実行しない: $cmd"
+done < "$RUN_HOST/commands.tsv"
+MAX_SEC="$(arm "ros2 run ros2_poc_sim scenario_cli budget $RUN" < /dev/null)" || fail_env "記録時間の上限を計算できない"
 
 SIZE="$(arm "xdpyinfo -display :1 | awk '/dimensions:/{print \$2}'" < /dev/null)"
 if [[ ! "$SIZE" =~ ^[0-9]+x[0-9]+$ ]]; then
-  echo "デスクトップ（DISPLAY=:1）の大きさが取れない（${SIZE:-空}）。noVNC のデスクトップが起動しているか確認する。" >&2
-  exit 2
+  fail_env "デスクトップ（DISPLAY=:1）の大きさが取れない（${SIZE:-空}）。noVNC のデスクトップが起動しているか確認する。"
 fi
-arm_bg "exec ros2 run ros2_poc_sim scenario_observer --out $RUN > $RUN/observer.log 2>&1"
-arm_bg "date +%s.%N > $RUN/desktop_t0.txt; exec ffmpeg -y -v error -f x11grab -framerate 10 -video_size $SIZE -i :1 -c:v libx264 -preset ultrafast -pix_fmt yuv420p $RUN/desktop.mp4 2> $RUN/desktop_ffmpeg.log"
+# 記録プロセスは停止の指示が届かなくても MAX_SEC 秒で止まる（-t / --max-duration）
+arm_bg "exec ros2 run ros2_poc_sim scenario_observer --out $RUN --max-duration $MAX_SEC > $RUN/observer.log 2>&1"
+arm_bg "date +%s.%N > $RUN/desktop_t0.txt; exec ffmpeg -y -v error -f x11grab -framerate 10 -video_size $SIZE -t $MAX_SEC -i :1 -c:v libx264 -preset ultrafast -pix_fmt yuv420p $RUN/desktop.mp4 2> $RUN/desktop_ffmpeg.log"
 # 記録の立ち上がり待ち: 送信前のフレームが要るので、カメラのフレームが記録され始めるまで待つ
 frames_recorded() { { wc -l < "$RUN_HOST/camera_frames.csv"; } 2>/dev/null || echo 0; }
 for _ in $(seq 1 60); do
   [ "$(frames_recorded)" -ge 4 ] && break
   sleep 1
 done
-if [ "$(frames_recorded)" -lt 4 ]; then
-  echo "カメラのフレームが記録されない（$RUN_HOST/observer.log を確認）" >&2
-  exit 2
-fi
+[ "$(frames_recorded)" -ge 4 ] || fail_env "カメラのフレームが記録されない（$RUN_HOST/observer.log を確認）"
 
 : > "$RUN_HOST/events.jsonl"
 : > "$RUN_HOST/commands.log"
@@ -160,11 +204,7 @@ while IFS=$'\t' read -r name target wait cmd <&3; do
   # 送信前後の時刻はコンテナ内で取る（コンテナは Colima VM の時計を共有し、記録ノードと揃う）
   script="date +%s.%N; timeout 30 $cmd > /dev/null 2>&1; rc=\$?; date +%s.%N; exit \$rc"
   rc=0
-  if [ "$target" = ros2lab-a ]; then
-    out="$(lab "$script" < /dev/null)" || rc=$?
-  else
-    out="$(arm "$script" < /dev/null)" || rc=$?
-  fi
+  out="$(send "$target" "$script" < /dev/null)" || rc=$?
   stamps="$(printf '%s\n' "$out" | grep -E '^[0-9]+\.[0-9]+$' || true)"
   t_start="$(printf '%s\n' "$stamps" | sed -n 1p)"
   t_sent="$(printf '%s\n' "$stamps" | sed -n 2p)"
@@ -174,25 +214,25 @@ while IFS=$'\t' read -r name target wait cmd <&3; do
     t_start="${t_start:-0}"; t_sent="${t_sent:-$t_start}"
   fi
   [ "$rc" = 0 ] || echo "  命令が失敗した（rc=$rc）" >&2
+  # name は scenario.py で英数字・_・-（と repeat の #k）に限られるので JSON の文字列にそのまま入れてよい
   printf '{"index": %d, "name": "%s", "target": "%s", "t_start": %s, "t_sent": %s, "rc": %d}\n' \
     "$((i - 1))" "$name" "$target" "$t_start" "$t_sent" "$rc" >> "$RUN_HOST/events.jsonl"
-  # 静止するまで待つ（シミュは実時間より遅いので指令時間では足りない）。最低でも目安の秒数は待つ
+  # 静止するまで待つ（シミュは実時間より遅いので指令時間では足りない）。wait が使えなければ目安の秒数
   arm "ros2 run ros2_poc_sim scenario_cli wait $RUN $((i - 1))" < /dev/null || sleep "$wait"
 done 3< "$RUN_HOST/commands.tsv"
 
-stop_recorders
-trap - EXIT
+stop_recorders || fail_env "記録プロセスを止められないので判定しない（camera.mp4 が未完の可能性）"
 
 judge_rc=0
 arm "ros2 run ros2_poc_sim scenario_cli judge $RUN" < /dev/null || judge_rc=$?
-if [ "$judge_rc" -gt 1 ]; then
-  echo "判定に失敗した（rc=$judge_rc）" >&2
-  exit 2
+if [ "$judge_rc" -gt 1 ] || [ ! -f "$RUN_HOST/result.json" ]; then
+  fail_env "判定に失敗した（rc=$judge_rc）"
 fi
+# 合成の失敗は判定結果（終了コード）を変えない。result.json が判定の正
 if arm "ros2 run ros2_poc_sim scenario_cli compose $RUN" < /dev/null; then
   echo "動画: $RUN_HOST/scenario.mp4"
 else
-  echo "合成に失敗した（$RUN_HOST/overlay/filtergraph.txt を確認）" >&2
+  echo "合成に失敗した（$RUN_HOST/overlay/filtergraph.txt を確認）。判定は result.json を見る" >&2
 fi
 echo "判定: $RUN_HOST/result.json"
 exit "$judge_rc"

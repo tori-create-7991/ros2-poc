@@ -11,6 +11,7 @@
 """
 import argparse
 import json
+import math
 import subprocess
 import time
 from pathlib import Path
@@ -24,10 +25,20 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 EE_LINK = 'crane_x7_gripper_base_link'
 MAX_PIXELS = 1920 * 1080   # DDS は無認証。巨大な画像でディスク・メモリを使い切られないよう上限を置く
+MAX_FPS = 30.0             # これより速く届くフレームは捨てる（同上。シミュは 1〜3fps）
+
+
+def valid_camera_info(k, width, height, image_size=None):
+    """CameraInfo を判定・合成に使えるか（無認証の DDS から来るので値を信用しない）。"""
+    if not 0 < width * height <= MAX_PIXELS:
+        return False
+    if image_size is not None and (width, height) != image_size:
+        return False
+    return len(k) == 9 and all(math.isfinite(x) for x in k) and k[0] > 0 and k[4] > 0
 
 
 class Observer(Node):
-    def __init__(self, out, image_topic, info_topic, ee_link, period):
+    def __init__(self, out, image_topic, info_topic, ee_link, period, max_duration):
         super().__init__('scenario_observer')
         self.out = Path(out)
         self.ee_link = ee_link
@@ -37,6 +48,8 @@ class Observer(Node):
         self.n = 0
         self.frame_id = None
         self.last_joint_t = 0.0
+        self.last_frame_t = 0.0
+        self.deadline = time.time() + max_duration
         # 行バッファ: 実行中に run-scenario.sh / scenario_cli wait が読むので、書いたらすぐ見えるようにする
         self.frames_csv = (self.out / 'camera_frames.csv').open('w', encoding='utf-8', buffering=1)
         self.frames_csv.write('n,t\n')
@@ -50,8 +63,13 @@ class Observer(Node):
         self.create_timer(period, self.on_timer)
         self.get_logger().info(f'記録開始: {self.out}')
 
+    def expired(self):
+        return time.time() > self.deadline
+
     def on_image(self, msg):
         t = time.time()
+        if t - self.last_frame_t < 1.0 / MAX_FPS:
+            return
         if msg.encoding != 'rgb8' or msg.width * msg.height > MAX_PIXELS:
             self.get_logger().warn(f'未対応の画像（{msg.encoding} {msg.width}x{msg.height}）は捨てる',
                                    throttle_duration_sec=5.0)
@@ -76,10 +94,14 @@ class Observer(Node):
             return
         self.frames_csv.write(f'{self.n},{t:.6f}\n')
         self.n += 1
+        self.last_frame_t = t
 
     def on_info(self, msg):
         p = self.out / 'camera_info.json'
-        if p.exists():
+        if p.exists() or self.size is None:
+            return   # 最初の画像を受けてから、その大きさに合う CameraInfo だけを保存する
+        if not valid_camera_info(list(msg.k), msg.width, msg.height, self.size):
+            self.get_logger().warn('画像と合わない・不正な CameraInfo は捨てる', throttle_duration_sec=5.0)
             return
         p.write_text(json.dumps({'k': list(msg.k), 'width': msg.width, 'height': msg.height,
                                  'frame_id': msg.header.frame_id}), encoding='utf-8')
@@ -118,12 +140,17 @@ def main(argv=None):
     p.add_argument('--info-topic', default='/camera/color/camera_info')
     p.add_argument('--ee-link', default=EE_LINK)
     p.add_argument('--period', type=float, default=0.1)
+    p.add_argument('--max-duration', type=float, default=3600.0,
+                   help='この秒数で記録を止める（停止の指示が届かなかったときの安全弁）')
     a, ros_args = p.parse_known_args(argv)
     Path(a.out).mkdir(parents=True, exist_ok=True)
     rclpy.init(args=ros_args)
-    node = Observer(a.out, a.image_topic, a.info_topic, a.ee_link, a.period)
+    node = Observer(a.out, a.image_topic, a.info_topic, a.ee_link, a.period, a.max_duration)
     try:
-        rclpy.spin(node)
+        while rclpy.ok() and not node.expired():
+            rclpy.spin_once(node, timeout_sec=0.2)
+        if node.expired():
+            node.get_logger().warn(f'{a.max_duration:.0f} 秒たったので記録を止める')
     except KeyboardInterrupt:
         pass
     finally:

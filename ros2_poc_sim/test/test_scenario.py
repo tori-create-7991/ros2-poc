@@ -35,6 +35,11 @@ def test_positions_step_defaults():
     {'waypoints': [{'positions': POSE_A, 'time_from_start': 2},
                    {'positions': POSE_A, 'time_from_start': 2}]},   # 単調増加でない
     {'random': {'n': 0}},
+    {'random': {'n': 1, 'seed': [1]}},                              # seed が整数でない
+    {'random': {'n': 1, 'speed': 2}},                               # random の不明なキー
+    {'positions': POSE_A, 'tolerance': 0},                          # 許容 0
+    {'positions': POSE_A, 'tolerance': -0.1},
+    {'positions': POSE_A, 'tolerance': 1.0},                        # 緩すぎる
 ])
 def test_invalid_steps_raise(step):
     with pytest.raises(ValueError):
@@ -88,7 +93,7 @@ def test_repeat_suffixes_names_and_cli_overrides_yaml():
 def test_arm_command_matches_readme_form_but_publishes_three_times():
     (s,) = _one({'positions': POSE_A, 'time_from_start': 3})
     target, cmd = S.to_command(s)
-    assert target == 'ros2lab-a'
+    assert target == S.LAB
     assert cmd == (
         'ros2 topic pub -w 1 --times 3 -r 2 /crane_x7_arm_controller/joint_trajectory '
         'trajectory_msgs/msg/JointTrajectory "{joint_names: [crane_x7_shoulder_fixed_part_pan_joint, '
@@ -108,7 +113,7 @@ def test_waypoint_command_has_all_points_with_nanosec():
 def test_gripper_command_goes_to_ros2arm():
     (s,) = _one({'gripper': 'open'})
     target, cmd = S.to_command(s)
-    assert target == 'ros2arm'
+    assert target == S.SIM
     assert cmd == ('ros2 action send_goal /crane_x7_gripper_controller/gripper_cmd '
                    'control_msgs/action/ParallelGripperCommand '
                    '"{command: {name: [crane_x7_gripper_finger_a_joint], position: [1.047198]}}"')
@@ -120,9 +125,14 @@ def test_commands_have_no_shell_metacharacters_besides_quotes():
         assert not set(cmd) & set('$`\\;&|<>\'\n\t')
 
 
-def test_wait_after_send_covers_motion_and_settle():
+def test_wait_after_send_covers_motion():
     (s,) = _one({'positions': POSE_A, 'time_from_start': 3})
-    assert S.wait_after_send(s) >= 3 + S.SETTLE_SEC + S.SETTLE_WINDOW_SEC
+    assert S.wait_after_send(s) == 3 + S.FALLBACK_WAIT_SEC
+
+
+def test_display_and_command_share_publish_options():
+    (s,) = _one({'positions': POSE_A})
+    assert S.ARM_PUB_OPTS in S.to_command(s)[1] and S.ARM_PUB_OPTS in S.display_lines(s)[0]
 
 
 def test_step_dict_roundtrip_keeps_command():
