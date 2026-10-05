@@ -1,0 +1,62 @@
+name: scenario-e2e
+
+# 重い（イメージのビルド + Gazebo の CPU 描画）ので PR / push では動かさない。手動で回す。
+# GPU・実機は不要。公式 Gazebo + MoveIt + 仮想カメラを ros2arm で動かし、
+# scripts/run-scenario.sh のシナリオ（default / fail_demo / examples）を判定付きで実行する。
+on:
+  pull_request:  # TEMP: 初回検証用。検証後に外す
+    paths: ['.github/workflows/scenario-e2e.yml', 'scripts/ci-scenario-e2e.sh']
+  workflow_dispatch:
+    inputs:
+      scenarios:
+        description: '実行するシナリオ（空白区切り）'
+        default: 'default fail_demo examples'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: free disk space
+        run: |
+          # ベースイメージ + MoveIt + Gazebo でランナーの空きでは足りないため、使わない大物を消す
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: build and start ros2arm / ros2lab
+        run: |
+          mkdir -p workspace
+          # コンテナの ubuntu(uid 1000) がランナーのユーザーと違っても書けるようにする
+          chmod 777 workspace
+          bash scripts/up-arm.sh
+          docker ps
+
+      - name: run scenarios
+        env:
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: |
+          # shellcheck disable=SC2086  # 空白区切りの複数シナリオを分割して渡す
+          bash scripts/ci-scenario-e2e.sh $SCENARIOS
+
+      - name: container logs
+        if: failure()
+        run: |
+          docker ps -a
+          docker logs --tail 200 ros2arm || true
+          tail -n 100 workspace/runs/sim-*.log || true
+
+      - name: upload runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-runs
+          path: workspace/runs/
+          if-no-files-found: ignore
+          retention-days: 14
