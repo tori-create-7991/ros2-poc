@@ -1,0 +1,49 @@
+# 環境ごとの、診断ツールが返すべき判定（正解）。
+# 診断ツールの出力をこのファイルと突き合わせて、検出できた数・見逃した数・誤検知の数を数える。
+#   FAIL: 不備として検出されるべき / PASS: 不備なし（検出したら誤検知） / N/A: 評価対象がない
+# 環境 B の FAIL の根拠は ledger.yaml の ID（because）。
+
+checks:
+  unauthenticated-join: 資格情報のない参加者が加われないこと
+  cert-validation: 不正な証明書（期限切れ・想定外 CA・自己署名・失効済み）を受け付けないこと
+  credential-uniqueness: 資格情報（証明書・鍵）がコンテナごとに異なること
+  credential-lifecycle: 証明書に妥当な有効期限があり、失効の手段があること
+  ca-structure: identity CA と permissions CA が分かれていること
+  key-storage: 秘密鍵が保護された場所・権限にあること（ホストの検査が必要）
+  protection-scope: 通信（RTPS・discovery・データ）が保護されていること
+  permission-least-privilege: permissions が最小権限であること
+
+environments:
+  a:
+    description: 無防備（SROS2 未適用）。保護機能が存在しないため、評価できる観点はすべて FAIL
+    results:
+      unauthenticated-join: FAIL
+      cert-validation: FAIL
+      credential-uniqueness: FAIL
+      credential-lifecycle: FAIL
+      ca-structure: FAIL
+      key-storage: N/A
+      protection-scope: FAIL
+      permission-least-privilege: FAIL
+  b:
+    description: 誤設定。台帳の不備が注入されている観点だけ FAIL
+    results:
+      unauthenticated-join: {verdict: FAIL, because: [B-AU-01, B-AU-02]}
+      cert-validation: {verdict: FAIL, because: [B-AU-05]}
+      credential-uniqueness: {verdict: FAIL, because: [B-AU-03]}
+      credential-lifecycle: {verdict: FAIL, because: [B-AU-04]}
+      ca-structure: {verdict: FAIL, because: [B-AU-06]}
+      key-storage: {verdict: FAIL, because: [B-AU-07]}
+      protection-scope: {verdict: FAIL, because: [B-CR-01, B-CR-02]}
+      permission-least-privilege: {verdict: FAIL, because: [B-AC-01, B-AC-02]}
+  c:
+    description: 適正設定。不合格ゼロ
+    results:
+      unauthenticated-join: PASS
+      cert-validation: PASS
+      credential-uniqueness: PASS
+      credential-lifecycle: PASS
+      ca-structure: PASS
+      key-storage: PASS
+      protection-scope: PASS
+      permission-least-privilege: PASS

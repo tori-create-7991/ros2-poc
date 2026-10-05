@@ -186,9 +186,125 @@ PY
 }
 
 # --- 環境 B ---
+# 台帳（sros2/ledger/ledger.yaml）の各不備が、本当にこの環境に注入されているかを確認する。
+# probe_B_* は「不備が存在する」ときに 0 を返す（0 なら PASS = 正しく仕込まれている）。
+B_ENCLAVE_DIR=/run/sros2/keystore/enclaves/lab/shared
+
+b_governance() { dx "$LAB_A" openssl smime -verify -noverify -in "$B_ENCLAVE_DIR/governance.p7s" -text 2>/dev/null; }
+b_permissions() { dx "$LAB_A" openssl smime -verify -noverify -in "$B_ENCLAVE_DIR/permissions.p7s" -text 2>/dev/null; }
+
+# B-AU-01: 未認証参加者の許可（governance。静的に確認する）
+probe_B_AU_01() { grep -q "<allow_unauthenticated_participants>true<" <<<"$(b_governance)"; }
+
+# B-AU-02: ros2lab-b がセキュリティなしにフォールバックしている。
+# Permissive で、指定の enclave のディレクトリが無く、鍵なしの参加者が ros2lab-b の publisher から受信できる
+probe_B_AU_02() {
+  [ "$(env_of "$LAB_B" ROS_SECURITY_STRATEGY)" = "Permissive" ] || return 1
+  local enc
+  enc="$(env_of "$LAB_B" ROS_SECURITY_ENCLAVE_OVERRIDE)"
+  dx "$LAB_B" test ! -d "/run/sros2/keystore/enclaves$enc" || return 1
+  pub_bg "$LAB_B" "$TOPIC_STATE" 14
+  sleep 3
+  local r
+  r="$(sub_run "$DIAG" "$TOPIC_STATE" 7)"
+  wait
+  gt_zero "${r%% *}"
+}
+
+# B-AU-03: ros2lab-a と ros2lab-b が同じ証明書を使っている
+probe_B_AU_03() {
+  local fa fb
+  fa="$(cert_fp "$LAB_A" "$B_ENCLAVE_DIR/cert.pem")"
+  fb="$(cert_fp "$LAB_B" "$B_ENCLAVE_DIR/cert.pem")"
+  [ -n "$fa" ] && [ "$fa" = "$fb" ]
+}
+
+# B-AU-04: 証明書が実質無期限（3000 日超）
+probe_B_AU_04() { [ "$(cert_days "$LAB_A" "$B_ENCLAVE_DIR/cert.pem")" -gt 3000 ] 2>/dev/null; }
+
+# B-AU-05: CRL がなく、失効済みの証明書を提示した参加者が受理される
+probe_B_AU_05() {
+  dx "$LAB_A" test ! -e "$B_ENCLAVE_DIR/crl.pem" || return 1
+  # shellcheck disable=SC2046
+  pub_bg "$DIAG" "$TOPIC_STATE" 14 $(rogue_args b revoked /lab/shared)
+  sleep 3
+  local r
+  r="$(sub_run "$LAB_A" "$TOPIC_STATE" 7)"
+  wait
+  gt_zero "${r%% *}"
+}
+
+# B-AU-06: identity CA と permissions CA が同一
+probe_B_AU_06() {
+  local i p
+  i="$(cert_fp "$LAB_A" "$B_ENCLAVE_DIR/identity_ca.cert.pem")"
+  p="$(cert_fp "$LAB_A" "$B_ENCLAVE_DIR/permissions_ca.cert.pem")"
+  [ -n "$i" ] && [ "$i" = "$p" ]
+}
+
+# B-AU-07: 別のコンテナ（ros2lab-b）から、共有領域の秘密鍵が読める。鍵のパーミッションが誰でも読める
+probe_B_AU_07() {
+  dx "$LAB_B" test -r /workspace/sros2-keystore/key.pem || return 1
+  local mode
+  mode="$(dx "$LAB_B" stat -c %a /workspace/sros2-keystore/key.pem)"
+  [ "${mode: -1}" -ge 4 ] 2>/dev/null
+}
+
+# B-CR-01: lab/cmd だけ保護対象外（governance の規則）で、lab/cmd の payload は平文、lab/state は暗号化されている
+probe_B_CR_01() {
+  grep -q "<topic_expression>rt/lab/cmd</topic_expression>" <<<"$(b_governance)" || return 1
+  # shellcheck disable=SC2046
+  local cmd_hits state_hits
+  cap_start "$LAB_A" cap-cmd
+  pub_bg "$LAB_A" lab/cmd 12
+  sleep 2
+  # 認証済み（shared の正規の証明書）の参加者が受信する
+  # shellcheck disable=SC2046
+  sub_run "$DIAG" lab/cmd 6 $(rogue_args b valid /lab/shared) > /dev/null
+  wait
+  cap_stop cap-cmd
+  cmd_hits="$(pcap_count "$OUT/cap-cmd.pcap" "$PAYLOAD")"
+  cap_start "$LAB_A" cap-state
+  pub_bg "$LAB_A" "$TOPIC_STATE" 12
+  sleep 2
+  # shellcheck disable=SC2046
+  sub_run "$DIAG" "$TOPIC_STATE" 6 $(rogue_args b valid /lab/shared) > /dev/null
+  wait
+  cap_stop cap-state
+  state_hits="$(pcap_count "$OUT/cap-state.pcap" "$PAYLOAD")"
+  echo "B-CR-01 pcap: lab/cmd の平文 payload=$cmd_hits lab/state の平文 payload=$state_hits" >> "$OUT/result.txt"
+  [ "$cmd_hits" -gt 0 ] && [ "$state_hits" -eq 0 ]
+}
+
+# B-CR-02: RTPS 保護が NONE
+probe_B_CR_02() { grep -q "<rtps_protection_kind>NONE<" <<<"$(b_governance)"; }
+
+# B-AC-01: permissions にワイルドカード
+probe_B_AC_01() { grep -Eq "<topic>[^<]*\*" <<<"$(b_permissions)"; }
+
+# B-AC-02: permissions の default が ALLOW
+probe_B_AC_02() { grep -q "<default>ALLOW</default>" <<<"$(b_permissions)"; }
+
+# 注入した ID の一覧（gen-keystore が書く）と台帳の ID が一致するか
+injected_matches_ledger() {
+  local ledger_ids injected
+  ledger_ids="$(sed -n 's/^  - id: //p' sros2/ledger/ledger.yaml | sort | tr '\n' ' ')"
+  injected="$(sort sros2/keystores/b/injected.txt 2>/dev/null | tr '\n' ' ')"
+  echo "台帳: $ledger_ids / 注入: $injected" >> "$OUT/result.txt"
+  [ -n "$ledger_ids" ] && [ "$ledger_ids" = "$injected" ]
+}
+
 verify_b() {
   require_running "$LAB_A" "$LAB_B" "$DIAG"
-  fail B0 "環境 B の検証は未実装"
+  check B1 "ros2lab-a/b の環境ラベルが b" eq "$(label_of "$LAB_A")$(label_of "$LAB_B")" "bb"
+  check B2 "STRATEGY=Permissive" eq "$(env_of "$LAB_A" ROS_SECURITY_STRATEGY)" "Permissive"
+  check B3 "注入した不備の ID が台帳と一致する（台帳にない不備・注入漏れがない）" injected_matches_ledger
+  bash scripts/sros2/gen-rogue.sh b all >/dev/null 2>&1 || true
+
+  local id probe title
+  while IFS=$'\t' read -r id probe title; do
+    check "$id" "$title（不備が注入されている）" "$probe"
+  done < <(awk '/^  - id:/{id=$3} /^    title:/{sub(/^    title: /,""); t=$0} /^    ground_truth_probe:/{print id "\t" $2 "\t" t}' sros2/ledger/ledger.yaml)
 }
 
 "verify_$ENV_NAME"
