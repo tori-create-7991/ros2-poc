@@ -57,6 +57,12 @@ class Step:
         """送信完了から動作が終わるまでの秒数。gripper は send_goal が結果を待つので 0。"""
         return self.points[-1][1]
 
+    @classmethod
+    def from_dict(cls, d):
+        return cls(d['name'], d['kind'],
+                   [(tuple(p['positions']), p['time_from_start']) for p in d['points']],
+                   tuple(d['expect']), d['tolerance'], list(d['joints']))
+
     def to_dict(self):
         return {'name': self.name, 'kind': self.kind, 'joints': list(self.joints),
                 'points': [{'positions': list(p), 'time_from_start': t} for p, t in self.points],
@@ -215,6 +221,16 @@ def to_command(step):
     msg = f'{{joint_names: [{", ".join(ARM_JOINTS)}], points: [{pts}]}}'
     return 'ros2lab-a', (f'ros2 topic pub --once -w 1 {ARM_TOPIC} '
                          f'trajectory_msgs/msg/JointTrajectory "{msg}"')
+
+
+def display_lines(step):
+    """動画の下帯に出す短い命令表示（関節名は省き、送る値だけを見せる）。全文は commands.log。"""
+    if step.kind == GRIPPER:
+        return [f'$ ros2 action send_goal {GRIPPER_ACTION} control_msgs/action/ParallelGripperCommand',
+                f'    {GRIPPER_JOINT} -> {fmt(step.points[0][0][0])} rad']
+    pts = '  '.join(f'[{", ".join(fmt(x) for x in p)}] @{fmt(t)}s' for p, t in step.points)
+    return [f'$ ros2 topic pub --once -w 1 {ARM_TOPIC} trajectory_msgs/msg/JointTrajectory',
+            f'    positions: {pts}']
 
 
 def wait_after_send(step):

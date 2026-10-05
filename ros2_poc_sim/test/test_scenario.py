@@ -123,3 +123,18 @@ def test_commands_have_no_shell_metacharacters_besides_quotes():
 def test_wait_after_send_covers_motion_and_settle():
     (s,) = _one({'positions': POSE_A, 'time_from_start': 3})
     assert S.wait_after_send(s) >= 3 + S.SETTLE_SEC + S.SETTLE_WINDOW_SEC
+
+
+def test_step_dict_roundtrip_keeps_command():
+    for s in S.load_scenario(SCENARIOS / 'default.yaml'):
+        assert S.to_command(S.Step.from_dict(s.to_dict())) == S.to_command(s)
+
+
+def test_display_lines_show_values_without_joint_names():
+    arm, grip = S.parse_scenario({'steps': [
+        {'waypoints': [{'positions': [0.0] * 7, 'time_from_start': 1.5},
+                       {'positions': POSE_A, 'time_from_start': 3}]}, {'gripper': 'close'}]})
+    lines = S.display_lines(arm)
+    assert lines[0].startswith('$ ros2 topic pub --once -w 1 /crane_x7_arm_controller/joint_trajectory')
+    assert lines[1] == '    positions: [0, 0, 0, 0, 0, 0, 0] @1.5s  [0.5, 0.3, 0, -1.2, 0, -0.5, 0] @3s'
+    assert S.display_lines(grip)[1] == '    crane_x7_gripper_finger_a_joint -> 0 rad'

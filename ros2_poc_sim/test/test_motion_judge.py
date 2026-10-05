@@ -1,0 +1,176 @@
+import json
+
+import numpy as np
+import pytest
+
+from ros2_poc_sim import motion_judge as M
+from ros2_poc_sim import scenario as S
+
+K = [400.0, 0, 320.0, 0, 400.0, 240.0, 0, 0, 1]
+J = S.ARM_JOINTS
+HOME = [0.0] * 7
+POSE_A = [0.5, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0]
+
+
+def _bg():
+    return np.full((480, 640, 3), 100, np.uint8)
+
+
+def _with_box(x0, y0, x1, y1):
+    img = _bg()
+    img[y0:y1, x0:x1] = 220
+    return img
+
+
+def _ok_inputs(**over):
+    kw = dict(joints=J, expected=POSE_A, tolerance=0.05,
+              actual_before=dict(zip(J, HOME)), actual_after=dict(zip(J, POSE_A)),
+              frame_before=_bg(), frame_after=_with_box(300, 200, 360, 280),
+              frame_settled=_with_box(300, 200, 360, 280),
+              ee_xyz=[0.0, 0.0, 1.0], K=K, motion_min=M.MOTION_MIN)
+    kw.update(over)
+    return kw
+
+
+def test_diff_mask_ratio_and_bbox():
+    m = M.diff_mask(_bg(), _with_box(10, 20, 30, 60))
+    assert m.sum() == 20 * 40
+    assert M.changed_ratio(m) == pytest.approx(800 / (480 * 640))
+    assert M.bbox(m, margin=5) == (5, 15, 34, 64)
+    assert M.bbox(m, margin=100) == (0, 0, 129, 159)
+    assert M.bbox(np.zeros((4, 4), bool)) is None
+
+
+def test_diff_mask_ignores_small_noise_and_rejects_shape_mismatch():
+    noisy = _bg() + np.uint8(M.DIFF_THRESH)   # ちょうどしきい値は変化とみなさない
+    assert not M.diff_mask(_bg(), noisy).any()
+    with pytest.raises(ValueError):
+        M.diff_mask(_bg(), np.zeros((10, 10, 3), np.uint8))
+
+
+def test_project():
+    assert M.project([0.1, -0.05, 1.0], K) == pytest.approx((360.0, 220.0))
+    assert M.project([0.0, 0.0, -1.0], K) is None
+
+
+def test_joint_error_max_abs_and_missing():
+    assert M.joint_error(dict(zip(J, POSE_A)), J, HOME) == pytest.approx(1.2)
+    with pytest.raises(ValueError):
+        M.joint_error({}, J, HOME)
+
+
+def test_judge_pass_when_all_conditions_hold():
+    r = M.judge_step(**_ok_inputs())
+    assert r['verdict'] == 'PASS', r['reasons']
+    assert r['ee_px'] == pytest.approx((320.0, 240.0)) and r['expect_motion'] is True
+
+
+@pytest.mark.parametrize('over, needle', [
+    ({'actual_after': dict(zip(J, HOME))}, '関節誤差'),
+    ({'frame_after': _bg(), 'frame_settled': _bg()}, '映像に動きが無い'),
+    ({'ee_xyz': [0.5, 0.5, 1.0]}, '変化領域'),
+    ({'ee_xyz': None}, '投影できない'),
+    ({'frame_settled': _with_box(100, 100, 200, 200)}, 'まだ動いている'),
+    ({'actual_after': None}, '/joint_states が無い'),
+    ({'frame_before': None}, 'フレームが無い'),
+])
+def test_each_condition_fails_alone(over, needle):
+    r = M.judge_step(**_ok_inputs(**over))
+    assert r['verdict'] == 'FAIL'
+    assert any(needle in x for x in r['reasons']), r['reasons']
+    assert len(r['codes']) == len(r['reasons']) and all(c.isascii() for c in r['codes'])
+
+
+def test_no_motion_expected_inverts_visual_check():
+    still = dict(expected=HOME, actual_before=dict(zip(J, HOME)), actual_after=dict(zip(J, HOME)),
+                 frame_after=_bg(), frame_settled=_bg(), ee_xyz=None)
+    assert M.judge_step(**_ok_inputs(**still))['verdict'] == 'PASS'
+    moved = M.judge_step(**_ok_inputs(**{**still, 'frame_after': _with_box(0, 0, 200, 200),
+                                         'frame_settled': _with_box(0, 0, 200, 200)}))
+    assert moved['verdict'] == 'FAIL' and '動かないはず' in moved['reasons'][0]
+
+
+def test_gripper_uses_lower_motion_threshold():
+    g = S.GRIPPER_JOINT
+    kw = _ok_inputs(joints=[g], expected=[0.0], tolerance=0.1,
+                    actual_before={g: 1.0}, actual_after={g: 0.02},
+                    frame_after=_with_box(310, 230, 330, 250), frame_settled=_with_box(310, 230, 330, 250))
+    assert M.judge_step(**kw)['verdict'] == 'FAIL'   # アームのしきい値では小さすぎる
+    assert M.judge_step(**{**kw, 'motion_min': M.GRIPPER_MOTION_MIN})['verdict'] == 'PASS'
+
+
+def test_series_nearest_and_before_respect_gap():
+    s = M.Series([{'t': 1.0}, {'t': 2.0}, {'t': 3.0}])
+    assert s.nearest(2.2)['t'] == 2.0 and s.nearest(2.6)['t'] == 3.0
+    assert s.nearest(10.0) is None and s.before(2.4)['t'] == 2.0 and s.before(2.9) is None and s.before(0.5) is None
+    assert M.Series([]).nearest(1.0) is None
+
+
+def test_read_jsonl_skips_truncated_last_line(tmp_path):
+    p = tmp_path / 'x.jsonl'
+    p.write_text('{"t": 1}\n{"t": 2}\n{"t": 3', encoding='utf-8')
+    assert [r['t'] for r in M.read_jsonl(p)] == [1, 2]
+    assert M.read_jsonl(tmp_path / 'none.jsonl') == []
+
+
+def test_frame_at_decodes_rawvideo_and_rejects_short_output():
+    calls = []
+
+    class R:
+        def __init__(self, out):
+            self.stdout = out
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return R(bytes(range(12)))
+
+    f = M.frame_at('v.mp4', 7, 2, 2, run=run)
+    assert f.shape == (2, 2, 3) and f[1, 1, 2] == 11
+    assert 'select=eq(n\\,7)' in calls[0]
+    assert M.frame_at('v.mp4', 7, 4, 4, run=run) is None
+
+
+def _write_run(tmp_path, steps, events, joints, frames, ee, info=True):
+    (tmp_path / 'steps.json').write_text(json.dumps([s.to_dict() for s in steps]))
+    (tmp_path / 'events.jsonl').write_text(''.join(json.dumps(e) + '\n' for e in events))
+    (tmp_path / 'joints.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in joints))
+    (tmp_path / 'ee.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in ee))
+    (tmp_path / 'camera_frames.csv').write_text('n,t\n' + ''.join(f'{n},{t}\n' for n, t in frames))
+    if info:
+        (tmp_path / 'camera_info.json').write_text(json.dumps({'k': K, 'width': 640, 'height': 480}))
+
+
+def test_judge_run_end_to_end_with_fake_video(tmp_path):
+    steps = S.parse_scenario({'steps': [{'name': 'a', 'positions': POSE_A, 'time_from_start': 2},
+                                        {'name': 'b', 'positions': HOME, 'time_from_start': 2}]})
+    # a: t_start=10, t_sent=11 → t_end=14。b は命令失敗（rc=1）
+    events = [{'index': 0, 't_start': 10.0, 't_sent': 11.0, 'rc': 0},
+              {'index': 1, 't_start': 20.0, 't_sent': 21.0, 'rc': 1}]
+    joints = [{'t': t, 'name': J, 'position': HOME if t < 12 else POSE_A} for t in np.arange(9, 16, 0.1)]
+    frames = [(n, 9.0 + n * 0.2) for n in range(40)]
+    ee = [{'t': t, 'xyz': [0.0, 0.0, 1.0]} for t in np.arange(9, 16, 0.1)]
+    _write_run(tmp_path, steps, events, joints, frames, ee)
+    moved = _with_box(300, 200, 360, 280).tobytes()
+
+    class R:
+        def __init__(self, out):
+            self.stdout = out
+
+    def run(cmd, **kw):
+        n = int(cmd[cmd.index('-vf') + 1].split('\\,')[1].rstrip(')'))
+        return R(moved if 9.0 + n * 0.2 >= 12 else _bg().tobytes())
+
+    res = M.judge_run(tmp_path, run=run)
+    assert res['total'] == 2 and res['passed'] == 1 and res['verdict'] == 'FAIL'
+    a, b = res['steps']
+    assert a['verdict'] == 'PASS', a['reasons']
+    assert a['t_end'] == pytest.approx(11.0 + 2 + S.SETTLE_SEC)
+    assert b['verdict'] == 'FAIL' and 'rc=1' in b['reasons'][0]
+
+
+def test_judge_run_without_camera_info_fails_visual_conditions(tmp_path):
+    steps = S.parse_scenario({'steps': [{'positions': POSE_A, 'time_from_start': 1}]})
+    _write_run(tmp_path, steps, [{'index': 0, 't_start': 1.0, 't_sent': 1.5, 'rc': 0}],
+               [{'t': 3.5, 'name': J, 'position': POSE_A}], [], [], info=False)
+    (r,) = M.judge_run(tmp_path, run=None)['steps']
+    assert r['verdict'] == 'FAIL' and any('フレームが無い' in x for x in r['reasons'])
