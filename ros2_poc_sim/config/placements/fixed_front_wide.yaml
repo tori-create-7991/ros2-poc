@@ -1,0 +1,8 @@
+# シナリオ録画用の三人称視点。腕全体（真上に伸ばした home 姿勢の手先まで）と机上の物体が画角に入る。
+# fixed_front_oblique は机に近く低いため、手先が縦の画角の外に出て映像での判定ができない。
+name: fixed_front_wide
+mode: fixed
+parent_frame: base_link
+robot_base_in_world: {xyz: [0, 0, 1.015], rpy: [0, 0, 0]}
+look_at: {eye: [1.05, 0.30, 0.65], target: [0.10, 0.00, 0.40], up_hint: [0, 0, 1]}
+object: {name: blue_cube, xyz_in_base_link: [0.20, 0.10, 0.03]}
