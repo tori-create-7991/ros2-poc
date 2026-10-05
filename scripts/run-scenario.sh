@@ -115,7 +115,7 @@ if ! arm "mkdir $LOCK && echo '$OWNER' > $LOCK/owner" < /dev/null 2>/dev/null; t
   if arm "pgrep -f '$ANY_RECORDERS'" > /dev/null 2>&1 < /dev/null \
      || { [ "${owner_host:-}" = "$(hostname -s 2>/dev/null || echo host)" ] && [ -n "${owner_pid:-}" ] \
           && kill -0 "$owner_pid" 2>/dev/null; }; then
-    fail_env "別の run-scenario が実行中（開始 ${started:-不明}）"
+    fail_env "別の run-scenario が実行中（開始 ${started:-不明}）。実行中でないと確かめられたら外す: docker exec ros2arm rm -r $LOCK"
   fi
   fail_env "前回の run-scenario のロックが残っている（開始 ${started:-不明}、記録プロセスは無い）。実行中でなければ外す: docker exec ros2arm rm -r $LOCK"
 fi
@@ -175,12 +175,15 @@ if ! sim_ready; then
   if [ "$START_SIM" = 1 ]; then
     # 別のシミュ（カメラ無しの公式 launch など）や起動途中のシミュに重ねて起動すると、Gazebo と
     # コントローラが二重になり、指令が両方に届いて判定が無意味になる
-    if arm "pgrep -f '[r]os2 launch|[g]z sim'" > /dev/null 2>&1 < /dev/null; then
-      fail_env "ros2arm で別のシミュ（またはカメラ無しのシミュ・起動途中のシミュ）が動いている。止めてから --start-sim で起動し直す: docker exec ros2arm pkill -INT -f '[r]os2 launch'"
+    if arm "pgrep -f '[a]rm_with_camera\.launch\.py'" > /dev/null 2>&1 < /dev/null; then
+      # カメラ付きのシミュが起動途中（前回の --start-sim が待ちの上限で終わった後など）: 重ねずに待つ
+      echo "カメラ付きのシミュが起動途中なので、起動はせずに待つ"
+    elif arm "pgrep -f '[r]os2 launch|[g]z sim'" > /dev/null 2>&1 < /dev/null; then
+      fail_env "ros2arm でカメラ無しのシミュ（README のデモなど）が動いている。止めてから --start-sim で起動し直す: docker exec ros2arm pkill -INT -f '[r]os2 launch'"
+    else
+      echo "シミュを起動する（初回やホストが重いときは数分〜十数分かかる）。ログ: $WORKSPACE_HOST/runs/sim-$TS.log"
+      arm_bg "exec ros2 launch ros2_poc_sim arm_with_camera.launch.py placement:=fixed_front_wide > /workspace/runs/sim-$TS.log 2>&1"
     fi
-    # シミュは実行の後も動き続けるので、ログは実行ごとのディレクトリの外に置く
-    echo "シミュを起動する（初回やホストが重いときは数分〜十数分かかる）。ログ: $WORKSPACE_HOST/runs/sim-$TS.log"
-    arm_bg "exec ros2 launch ros2_poc_sim arm_with_camera.launch.py placement:=fixed_front_wide > /workspace/runs/sim-$TS.log 2>&1"
   fi
   echo "トピック（/joint_states, /camera/color/image_raw）を待つ（最大 ${TIMEOUT} 秒）"
   deadline=$(( $(date +%s) + TIMEOUT ))
@@ -202,7 +205,8 @@ controller_count() {
 }
 controller_seen() {
   local n
-  n="$(controller_count)"
+  # ros2lab のログインシェルは最初にバナー行（[ros2lab] DOMAIN=...）を出すので、数値の行だけを取る
+  n="$(controller_count | grep -E '^[0-9]+$' | tail -n 1 || true)"
   [ "${n:-0}" -gt 1 ] && fail_env "crane_x7_arm_controller が ${n} 個見える（シミュの二重起動か実機ドライバと混在）。シミュを止めて起動し直す"
   [ "${n:-0}" -eq 1 ]
 }

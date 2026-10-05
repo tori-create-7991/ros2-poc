@@ -212,3 +212,16 @@ def test_judge_does_not_look_past_next_step(tmp_path):
     w(40.0)
     r0 = M.judge_run(tmp_path, run=lambda cmd, **k: _R(b''))['steps'][0]
     assert r0['t_end'] <= 20.0 and 'joints_not_still' in r0['codes']
+
+
+def test_judge_ignores_next_step_without_send_time(tmp_path):
+    # 次のステップは送信時刻が取れず t_start=0 で記録された: 前のステップの判定に使わない
+    steps = S.parse_scenario({'steps': [{'positions': POSE_A, 'time_from_start': 2},
+                                        {'positions': HOME, 'time_from_start': 2}]})
+    (tmp_path / 'steps.json').write_text(json.dumps([s.to_dict() for s in steps]))
+    (tmp_path / 'events.jsonl').write_text(
+        json.dumps({'index': 0, 't_start': 9.0, 't_sent': 10.0, 'rc': 0}) + '\n'
+        + json.dumps({'index': 1, 't_start': 0, 't_sent': 0, 'rc': 2}) + '\n')
+    _writer(tmp_path, stop_at=12.0)(30.0)
+    r0 = M.judge_run(tmp_path, run=lambda cmd, **k: _R(b''))['steps'][0]
+    assert 'joints_not_still' not in r0['codes'] and r0['t_end'] > 10.0

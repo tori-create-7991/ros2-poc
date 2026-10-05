@@ -15,7 +15,7 @@ bash scripts/run-scenario.sh --scenario <path/to/my.yaml>
 |---|---|---|
 | `--scenario` | `default` | `default` / `fail_demo` / `examples`（`ros2_poc_sim/config/scenarios/`）または YAML のパス（相対パスは実行したディレクトリから） |
 | `--repeat` | YAML の `repeat`（無ければ 1） | シナリオ全体の繰り返し回数（1〜20） |
-| `--start-sim` | なし | シミュ（公式 Gazebo + MoveIt + 仮想カメラ、視点 `fixed_front_wide`）が動いていなければ起動する。カメラ無しのシミュ（README のデモ 2 など）が動いているときは、重ねて起動せずに止める |
+| `--start-sim` | なし | シミュ（公式 Gazebo + MoveIt + 仮想カメラ、視点 `fixed_front_wide`）が動いていなければ起動する。カメラ付きのシミュが起動途中なら起動せずに待ち、カメラ無しのシミュ（README のデモ 2 など）が動いているときは重ねて起動せずに止める |
 | `--timeout` | 120（`--start-sim` 時 900） | トピックが流れ始めるまで待つ秒数 |
 
 終了コード: `0` = 全ステップ PASS / `1` = FAIL あり / `2` = 環境・記録の問題（判定できなかった。camera_info が届かない・

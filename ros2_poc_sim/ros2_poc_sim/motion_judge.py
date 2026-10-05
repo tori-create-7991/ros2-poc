@@ -351,9 +351,11 @@ def judge_run(run_dir, run=subprocess.run):
         if i in decided:
             t_end, settled = decided[i]['t_end'], decided[i]['settled']
         else:
+            # 次のステップの送信開始時刻（送れて時刻が取れたときだけ。取れないと 0 が入っている）
             nxt = events.get(i + 1)
+            usable = nxt and nxt.get('rc') == 0 and nxt['t_start'] > ev['t_sent']
             t_end, settled = judge_time(joints.records, st, ev,
-                                        t_next=nxt['t_start'] if nxt else math.inf)
+                                        t_next=nxt['t_start'] if usable else math.inf)
         fb, fa, fs = judge_frames(frames, ev['t_start'], t_end)
         ee_rec = ee.nearest(t_end)
         r = judge_step(

@@ -28,12 +28,15 @@ if [ "${1:-}" = "ps" ]; then
 fi
 [ "${1:-}" = "exec" ] || exit 0
 args="$*"
+# ros2lab のログインシェル（bash -lc）は実物と同じくバナーを先に出す
+[[ "$args" == "exec ros2lab-a bash -lc "* ]] && echo "[ros2lab] DOMAIN=42 discovery=SUBNET"
 if [ -n "${STUB_EXEC_FAIL:-}" ] && [[ "$args" =~ $STUB_EXEC_FAIL ]]; then
   exit "${STUB_EXEC_RC:-2}"
 fi
 run_dir() { [[ "$args" =~ /workspace/runs/([0-9-]+) ]] && echo "$STUB_WS/runs/${BASH_REMATCH[1]}"; }
 case "$args" in
-  *"pgrep -f '[r]os2 launch"*) [ "${STUB_SIM_RUNNING:-0}" = 1 ] && exit 0; exit 1 ;;
+  *"pgrep -f '[a]rm_with_camera"*) [ "${STUB_SIM_RUNNING:-0}" = camera ] && exit 0; exit 1 ;;
+  *"pgrep -f '[r]os2 launch"*) [ "${STUB_SIM_RUNNING:-0}" = other ] && exit 0; exit 1 ;;
   *"grep -c 'Node name"*) echo "${STUB_CONTROLLERS:-1}" ;;
   *"cat /tmp/run-scenario.lock/owner"*) echo "${STUB_OWNER:-}" ;;
   *pgrep*)
@@ -138,10 +141,16 @@ lock_released || fail "残留で終わったのに自分のロックを外して
 if grep -qE "scenario_observer --out|x11grab" <<<"$LOG"; then fail "残留なのに記録を始めた: $LOG"; fi
 
 # --start-sim でも、別のシミュ（カメラ無しなど）が動いていれば重ねて起動しない
-STUB_EXEC_FAIL='ros2 topic echo' STUB_SIM_RUNNING=1 run_case "$ALL" --start-sim
-[ "$RC" -eq 2 ] || fail "別のシミュが動いているときは exit 2 のはずが $RC: $ERR"
-grep -q "別のシミュ" <<<"$ERR" || fail "別のシミュ: 案内が無い: $ERR"
+STUB_EXEC_FAIL='ros2 topic echo' STUB_SIM_RUNNING=other run_case "$ALL" --start-sim
+[ "$RC" -eq 2 ] || fail "カメラ無しのシミュが動いているときは exit 2 のはずが $RC: $ERR"
+grep -q "カメラ無しのシミュ" <<<"$ERR" || fail "カメラ無しのシミュ: 案内が無い: $ERR"
 if grep -q "ros2 launch ros2_poc_sim" <<<"$LOG"; then fail "別のシミュに重ねて起動した: $LOG"; fi
+
+# カメラ付きのシミュが起動途中なら、重ねて起動せずに待つ（トピックが来ないままなら時間切れで 2）
+STUB_EXEC_FAIL='ros2 topic echo' STUB_SIM_RUNNING=camera run_case "$ALL" --start-sim --timeout 1
+[ "$RC" -eq 2 ] || fail "起動途中で時間切れは exit 2 のはずが $RC: $ERR"
+grep -q "トピックが流れない" <<<"$ERR" || fail "起動途中: 待たずに止めた: $ERR"
+if grep -q "ros2 launch ros2_poc_sim" <<<"$LOG"; then fail "起動途中のシミュに重ねて起動した: $LOG"; fi
 
 # コントローラが 2 つ見える（二重起動・実機と混在）→ 送信せずに exit 2
 STUB_CONTROLLERS=2 run_case "$ALL"
