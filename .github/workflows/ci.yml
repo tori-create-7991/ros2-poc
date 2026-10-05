@@ -14,9 +14,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck scripts/*.sh
+        run: shellcheck -x scripts/*.sh scripts/sros2/*.sh scripts/sros2/lib/*.sh sros2/entrypoint.sh
       - name: guard tests (docker stub)
-        run: bash scripts/test-up-real.sh
+        run: |
+          bash scripts/test-up-real.sh
+          bash scripts/test-up-env.sh
+          bash scripts/test-entrypoint.sh
+          bash scripts/test-probe.sh
+          bash scripts/test-swap.sh
+      - name: SROS2 ledger check
+        run: |
+          python3 -c 'import yaml' || (sudo apt-get update && sudo apt-get install -y python3-yaml)
+          bash scripts/sros2/check-ledger.sh
+          bash scripts/sros2/check-ledger.sh --selftest
+      - name: python syntax
+        run: python3 -m py_compile scripts/sros2/lib/ledger.py scripts/sros2/lib/test_ledger.py sros2/tools/lab_pub.py sros2/tools/lab_sub.py
 
   dockerfile:
     runs-on: ubuntu-latest
@@ -34,6 +46,10 @@ jobs:
         with:
           dockerfile: Dockerfile.real
           failure-threshold: error
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile.diag
+          failure-threshold: error
 
   compose:
     runs-on: ubuntu-latest
@@ -41,6 +57,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: compose config (all profiles)
         run: docker compose --profile "*" config -q
+      - name: compose config (SROS2 override, environments b and c)
+        run: |
+          for e in b c; do
+            SROS2_ENV="$e" SROS2_STRATEGY=Enforce docker compose -f docker-compose.yml -f docker-compose.sros2.yml --profile "*" config -q
+          done
 
   public-safety:
     runs-on: ubuntu-latest

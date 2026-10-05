@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<!--
+  環境 C（適正設定）の permissions 元。最小権限: コンテナごとに必要なトピックだけを許可する。
+  ワイルドカードなし。permissions の default は sros2 が DENY で生成する。
+  トピック名は先頭の / を付けない（sros2 の書式）。
+  ros2lab-a: ロボット側（状態を出し、指令を受ける）/ ros2lab-b: 操作側（指令を出し、状態を受ける）
+-->
+<policy version="0.2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+  <enclaves>
+    <enclave path="/lab/ros2lab_a">
+      <profiles>
+        <profile ns="/" node="lab_robot">
+          <topics publish="ALLOW">
+            <topic>lab/state</topic>
+            <topic>parameter_events</topic>
+          </topics>
+          <topics subscribe="ALLOW">
+            <topic>lab/cmd</topic>
+            <topic>parameter_events</topic>
+          </topics>
+        </profile>
+      </profiles>
+    </enclave>
+    <enclave path="/lab/ros2lab_b">
+      <profiles>
+        <profile ns="/" node="lab_operator">
+          <topics publish="ALLOW">
+            <topic>lab/cmd</topic>
+            <topic>parameter_events</topic>
+          </topics>
+          <topics subscribe="ALLOW">
+            <topic>lab/state</topic>
+            <topic>parameter_events</topic>
+          </topics>
+        </profile>
+      </profiles>
+    </enclave>
+  </enclaves>
+</policy>

@@ -12,3 +12,11 @@
 .logs
 workspace
 mise.toml
+
+# SROS2 の鍵・証明書（ビルドコンテキストに入れない）
+sros2/keystores
+sros2/ca-private
+sros2/rogue
+sros2/.stage-*
+sros2/.old-*
+sros2/.lock-*
