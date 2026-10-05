@@ -1,0 +1,44 @@
+# SROS2 の環境 B（誤設定）/ C（適正設定）用の override。docker-compose.yml に重ねて使う。
+# 環境 A（未適用）は docker-compose.yml だけで、このファイルは使わない。
+# 起動は必ず scripts/up-env.sh 経由にする（SROS2_ENV / SROS2_STRATEGY / SROS2_KEYSTORE_ROOT と
+# コンテナごとの enclave 名 SROS2_ENCLAVE_* を渡す）:
+#   bash scripts/up-env.sh b
+#   bash scripts/up-env.sh c
+#
+# 鍵の渡し方:
+# - コンテナには自分の enclave だけを read-only で渡す（他コンテナの秘密鍵と CA の秘密鍵は渡さない）。
+# - macOS の bind mount ではパーミッションを制御できないため、起動時に sros2/entrypoint.sh が
+#   コンテナ内の tmpfs（/run/sros2、共有されない）へコピーして 0700/0600 にする。
+x-sros2: &sros2
+  entrypoint: ["/sros2/entrypoint.sh"]
+  command: ["sleep", "infinity"]
+  tmpfs:
+    - /run/sros2:rw,mode=0700,size=1m
+
+services:
+  ros2lab-a:
+    <<: *sros2
+    environment:
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - ROS_SECURITY_ENABLE=true
+      - ROS_SECURITY_STRATEGY=${SROS2_STRATEGY:?scripts/up-env.sh 経由で起動すること}
+      - ROS_SECURITY_KEYSTORE=/run/sros2/keystore
+      - SROS2_REQUIRE_CRL=${SROS2_REQUIRE_CRL:-}
+      - ROS_SECURITY_ENCLAVE_OVERRIDE=${SROS2_ENCLAVE_ROS2LAB_A:-/lab/ros2lab_a}
+    volumes:
+      - ./workspace:/workspace
+      - ./sros2/entrypoint.sh:/sros2/entrypoint.sh:ro
+      - ${SROS2_KEYSTORE_ROOT:-./sros2/keystores}/${SROS2_ENV:?}/containers/ros2lab-a:/sros2/src:ro
+  ros2lab-b:
+    <<: *sros2
+    environment:
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - ROS_SECURITY_ENABLE=true
+      - ROS_SECURITY_STRATEGY=${SROS2_STRATEGY:?scripts/up-env.sh 経由で起動すること}
+      - ROS_SECURITY_KEYSTORE=/run/sros2/keystore
+      - SROS2_REQUIRE_CRL=${SROS2_REQUIRE_CRL:-}
+      - ROS_SECURITY_ENCLAVE_OVERRIDE=${SROS2_ENCLAVE_ROS2LAB_B:-/lab/ros2lab_b}
+    volumes:
+      - ./workspace:/workspace
+      - ./sros2/entrypoint.sh:/sros2/entrypoint.sh:ro
+      - ${SROS2_KEYSTORE_ROOT:-./sros2/keystores}/${SROS2_ENV:?}/containers/ros2lab-b:/sros2/src:ro

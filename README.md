@@ -353,7 +353,7 @@ ros2lab は止まらない。シミュに戻すときは `bash scripts/up-arm.sh
   `ros2-lab-net` にも繋がっているため、**`ros2lab-a/b` を経由すれば実機に指令できる**（1 ホップ）。
   また `./workspace` は `ros2lab-a/b`・`ros2arm`・`ros2real` で共有される（書き込み可）。
   実機を動かす間は、信頼できないコンテナを `ros2lab-a/b` や `ros2-lab-net` に繋がない。
-  SROS2 や専用ネットワークでの完全な隔離は未対応。
+  SROS2 や専用ネットワークでの完全な隔離は未対応（ros2lab-a/b の SROS2 は [docs/sros2/README.md](docs/sros2/README.md)。ros2real は対象外）。
 - `group_add` にはホストの `dialout` の GID を数値で渡している（既定 20。Ubuntu / Debian）。
   違う場合は `DIALOUT_GID=$(getent group dialout | cut -d: -f3) bash scripts/up-real.sh` のように指定する。
 - `ros2arm` と `ros2real` の同時起動は `up-real.sh` / `up-arm.sh` が互いに拒否する。
@@ -365,19 +365,43 @@ ros2lab は止まらない。シミュに戻すときは `bash scripts/up-arm.sh
 ## SROS2 について
 
 `ros-jazzy-sros2`（DDS-Security による認証・アクセス制御・暗号化のツール群）
-を同梱済み。今回の Pub/Sub 実習では使用しないが、将来 SROS2 を使った隔離
-実習を行う際にイメージの再ビルドが不要になるようにしている。
+を同梱している。ros2lab-a/b は、SROS2 の環境を 3 つに切り替えられる。
+診断ツールの検出精度を測るための「正解が分かっている環境」で、詳細は
+[docs/sros2/README.md](docs/sros2/README.md) にまとめている。
+
+| 環境 | 内容 |
+|---|---|
+| a | 無防備（SROS2 未適用。この README の他の節のとおり） |
+| b | 誤設定（SROS2 適用済みだが、典型的な不備を意図的に注入。[台帳](docs/sros2/defect-ledger.md)） |
+| c | 適正設定（Enforce、最小権限、短い有効期間の証明書、CRL） |
 
 ```bash
-docker compose exec ros2lab-a bash -lc 'ros2 pkg list | grep sros2'
+bash scripts/sros2/gen-keystore.sh c      # b / c は先に keystore を生成する（鍵は git に入れない）
+bash scripts/up-env.sh c                  # 環境 a|b|c に切り替えて ros2lab-a/b を起動し直す
+docker compose build ros2lab-a && docker compose --profile diag up -d --build ros2diag   # 診断コンテナ（閉域のネットワークだけ）
+bash scripts/verify-env.sh c              # その環境になっていることを確認する
+bash scripts/env-status.sh                # 起動中のコンテナの環境を表示
 ```
+
+- 環境 a は、これまでどおり `docker compose up` でも起動できる。b / c は必ず `up-env.sh` 経由で起動する。
+- ros2arm は SROS2 化していないため、環境 b / c と一緒には起動できない（`--arm` は環境 a のときだけ）。
+  カメラプロファイルなど ros2arm の機能は環境 a で使う。ros2real（実機）は対象外。
+- 鍵は `./workspace` に置かない（全コンテナから読み書きできてしまう）。`sros2/keystores/` に生成し、
+  各コンテナには自分の enclave だけを read-only で渡す。環境 b だけ、不備の注入として `./workspace` にも置く。
 
 ## 片付け
 
 ```bash
-docker compose --profile arm down  # ros2lab と ros2arm を停止・削除
+docker compose --profile arm --profile diag down  # ros2lab・ros2arm・診断コンテナ（ros2diag）を停止・削除
 bash scripts/down-real.sh            # 実機ドライバ ros2real を安全に停止・削除（ros2lab は残る）
 ```
 
-`./workspace` は両コンテナの `/workspace` にマウントされる。SROS2 の
-keystore など、永続化したいファイルはここに置く。
+`./workspace` は ros2lab-a/b（と ros2arm・ros2real）の `/workspace` にマウントされる。
+永続化したいファイルはここに置く。ただし鍵や証明書は置かない（SROS2 の keystore は
+`sros2/keystores/` に生成される。[docs/sros2/README.md](docs/sros2/README.md) 参照）。
+
+診断用の不正証明書（`sros2/rogue/`）は試験が終わったら削除する:
+
+```bash
+bash scripts/sros2/wipe-rogue.sh
+```

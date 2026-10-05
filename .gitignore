@@ -21,3 +21,13 @@ __pycache__/
 !.env.example
 *.pem
 *.key
+
+# SROS2 の鍵・証明書（実体はコミットしない）
+sros2/keystores/
+sros2/ca-private/
+sros2/rogue/
+
+# SROS2 の生成途中・退避中のディレクトリ（中断したときに残りうる）
+sros2/.stage-*/
+sros2/.old-*/
+sros2/.lock-*/

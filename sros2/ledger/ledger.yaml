@@ -1,0 +1,137 @@
+# 環境 B（誤設定）に意図的に注入する不備の台帳。
+# 診断ツールの検出精度を測るときの「正解」で、注入した不備の分母はこの台帳が唯一の出所になる。
+#   - 注入は scripts/sros2/lib/gen-keystore-inner.sh の setup_b が行い、注入した ID を
+#     sros2/keystores/b/injected.txt に書く。台帳と一致しなければ verify-env.sh b が失敗する。
+#   - 注入できているかは ground_truth_probe（scripts/verify-env.sh の関数）が環境を起動するたびに確認する。
+#   - 根拠 (evidence) は公開情報だけを書く。grade: A = 一次情報（ソース・実測）で確認済み /
+#     B = 公開資料の記述（要約で確認。原典は未精読） / C = 要追加。
+#   - version: draft の間は項目を追加・削除してよい。frozen にしたら分母を動かさない
+#     （追加したい不備は v1.1 として別の台帳にする）。
+# 項目の意味:
+#   check: 診断ツールのどの観点で検出されるべきか（一般名）
+#   observability: network = 診断機（ネットワーク側）から見える / host = ホストの検査が必要
+#   behavior_impact: 停止 / 誤動作 / 情報漏えい / なりすまし
+#   coupled_with: 技術的に連動して注入される不備（同時に成立するため、分母の数え方を別途決める）
+
+version: draft
+dds_impl: fastdds
+dds_version: "Fast DDS 2.14.6 / sros2 0.13.6（ros:jazzy イメージ）"
+
+defects:
+  - id: B-AU-01
+    title: 未認証参加者の許可
+    injected_by: governance の allow_unauthenticated_participants=true（Fast DDS は RTPS 保護が NONE でないと起動しない）
+    check: unauthenticated-join
+    expected_verdict: FAIL
+    observability: network
+    behavior_impact: なりすまし
+    coupled_with: [B-CR-02]
+    ground_truth_probe: probe_B_AU_01
+    evidence:
+      - {grade: A, ref: "docs/sros2/spike-results.md", note: "RTPS 保護が ENCRYPT/SIGN だと認証済み参加者自身が起動に失敗し、NONE で起動する（実測）"}
+      - {grade: B, ref: "https://docs.ros.org/en/iron/Concepts/Intermediate/About-Security.html", note: "governance の allow_unauthenticated_participants の説明"}
+    notes: 鍵なし参加者が実際に入れるかは、この環境では確認できていない（docs/sros2/spike-results.md の「確認できなかったこと」）。設定の有無は静的に確認できる。
+  - id: B-AU-02
+    title: Permissive のまま稼働（enclave 不一致でセキュリティなしにフォールバック）
+    injected_by: ROS_SECURITY_STRATEGY=Permissive、ros2lab-b の enclave 名を 1 文字間違える（shared → shred）
+    check: unauthenticated-join
+    expected_verdict: FAIL
+    observability: network
+    behavior_impact: なりすまし
+    ground_truth_probe: probe_B_AU_02
+    evidence:
+      - {grade: A, ref: "docs/sros2/spike-results.md", note: "Permissive で enclave 名が不一致だとセキュリティなしで動き、鍵なしの受信側が受信する。Enforce は起動に失敗する（実測）"}
+      - {grade: B, ref: "https://docs.ros.org/en/iron/Concepts/Intermediate/About-Security.html", note: "Permissive は違反をログに出すだけで通す。デバッグ用"}
+  - id: B-AU-03
+    title: 全コンテナで同一の証明書・鍵
+    injected_by: ros2lab-a/b が同じ enclave（/lab/shared）の証明書と秘密鍵を使う
+    check: credential-uniqueness
+    expected_verdict: FAIL
+    observability: network
+    behavior_impact: なりすまし
+    ground_truth_probe: probe_B_AU_03
+    evidence:
+      - {grade: A, ref: "docs/sros2/handshake-observation.md", note: "認証ハンドシェイクで証明書は平文で交換され、ネットワーク上で収集できる"}
+      - {grade: B, ref: "https://arxiv.org/abs/1908.05310", note: "既定プラグインが参加者の権限情報を平文で交換する点の分析"}
+  - id: B-AU-04
+    title: 実質無期限の証明書
+    injected_by: sros2 が発行する証明書をそのまま使う（有効期間 3650 日）
+    check: credential-lifecycle
+    expected_verdict: FAIL
+    observability: network
+    behavior_impact: なりすまし
+    ground_truth_probe: probe_B_AU_04
+    evidence:
+      - {grade: A, ref: "sros2 0.13.6 sros2/_utilities.py", note: "証明書の有効期間が 3650 日固定（コンテナ内のソースと実測の notAfter）"}
+  - id: B-AU-05
+    title: 失効手段なし（CRL 未配置。失効済みの証明書が受理される）
+    injected_by: enclave に crl.pem を置かない
+    check: cert-validation
+    expected_verdict: FAIL
+    observability: network
+    behavior_impact: なりすまし
+    ground_truth_probe: probe_B_AU_05
+    evidence:
+      - {grade: A, ref: "docs/sros2/spike-results.md", note: "CRL なしでは失効済み証明書が受理され、enclave に crl.pem を置くと拒否される（実測）"}
+  - id: B-AU-06
+    title: identity CA と permissions CA が同一
+    injected_by: sros2 の既定のまま（create_keystore が 1 つの CA を両方に使う）
+    check: ca-structure
+    expected_verdict: FAIL
+    observability: network
+    behavior_impact: なりすまし
+    ground_truth_probe: probe_B_AU_06
+    evidence:
+      - {grade: A, ref: "docs/sros2/spike-results.md", note: "create_keystore の既定では identity CA と permissions CA が同一の ca.key.pem（シンボリックリンク）"}
+  - id: B-AU-07
+    title: 秘密鍵が共有領域にあり、誰でも読める
+    injected_by: 全コンテナから書き込める ./workspace に鍵つきの keystore のコピーを置く。鍵は 0644（sros2 の既定の権限）
+    check: key-storage
+    expected_verdict: FAIL
+    observability: host
+    behavior_impact: なりすまし
+    ground_truth_probe: probe_B_AU_07
+    evidence:
+      - {grade: A, ref: "docs/sros2/spike-results.md", note: "sros2 の既定では鍵ファイルが 0644 で作られる（ls -l）"}
+      - {grade: A, ref: "README.md", note: "./workspace は ros2lab-a/b・ros2arm・ros2real で共有され、書き込み可"}
+  - id: B-CR-01
+    title: 制御指令トピックだけ保護対象外
+    injected_by: governance の topic_rule で rt/lab/cmd を data_protection_kind=NONE・アクセス制御なしにする
+    check: protection-scope
+    expected_verdict: FAIL
+    observability: network
+    behavior_impact: 情報漏えい
+    ground_truth_probe: probe_B_CR_01
+    evidence:
+      - {grade: B, ref: "https://nvd.nist.gov/vuln/detail/CVE-2019-19625", note: "SROS2 0.8.1 の既定の governance が node 情報を漏らした事例（保護範囲の設定不備）"}
+  - id: B-CR-02
+    title: RTPS 保護が NONE
+    injected_by: governance の rtps_protection_kind=NONE（B-AU-01 を成立させるために必要。連動）
+    check: protection-scope
+    expected_verdict: FAIL
+    observability: network
+    behavior_impact: 情報漏えい
+    coupled_with: [B-AU-01]
+    ground_truth_probe: probe_B_CR_02
+    evidence:
+      - {grade: A, ref: "docs/sros2/spike-results.md", note: "allow_unauthenticated_participants=true は RTPS 保護 NONE でないと起動しない（実測）"}
+  - id: B-AC-01
+    title: permissions にワイルドカード
+    injected_by: permissions の topic に * を使い、実質すべてのトピックを許可する
+    check: permission-least-privilege
+    expected_verdict: FAIL
+    observability: network
+    behavior_impact: なりすまし
+    ground_truth_probe: probe_B_AC_01
+    evidence:
+      - {grade: B, ref: "https://docs.ros.org/en/iron/Tutorials/Advanced/Security/Access-Controls.html", note: "permissions による最小権限の設定の説明"}
+  - id: B-AC-02
+    title: permissions の default が ALLOW
+    injected_by: 署名済みの permissions の default を ALLOW に書き換えて署名し直す
+    check: permission-least-privilege
+    expected_verdict: FAIL
+    observability: network
+    behavior_impact: なりすまし
+    ground_truth_probe: probe_B_AC_02
+    evidence:
+      - {grade: A, ref: "sros2 0.13.6 の生成する permissions.xml", note: "sros2 は default を DENY で生成する（実測）。ALLOW への変更は手動の誤設定"}
