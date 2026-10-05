@@ -61,7 +61,8 @@ WS_DIR="${SROS2_WORKSPACE_DIR:-workspace}"
 cleanup_leaked_keys() {
   if [ -f "$WS_DIR/sros2-keystore/.sros2-generated" ]; then
     echo "環境 b の不備として $WS_DIR に置いた鍵のコピー（sros2-keystore）を削除する。" >&2
-    rm -rf "$WS_DIR/sros2-keystore"
+    # 切替は成功しているので、消せなくても失敗にはしない（コンテナが root で作ったファイルなど）
+    rm -rf "$WS_DIR/sros2-keystore" || echo "警告: $WS_DIR/sros2-keystore を削除できなかった。手で削除すること。" >&2
   fi
 }
 
@@ -92,15 +93,22 @@ if [ -n "$(docker ps --filter 'name=^ros2arm$' --filter 'status=running' -q)" ];
   echo "警告: ros2arm が起動中。ros2arm は SROS2 化していない（環境 A のまま）ため、ros2lab とは通信できない。" >&2
 fi
 
-# gen-keystore.sh が書く、コンテナごとの enclave 名の対応（SROS2_ENCLAVE_*）を読む
-if [ -f "$KS_ROOT/$ENV_NAME/env.sh" ]; then
-  # shellcheck source=/dev/null
-  . "$KS_ROOT/$ENV_NAME/env.sh"
+# gen-keystore.sh が書く、コンテナごとの enclave 名の対応（SROS2_ENCLAVE_*）を読む。
+# 無いと既定の enclave 名で起動してしまい、環境 b の意図（enclave 名の不一致）を壊すので、無ければ中断する。
+# この中身は export 行だけ。keystore の置き場（SROS2_KEYSTORE_ROOT）は信頼できる場所だけを指すこと。
+if [ ! -f "$KS_ROOT/$ENV_NAME/env.sh" ]; then
+  echo "環境 $ENV_NAME の env.sh が無い。'bash scripts/sros2/gen-keystore.sh $ENV_NAME' で作り直すこと。" >&2
+  exit 1
 fi
+# shellcheck source=/dev/null
+. "$KS_ROOT/$ENV_NAME/env.sh"
 
 case "$ENV_NAME" in
   b) export SROS2_STRATEGY=Permissive ;;
-  c) export SROS2_STRATEGY=Enforce ;;
+  c)
+    export SROS2_STRATEGY=Enforce
+    export SROS2_REQUIRE_CRL=true # 環境 c は crl.pem が無ければコンテナを起動しない
+    ;;
 esac
 
 docker compose -f docker-compose.yml -f docker-compose.sros2.yml up -d --build --force-recreate

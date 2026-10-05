@@ -39,18 +39,26 @@ def edit(root: Path, rel: str, old: str, new: str, count: int = 1) -> None:
     p.write_text(text.replace(old, new, count), encoding="utf-8")
 
 
-def last_replace(root: Path, rel: str, old: str, new: str) -> None:
-    p = root / rel
+def env_replace(root: Path, env: str, old: str, new: str) -> None:
+    """expected-results.yaml の環境 env（"  a:" / "  b:" / "  c:"）の区画の中だけを置換する。"""
+    p = root / "sros2/ledger/expected-results.yaml"
     text = p.read_text(encoding="utf-8")
-    i = text.rindex(old)
-    p.write_text(text[:i] + new + text[i + len(old):], encoding="utf-8")
+    start = text.index(f"\n  {env}:\n")
+    nxt = [text.find(f"\n  {e}:\n", start + 1) for e in "abc" if e != env]
+    nxt = [i for i in nxt if i > start]
+    end = min(nxt) if nxt else len(text)
+    section = text[start:end]
+    if old not in section:
+        raise SystemExit(f"自己テストの前提が崩れている: 環境 {env} に {old!r} が無い")
+    p.write_text(text[:start] + section.replace(old, new, 1) + text[end:], encoding="utf-8")
 
 
 MUTATIONS = [
     ("存在しない probe を指す", lambda r: edit(r, "sros2/ledger/ledger.yaml", "probe_B_AU_01", "probe_B_AU_99")),
     ("coupled_with が存在しない ID を指す", lambda r: edit(r, "sros2/ledger/ledger.yaml", "coupled_with: [B-CR-02]", "coupled_with: [B-XX-99]")),
     ("期待結果の because から ID が消える", lambda r: edit(r, "sros2/ledger/expected-results.yaml", "because: [B-AU-05]", "because: []")),
-    ("環境 c の期待判定が FAIL になる", lambda r: last_replace(r, "sros2/ledger/expected-results.yaml", ": PASS", ": FAIL")),
+    ("環境 c の期待判定が FAIL になる", lambda r: env_replace(r, "c", "unauthenticated-join: PASS", "unauthenticated-join: FAIL")),
+    ("環境 a の期待判定が PASS になる", lambda r: env_replace(r, "a", "unauthenticated-join: FAIL", "unauthenticated-join: PASS")),
     ("根拠が 1 件も無い", lambda r: edit(r, "sros2/ledger/ledger.yaml", "evidence:\n      - {grade: A, ref: \"sros2 0.13.6 sros2/_utilities.py\", note: \"証明書の有効期間が 3650 日固定（コンテナ内のソースと実測の notAfter）\"}\n", "evidence: []\n")),
     ("ID が重複する", lambda r: edit(r, "sros2/ledger/ledger.yaml", "id: B-AU-02", "id: B-AU-01")),
     ("expected_verdict が不正", lambda r: edit(r, "sros2/ledger/ledger.yaml", "expected_verdict: FAIL", "expected_verdict: MAYBE")),

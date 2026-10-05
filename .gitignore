@@ -26,3 +26,7 @@ __pycache__/
 sros2/keystores/
 sros2/ca-private/
 sros2/rogue/
+
+# SROS2 の生成途中・退避中のディレクトリ（中断したときに残りうる）
+sros2/.stage-*/
+sros2/.old-*/

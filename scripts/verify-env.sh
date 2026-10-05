@@ -38,13 +38,6 @@ require_running() {
 
 trap 'cleanup_caps; wipe_if_requested' EXIT
 
-# 条件（check に渡す）
-eq() { [ "$1" = "$2" ]; }
-is_zero() { [ "${1:-x}" = "0" ]; }
-gt_zero() { [ "${1:-0}" -gt 0 ] 2>/dev/null; }
-le() { [ "$1" -le "$2" ] 2>/dev/null; }
-nonempty_and_differ() { [ -n "$1" ] && [ "$1" != "$2" ]; }
-
 # 証明書と CRL の残り有効期間（日）を「cert=N crl=M」で返す
 remaining_days() {
   dx -i "$1" python3 - "$2" <<'PY'
@@ -65,29 +58,6 @@ nxt = dt(subprocess.check_output(["openssl", "crl", "-in", d + "/crl.pem", "-noo
 print("cert=%d crl=%d" % ((end - now).days, (nxt - now).days))
 PY
 }
-
-# 「cert=N crl=M」の両方が 14 以上
-bash_ge14() {
-  local c="${1#cert=}" r="${1##*crl=}"
-  c="${c%% *}"
-  [ "$c" -ge 14 ] 2>/dev/null && [ "$r" -ge 14 ] 2>/dev/null
-}
-
-# governance: 未認証を許可しない・RTPS / discovery が ENCRYPT・保護なし（NONE）がない
-gov_ok() {
-  grep -q "<allow_unauthenticated_participants>false<" <<<"$1" &&
-    grep -q "<rtps_protection_kind>ENCRYPT<" <<<"$1" &&
-    grep -q "<discovery_protection_kind>ENCRYPT<" <<<"$1" &&
-    ! grep -Eq "_protection_kind>NONE<" <<<"$1"
-}
-
-# permissions: ワイルドカードなし・default が DENY
-perm_ok() {
-  ! grep -Eq "<topic>[^<]*\*" <<<"$1" && grep -q "<default>DENY</default>" <<<"$1"
-}
-
-# pcap に RTPS の通信はあるが payload は平文で出ない（$1: RTPS の出現数、$2: payload の出現数）
-encrypted_ok() { [ "$1" -gt 0 ] && [ "$2" -eq 0 ]; }
 
 # --- 環境 A ---
 verify_a() {
@@ -212,11 +182,11 @@ PY
   cap_start "$LAB_A" cap-c
   pub_bg "$LAB_A" "$TOPIC_STATE" 14
   sleep 3
-  sub_run "$LAB_B" "$TOPIC_STATE" 7 > /dev/null
+  r="$(sub_run "$LAB_B" "$TOPIC_STATE" 7)"
   wait
   cap_stop cap-c
-  check C11 "pcap に RTPS の通信はあるが payload は平文で出ない" encrypted_ok \
-    "$(pcap_count "$OUT/cap-c.pcap" "RTPS")" "$(pcap_count "$OUT/cap-c.pcap" "$PAYLOAD")"
+  check C11 "pcap に RTPS の通信があり、受信（${r%% *} 件）もあるが、payload は平文で出ない" encrypted_ok \
+    "$(pcap_count "$OUT/cap-c.pcap" "RTPS")" "$(pcap_count "$OUT/cap-c.pcap" "$PAYLOAD")" "${r%% *}"
 
   # 鍵の分離とパーミッション
   local keys
@@ -368,7 +338,8 @@ verify_b() {
   check B-LEDGER "台帳から probe を 1 件以上読めた（${count} 件）" gt_zero "$count"
 }
 
-"verify_$ENV_NAME"
+# 途中で中断した（不正証明書を作れないなど）ときは、実行できなかった検査があることを FAIL として残す
+"verify_$ENV_NAME" || fail ABORT "検証を最後まで実行できなかった（途中で中断した。上の FAIL と $OUT を見ること）"
 
 echo
 echo "結果: PASS=$PASS_COUNT FAIL=$FAIL_COUNT（証拠: ${OUT#"$PWD"/}）"

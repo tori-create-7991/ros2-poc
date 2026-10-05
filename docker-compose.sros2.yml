@@ -23,6 +23,7 @@ services:
       - ROS_SECURITY_ENABLE=true
       - ROS_SECURITY_STRATEGY=${SROS2_STRATEGY:?scripts/up-env.sh 経由で起動すること}
       - ROS_SECURITY_KEYSTORE=/run/sros2/keystore
+      - SROS2_REQUIRE_CRL=${SROS2_REQUIRE_CRL:-}
       - ROS_SECURITY_ENCLAVE_OVERRIDE=${SROS2_ENCLAVE_ROS2LAB_A:-/lab/ros2lab_a}
     volumes:
       - ./workspace:/workspace
@@ -35,6 +36,7 @@ services:
       - ROS_SECURITY_ENABLE=true
       - ROS_SECURITY_STRATEGY=${SROS2_STRATEGY:?scripts/up-env.sh 経由で起動すること}
       - ROS_SECURITY_KEYSTORE=/run/sros2/keystore
+      - SROS2_REQUIRE_CRL=${SROS2_REQUIRE_CRL:-}
       - ROS_SECURITY_ENCLAVE_OVERRIDE=${SROS2_ENCLAVE_ROS2LAB_B:-/lab/ros2lab_b}
     volumes:
       - ./workspace:/workspace

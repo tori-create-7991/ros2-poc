@@ -17,3 +17,5 @@ mise.toml
 sros2/keystores
 sros2/ca-private
 sros2/rogue
+sros2/.stage-*
+sros2/.old-*

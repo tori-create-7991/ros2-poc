@@ -12,6 +12,9 @@ TOPIC_STATE="lab/state"   # ros2lab-a が publish、ros2lab-b が subscribe（po
 # shellcheck disable=SC2034  # verify-env.sh が使う
 PAYLOAD="LABPAYLOAD-7F3A" # sros2/tools/lab_pub.py が送る文字列（pcap で平文かを見る）
 
+# shellcheck source=scripts/sros2/lib/predicates.sh
+. "$(dirname "${BASH_SOURCE[0]}")/predicates.sh"
+
 PASS_COUNT=0
 FAIL_COUNT=0
 # OUT（証拠の置き場）と TOOLS（sros2/tools の場所）は verify-env.sh が設定してから source する
@@ -48,15 +51,15 @@ pub_bg() {
   LAST_PUB_LOG="$OUT/pub-$RANDOM-$RANDOM.log"
   docker exec -i "$@" "$c" bash -lc "python3 - $topic $secs pub_$RANDOM" \
     < "$TOOLS/lab_pub.py" > "$LAST_PUB_LOG" 2>&1 &
+  # PUB_UP が出る（= publisher が起動できた）まで待つ。起動が遅いまま購読が始まって
+  # 「0 件 = 拒否」と誤判定するのを防ぐ。プロセスが終わった（起動に失敗した）ときは待たない。最大 60 秒
+  local pid=$!
+  for _ in $(seq 1 120); do
+    grep -q PUB_UP "$LAST_PUB_LOG" 2>/dev/null && break
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.5
+  done
 }
-
-# 最後に起動した publisher が起動できたか
-pub_started() { grep -q PUB_UP "${1:-$LAST_PUB_LOG}"; }
-
-# 拒否された: 受信が 0 件で、publisher は起動できていた（起動していないための 0 件を除く）。 rejected <受信数> <publisher のログ>
-rejected() { [ "$1" = "0" ] && pub_started "$2"; }
-# 鍵なしの参加者用: 「受信 0 件・見えた publisher 0」で、publisher は起動できていた。 rejected_pair "<受信数> <見えた数>" <ログ>
-rejected_pair() { [ "$1" = "0 0" ] && pub_started "$2"; }
 
 # 不正証明書の生成。失敗したら握りつぶさず FAIL にする（古い rogue が残っていて通ったり、無くて偽の拒否になるのを防ぐ）
 must_gen_rogue() {

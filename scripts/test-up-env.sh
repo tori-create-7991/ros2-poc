@@ -13,7 +13,7 @@ cat > "$TMP/docker" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$STUB_LOG"
 if [ "${1:-}" = "compose" ]; then
-  echo "ENV SROS2_ENV=${SROS2_ENV:-} SROS2_STRATEGY=${SROS2_STRATEGY:-} KS_ROOT=${SROS2_KEYSTORE_ROOT:-}" >> "$STUB_LOG"
+  echo "ENV SROS2_ENV=${SROS2_ENV:-} SROS2_STRATEGY=${SROS2_STRATEGY:-} KS_ROOT=${SROS2_KEYSTORE_ROOT:-} CRL=${SROS2_REQUIRE_CRL:-} ENC_A=${SROS2_ENCLAVE_ROS2LAB_A:-}" >> "$STUB_LOG"
   # STUB_FAIL_COMPOSE=1 のとき compose だけ失敗させる
   if [ "${STUB_FAIL_COMPOSE:-0}" = "1" ]; then exit 1; fi
 fi
@@ -33,6 +33,8 @@ chmod +x "$TMP/docker"
 
 # 生成済みの keystore の代わり（b と c だけ作る）
 mkdir -p "$TMP/keystores/b" "$TMP/keystores/c"
+echo 'export SROS2_ENCLAVE_ROS2LAB_A=/lab/test_a' > "$TMP/keystores/b/env.sh"
+echo 'export SROS2_ENCLAVE_ROS2LAB_A=/lab/test_a' > "$TMP/keystores/c/env.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -69,11 +71,15 @@ grep -q -- "-f docker-compose.yml -f docker-compose.sros2.yml" <<<"$LOG" || fail
 grep -q "ENV SROS2_ENV=b SROS2_STRATEGY=Permissive" <<<"$LOG" || fail "b: SROS2_ENV/STRATEGY が違う: $LOG"
 grep -q "docker-compose.sros2.yml up -d --build --force-recreate" <<<"$LOG" || fail "b: up -d --build --force-recreate の形でない: $LOG"
 grep -q "KS_ROOT=$TMP/keystores" <<<"$LOG" || fail "b: SROS2_KEYSTORE_ROOT が compose に渡らない: $LOG"
+grep -q "ENC_A=/lab/test_a" <<<"$LOG" || fail "b: env.sh の SROS2_ENCLAVE_* が compose に渡らない: $LOG"
+grep -q "CRL= " <<<"$LOG" || fail "b: CRL を要求してはいけない: $LOG"
 
 run_case "" "$TMP/keystores" c
 [ "$RC" -eq 0 ] || fail "c: exit 0 のはずが $RC: $ERR"
 grep -q "ENV SROS2_ENV=c SROS2_STRATEGY=Enforce" <<<"$LOG" || fail "c: SROS2_ENV/STRATEGY が違う: $LOG"
 grep -q "docker-compose.sros2.yml up -d --build --force-recreate" <<<"$LOG" || fail "c: up -d --build --force-recreate の形でない: $LOG"
+grep -q "CRL=true" <<<"$LOG" || fail "c: SROS2_REQUIRE_CRL=true が渡らない: $LOG"
+grep -q "ENC_A=/lab/test_a" <<<"$LOG" || fail "c: env.sh の SROS2_ENCLAVE_* が compose に渡らない: $LOG"
 
 # (c) a --arm → arm profile が付く
 run_case "" "$TMP/keystores" a --arm
@@ -109,6 +115,15 @@ run_case "" "$TMP/none" c
 [ "$RC" -eq 1 ] || fail "c(keystore なし): exit 1 のはずが $RC"
 grep -q "gen-keystore.sh c" <<<"$ERR" || fail "c(keystore なし): 生成コマンドの案内が無い: $ERR"
 no_compose "c(keystore なし)"
+
+# (f2) env.sh が無い b/c → 中断（既定の enclave 名で起動してしまわないように）
+mkdir -p "$TMP/ks-noenv/b" "$TMP/ks-noenv/c"
+for e in b c; do
+  run_case "" "$TMP/ks-noenv" "$e"
+  [ "$RC" -eq 1 ] || fail "$e(env.sh なし): exit 1 のはずが $RC"
+  grep -q "env.sh" <<<"$ERR" || fail "$e(env.sh なし): stderr に env.sh が無い: $ERR"
+  no_compose "$e(env.sh なし)"
+done
 
 # (g) b|c と --arm の同時指定 → exit 2（ros2arm は環境 A のまま混在するため）
 for e in b c; do

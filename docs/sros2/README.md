@@ -47,12 +47,16 @@ bash scripts/sros2/check-ledger.sh        # 台帳と期待結果の検査（環
 
 ```bash
 bash scripts/up-env.sh a                  # ros2lab-a/b を SROS2 なしで作り直す（環境 b の鍵のコピーも削除する）
-docker compose --profile diag down        # 診断コンテナを止める
+docker compose --profile diag rm -sf ros2diag   # 診断コンテナだけを止める（down は ros2lab-a/b も落とすので使わない）
 bash scripts/sros2/wipe-rogue.sh          # 不正証明書を削除する
 ```
 
 `sros2/keystores/` と `sros2/ca-private/` は残る（gitignore 済み）。不要なら手で削除してよい。
 `ros2arm` を使うときは、環境 a に戻したあとに `bash scripts/up-arm.sh` で起動し直す。
+`docker compose up` を直接叩くと、ros2lab-a/b は環境 a で作り直される（SROS2 のコンテナは `up-env.sh` が作る）。
+そのとき環境 b が `./workspace` に置いた鍵のコピーは削除されないので、`up-env.sh a` を使うか、手で削除すること。
+環境 c への切替が失敗したときも、コピーが残ることがある。`verify-env.sh c` の C12 が検出するので、残っていたら
+`./workspace/sros2-keystore` を手で削除する。
 環境 b に切り替えるときは、先に `bash scripts/sros2/gen-keystore.sh b` で作り直す
 （環境 a / c に切り替えると、環境 b が `./workspace` に置いた鍵のコピーは削除されるため）。
 
@@ -68,6 +72,9 @@ bash scripts/sros2/wipe-rogue.sh          # 不正証明書を削除する
   CRL の期限（nextUpdate）が切れると、検証する側がすべての参加者を拒否する。
   **症状:** 期限が切れても明確なエラーは出ず、discovery で相手が見えなくなる（静かに通信できなくなる）。
   `verify-env.sh c` が、証明書と CRL の残り有効期間が 14 日未満なら FAIL にする（C15）。
+- **鍵を再生成したあと:** `gen-keystore.sh` は keystore のディレクトリを入れ替えるので、起動中のコンテナは古い鍵のまま
+  動き続けるか、mount が空に見える。`docker compose restart` では足りず、必ず `bash scripts/up-env.sh <env>` で作り直す。
+  再生成の途中に `restart` すると、鍵が無いためコンテナは起動に失敗する（鍵なしでは動かさない）。
 - **鍵が揃っていないとき:** SROS2 が有効なコンテナ（環境 b / c）は、鍵が渡されていない・欠けているときは
   起動に失敗する（鍵なしのまま動き続けない）。`gen-keystore.sh` の途中で失敗しても、既存の keystore は壊れない
   （一時ディレクトリに作ってから入れ替える）。
@@ -89,6 +96,9 @@ bash scripts/sros2/wipe-rogue.sh          # 不正証明書を削除する
   `verify-env.sh c` の C12 は「見える秘密鍵が自分の enclave だけ（tmpfs と /sros2/src の 2 か所）」を確認する。
 - `verify-env.sh` の環境 a の検査は A1〜A4（環境ラベル・SROS2 の設定がないこと・鍵なしの診断機から見えること・平文）で、
   期待結果の他の判定（保護がないので FAIL）は、保護機能が存在しないことから成り立つものとして扱う。
+- 公開してはいけない語の検査（`check-ledger.sh`）は、社内資料由来の語を局所ファイル
+  （`.plans/sros2-env-abc/banned-terms.txt`。コミットしない）から読むため、CI では一般的なパターン
+  （個人パス・私的アドレス・外部サービスの URL）だけを検査する。社内資料由来の語は、手元の検査でだけ強く検査できる。
 - 統合検証（`verify-env.sh`）は Docker と ros の実イメージが必要で CI では動かない。CI が検査するのは、シェルの静的解析・
   起動スクリプトのガード・entrypoint・台帳の検査（変異テスト `check-ledger.sh --selftest` を含む）・compose の構文。
   実コンテナでの結果は PR 本文に記録する。

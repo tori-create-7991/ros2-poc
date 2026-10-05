@@ -27,8 +27,18 @@ CA_OUT="$BASE/ca-private/$ENV_NAME"
 ROGUE_OUT="$BASE/rogue/$ENV_NAME"
 [ -f "$POLICY" ] || { echo "policy が無い: $POLICY" >&2; exit 1; }
 
+# 出力は同じファイルシステム上の一時ディレクトリ（STAGE）に作ってから入れ替える。中断しても残さない
+STAGE="$BASE/.stage-$ENV_NAME"
+OLD="$BASE/.old-$ENV_NAME"
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf "$WORK" "$STAGE"' EXIT
+
+# 環境 b は ./workspace に鍵のコピーを置く（B-AU-07）。同名の別のディレクトリがあるなら、何もせず中止する
+if [ "$ENV_NAME" = "b" ] && [ -n "$WORKSPACE_DIR" ] \
+  && [ -e "$WORKSPACE_DIR/sros2-keystore" ] && [ ! -f "$WORKSPACE_DIR/sros2-keystore/.sros2-generated" ]; then
+  echo "$WORKSPACE_DIR/sros2-keystore は既にあり、このスクリプトが作ったものではない。B-AU-07 の注入を中止する。" >&2
+  exit 1
+fi
 cd "$WORK"
 
 # コンテナ名の一覧。
@@ -181,8 +191,7 @@ fi
 FINAL_KS="$KS_OUT"
 FINAL_CA="$CA_OUT"
 FINAL_ROGUE="$ROGUE_OUT"
-STAGE="$BASE/.stage-$ENV_NAME"
-rm -rf "$STAGE"
+rm -rf "$STAGE" "$OLD"
 KS_OUT="$STAGE/keystores"
 CA_OUT="$STAGE/ca-private"
 ROGUE_OUT="$STAGE/rogue"
@@ -204,34 +213,15 @@ for c in $CONTAINERS; do
   echo "export $var=$(enclave_of "$c")" >> "$KS_OUT/env.sh"
 done
 
-# 環境 c を作るときは、環境 b が ./workspace に置いた鍵のコピーを消す（c では全コンテナから読めてしまうため）
-if [ "$ENV_NAME" = "c" ] && [ -n "$WORKSPACE_DIR" ] && [ -f "$WORKSPACE_DIR/sros2-keystore/.sros2-generated" ]; then
-  rm -rf "$WORKSPACE_DIR/sros2-keystore"
-fi
-
 # 環境 B の残りの不備
 if [ "$ENV_NAME" = "b" ]; then
   # B-AU-02: ros2lab-b の enclave 名を 1 文字間違え（shared → shred）、Permissive のままセキュリティなしに
   # フォールバックさせる（Enforce なら起動に失敗する）。ファイルは正しい場所（/lab/shared）に置かれる。
   sed_inplace 's#^export SROS2_ENCLAVE_ROS2LAB_B=.*#export SROS2_ENCLAVE_ROS2LAB_B=/lab/shred#' "$KS_OUT/env.sh"
   inject B-AU-02
-  # B-AU-07: 共有領域（./workspace。全コンテナから書き込み可）に、秘密鍵ごと keystore のコピーを置く。
-  # 鍵ファイルは誰でも読める 0644（sros2 の既定の権限のまま）。
-  if [ -n "$WORKSPACE_DIR" ]; then
-    ws="$WORKSPACE_DIR/sros2-keystore"
-    # 目印ファイルがあるディレクトリ（このスクリプトが作ったもの）だけ作り直す。同名の別のディレクトリは触らない
-    if [ -e "$ws" ] && [ ! -f "$ws/.sros2-generated" ]; then
-      echo "$ws は既にあり、このスクリプトが作ったものではない。B-AU-07 の注入を中止する。" >&2
-      exit 1
-    fi
-    rm -rf "$ws"
-    mkdir -p "$ws"
-    cp -r "$KS_OUT/containers/ros2lab-a/." "$ws/"
-    chmod 0755 "$ws"
-    chmod 0644 "$ws"/*
-    : > "$ws/.sros2-generated"
-    inject B-AU-07
-  fi
+  # B-AU-07: 共有領域（./workspace。全コンテナから書き込み可）に、秘密鍵ごと keystore のコピーを置く
+  # （実際の配置は入れ替えのあとに行う）。鍵ファイルは誰でも読める 0644（sros2 の既定の権限のまま）。
+  [ -z "$WORKSPACE_DIR" ] || inject B-AU-07
 fi
 sort -u "$INJECTED" > "$KS_OUT/injected.txt"
 
@@ -244,12 +234,32 @@ chmod -R go-rwx "$CA_OUT"
 # 失効済みの不正証明書（診断コンテナだけに渡す）
 cp -r "$WORK/rogue-revoked" "$ROGUE_OUT/revoked"
 
-# 入れ替え（ここまで来たら全部できている）
-rm -rf "$FINAL_KS" "$FINAL_CA" "$FINAL_ROGUE"
-mkdir -p "$(dirname "$FINAL_KS")" "$(dirname "$FINAL_CA")" "$(dirname "$FINAL_ROGUE")"
-mv "$KS_OUT" "$FINAL_KS"
-mv "$CA_OUT" "$FINAL_CA"
-mv "$ROGUE_OUT" "$FINAL_ROGUE"
-rm -rf "$STAGE"
+# 入れ替え（ここまで来たら全部できている）。旧ディレクトリは .old へ退避してから新しいものを入れ、最後に消す
+swap() { # <最終の場所> <新しいもの> <退避名>
+  mkdir -p "$OLD" "$(dirname "$1")"
+  if [ -e "$1" ]; then mv "$1" "$OLD/$3"; fi
+  mv "$2" "$1"
+}
+swap "$FINAL_KS" "$KS_OUT" ks
+swap "$FINAL_CA" "$CA_OUT" ca
+swap "$FINAL_ROGUE" "$ROGUE_OUT" rogue
+rm -rf "$OLD"
+
+# ./workspace の鍵のコピーは、入れ替えのあとに触る（途中で失敗しても keystore と食い違わないように）。
+# 目印ファイルがあるもの（このスクリプトが作ったもの）だけを消す・作り直す
+if [ -n "$WORKSPACE_DIR" ]; then
+  ws="$WORKSPACE_DIR/sros2-keystore"
+  if [ "$ENV_NAME" = "c" ] && [ -f "$ws/.sros2-generated" ]; then
+    # 環境 c では、環境 b が置いた鍵のコピーが全コンテナから読めてしまうため消す
+    rm -rf "$ws"
+  elif [ "$ENV_NAME" = "b" ]; then
+    rm -rf "$ws"
+    mkdir -p "$ws"
+    cp -r "$FINAL_KS/containers/ros2lab-a/." "$ws/"
+    chmod 0755 "$ws"
+    chmod 0644 "$ws"/*
+    : > "$ws/.sros2-generated"
+  fi
+fi
 
 echo "生成した: $FINAL_KS（コンテナ用）、$FINAL_CA（CA の秘密鍵。コンテナには渡さない）、$FINAL_ROGUE/revoked（失効済みの不正証明書）"

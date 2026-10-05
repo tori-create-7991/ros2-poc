@@ -37,7 +37,17 @@ BANNED = [
 ]
 
 
+_BANNED_CACHE: dict = {}
+
+
 def banned_patterns(root: Path) -> list:
+    key = str(root)
+    if key not in _BANNED_CACHE:
+        _BANNED_CACHE[key] = _load_banned(root)
+    return _BANNED_CACHE[key]
+
+
+def _load_banned(root: Path) -> list:
     path = Path(os.environ.get("LEDGER_BANNED_FILE", root / ".plans/sros2-env-abc/banned-terms.txt"))
     extra = []
     if not path.exists():

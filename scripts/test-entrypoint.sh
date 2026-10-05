@@ -54,6 +54,47 @@ d="$TMP/dst/enclaves/lab/test_enclave"
 [ -f "$d/crl.pem" ] || fail "crl.pem がコピーされていない"
 [ ! -e "$d/enclave.env" ] || fail "enclave.env が keystore にコピーされている"
 
+# 4b) 大文字小文字を区別しない（ENABLE=True でも鍵を検査する）。鍵が無ければ拒否、揃っていれば通す
+run "$TMP/empty" ROS_SECURITY_ENABLE=True
+[ "$RC" -eq 1 ] || fail "ENABLE=True + 空の src: exit 1 のはずが $RC"
+run "$TMP/full" ROS_SECURITY_ENABLE=TRUE
+[ "$RC" -eq 0 ] || fail "ENABLE=TRUE + 揃っている: exit 0 のはずが $RC: $ERR"
+
+# 4c) true / false / 空以外の値は拒否する（ros2 が有効と解釈しうる値を見逃さない）
+for v in 1 yes on; do
+  run "$TMP/full" ROS_SECURITY_ENABLE=$v
+  [ "$RC" -eq 1 ] || fail "ENABLE=$v: exit 1 のはずが $RC"
+  grep -q "不正" <<<"$ERR" || fail "ENABLE=$v: 不正の説明が無い: $ERR"
+done
+
+# 4d) 空の鍵ファイルは拒否する
+cp -r "$TMP/full" "$TMP/emptykey"
+: > "$TMP/emptykey/key.pem"
+run "$TMP/emptykey" ROS_SECURITY_ENABLE=true
+[ "$RC" -eq 1 ] || fail "空の key.pem: exit 1 のはずが $RC"
+grep -q "key.pem" <<<"$ERR" || fail "空の key.pem: stderr に key.pem が無い: $ERR"
+
+# 4e) PLACE_AT が無い・不正（.. や空、相対パス）は拒否する
+for bad in "" "../x" "relative/path" "/lab/a b" "/"; do
+  rm -rf "$TMP/badplace"
+  cp -r "$TMP/full" "$TMP/badplace"
+  printf 'PLACE_AT=%s\n' "$bad" > "$TMP/badplace/enclave.env"
+  run "$TMP/badplace" ROS_SECURITY_ENABLE=true
+  [ "$RC" -eq 1 ] || fail "PLACE_AT='$bad': exit 1 のはずが $RC"
+done
+: > "$TMP/badplace/enclave.env"
+run "$TMP/badplace" ROS_SECURITY_ENABLE=true
+[ "$RC" -eq 1 ] || fail "PLACE_AT が未設定: exit 1 のはずが $RC"
+
+# 4f) SROS2_REQUIRE_CRL=true のときは crl.pem が必須（環境 c）。無ければ拒否、b（要求なし）では crl.pem なしで通る
+cp -r "$TMP/full" "$TMP/nocrl"
+rm "$TMP/nocrl/crl.pem"
+run "$TMP/nocrl" ROS_SECURITY_ENABLE=true SROS2_REQUIRE_CRL=true
+[ "$RC" -eq 1 ] || fail "crl.pem 欠け（REQUIRE_CRL）: exit 1 のはずが $RC"
+grep -q "crl.pem" <<<"$ERR" || fail "crl.pem 欠け: stderr に crl.pem が無い: $ERR"
+run "$TMP/nocrl" ROS_SECURITY_ENABLE=true
+[ "$RC" -eq 0 ] || fail "crl.pem なし（要求なし）: exit 0 のはずが $RC: $ERR"
+
 # 5) SROS2 無効 → 鍵が無くても素通し
 run "$TMP/none"
 [ "$RC" -eq 0 ] || fail "SROS2 無効: exit 0 のはずが $RC: $ERR"
