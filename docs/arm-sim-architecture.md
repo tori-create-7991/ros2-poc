@@ -113,6 +113,8 @@ flowchart LR
     LAB_B["ros2lab-b<br/>クライアント"]
     ARM["ros2arm (profile: arm)<br/>noVNC + Gazebo + MoveIt 2 + RViz2"]
     REAL["ros2real (profile: real)<br/>crane_x7_control のみ"]
+    SERVER["ros2server (profile: vla)<br/>VLA ノード + 変換ノード"]
+    VLA["vla-server (profile: vla)<br/>POST /act のスタブ（GPU 不要）"]
   end
 
   subgraph LABNET["ros2-lab-net (internal / 外部出口なし)"]
@@ -125,18 +127,24 @@ flowchart LR
   LAB_A <-. "DDS (Domain 42, SUBNET)" .-> ARM
   LAB_B <-. DDS .-> ARM
   LAB_A <-. DDS .-> REAL
+  SERVER <-. "DDS（標準インターフェースのみ）" .-> ARM
+  SERVER -- "HTTP POST /act" --> VLA
+  TERM --> SERVER
   LAB_A --- LABNET
   LAB_B --- LABNET
   ARM --- LABNET
+  SERVER --- LABNET
   REAL -- "device passthrough" --> USB
   WS --- LAB_A
   WS --- ARM
   WS --- REAL
+  WS --- SERVER
 ```
 
 - `ros2arm` と `ros2real` は**同時に起動しない**（同名 controller が二重になる）。`scripts/up-*.sh` が相互に拒否する。
 - `ros2real` は `ros2-lab-net` に繋がない（DDS が無認証のため）。
 - noVNC は `127.0.0.1` のみ公開。
+- `ros2server` は VLA（OpenVLA）の手先差分でアームを動かす ROS 2 側、`vla-server` は推論サーバー（スタブ。本物は別マシンの GPU）。`ros2arm` には手を入れず、DDS 越しに標準インターフェースで呼ぶ。`vla-server` は `default` のみ、`127.0.0.1:8000` で公開。詳細は [openvla-ros2-bridge.md](openvla-ros2-bridge.md)。
 
 ### 2.2 `ros2arm` 内部の ROS 2 データフロー
 

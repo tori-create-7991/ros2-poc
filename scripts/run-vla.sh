@@ -67,7 +67,7 @@ need="ros2arm ros2server"
 # --endpoint 未指定のときだけ、同じ compose のスタブが要る（指定時は外部のサーバーを使う）
 [ -z "$ENDPOINT" ] && need="$need vla-server"
 for c in $need; do
-  running "$c" || fail_env "$c が起動していない。'bash scripts/up-arm.sh' でシミュを起動し、'docker compose --profile vla up -d --build' で ros2server と vla-server を起動する。"
+  running "$c" || fail_env "$c が起動していない。'bash scripts/up-arm.sh' でシミュを起動し、'docker compose --profile vla up -d --build ros2server vla-server' で ros2server と vla-server を起動する。"
 done
 # ros2arm は SROS2 化していない（常に環境 a）。ros2server が環境 b / c だと DDS で通信できない。
 # 空（docker によっては <no value>）はラベル導入前のコンテナなので a として扱う

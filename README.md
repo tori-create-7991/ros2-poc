@@ -17,6 +17,8 @@ Gazebo の仮想カメラを実カメラ（usb_cam / RealSense D435）と同じ�
 カメラプロファイルは [docs/sim-camera-profile.md](docs/sim-camera-profile.md) にまとめている。
 ターミナルから関節指令を順に送り、仮想カメラの映像で指令どおり動いたかを判定して録画する
 `scripts/run-scenario.sh` は [docs/sim-scenario-recording.md](docs/sim-scenario-recording.md) にまとめている。
+VLA（OpenVLA）の手先差分でシミュ上のアームを動かす `ros2server` / `vla-server`（GPU 不要のスタブ）と
+`scripts/run-vla.sh` は [docs/openvla-ros2-bridge.md](docs/openvla-ros2-bridge.md) にまとめている。
 
 ## 前提
 
@@ -397,7 +399,7 @@ bash scripts/env-status.sh                # 起動中のコンテナの環境を
 ## 片付け
 
 ```bash
-docker compose --profile arm --profile diag down  # ros2lab・ros2arm・診断コンテナ（ros2diag）を停止・削除
+docker compose --profile arm --profile diag --profile vla down  # ros2lab・ros2arm・診断コンテナ（ros2diag）・VLA 連携（ros2server・vla-server）を停止・削除
 bash scripts/down-real.sh            # 実機ドライバ ros2real を安全に停止・削除（ros2lab は残る）
 ```
 
