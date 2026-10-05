@@ -23,7 +23,7 @@ case "$1" in
 esac
 
 if command -v ros2 >/dev/null 2>&1 && command -v openssl >/dev/null 2>&1; then
-  exec bash scripts/sros2/lib/gen-keystore-inner.sh "$1" "$PWD/sros2"
+  exec bash scripts/sros2/lib/gen-keystore-inner.sh "$1" "$PWD/sros2" "$PWD/workspace"
 fi
 
 if ! docker image inspect ros2lab:jazzy >/dev/null 2>&1; then
@@ -33,5 +33,5 @@ fi
 
 # ros2 CLI が使うホームを書き込める場所にする（コンテナ内は呼び出したユーザーの uid で動かす）
 exec docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp \
-  -v "$PWD/sros2:/w" -v "$PWD/scripts/sros2/lib:/lib-sros2:ro" \
-  ros2lab:jazzy bash /lib-sros2/gen-keystore-inner.sh "$1" /w
+  -v "$PWD/sros2:/w" -v "$PWD/workspace:/ws" -v "$PWD/scripts/sros2/lib:/lib-sros2:ro" \
+  ros2lab:jazzy bash /lib-sros2/gen-keystore-inner.sh "$1" /w /ws
