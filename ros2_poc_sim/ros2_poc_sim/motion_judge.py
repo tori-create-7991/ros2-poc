@@ -260,13 +260,14 @@ def settle_deadline(t_sent, duration):
     return t_sent + duration * SETTLE_TIMEOUT_FACTOR + SETTLE_TIMEOUT_EXTRA
 
 
-def judge_time(records, step, event, now=math.inf):
+def judge_time(records, step, event, now=math.inf, t_next=math.inf):
     """判定時刻 (t_end, 静止したか)。まだ決められない（静止待ちで上限前）なら None。
 
     scenario_cli wait（実行中、now = 現在時刻）と judge_run（事後、now = ∞）が同じ規則を使う。
     静止したら 静止時刻 + SETTLE_SEC、上限まで止まらなければ上限時刻（静止条件で FAIL になる）。
     """
-    deadline = settle_deadline(event['t_sent'], step['duration'])
+    # 次のステップを送った後の記録では判定しない（wait が使えず固定の待ちに切り替わった場合）
+    deadline = min(settle_deadline(event['t_sent'], step['duration']), t_next)
     t = settle_time(records, step['joints'], step['expect'], step['tolerance'],
                     event['t_sent'], step['duration'], deadline, now)
     if t is not None:
@@ -350,7 +351,9 @@ def judge_run(run_dir, run=subprocess.run):
         if i in decided:
             t_end, settled = decided[i]['t_end'], decided[i]['settled']
         else:
-            t_end, settled = judge_time(joints.records, st, ev)
+            nxt = events.get(i + 1)
+            t_end, settled = judge_time(joints.records, st, ev,
+                                        t_next=nxt['t_start'] if nxt else math.inf)
         fb, fa, fs = judge_frames(frames, ev['t_start'], t_end)
         ee_rec = ee.nearest(t_end)
         r = judge_step(

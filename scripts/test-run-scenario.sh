@@ -33,6 +33,9 @@ if [ -n "${STUB_EXEC_FAIL:-}" ] && [[ "$args" =~ $STUB_EXEC_FAIL ]]; then
 fi
 run_dir() { [[ "$args" =~ /workspace/runs/([0-9-]+) ]] && echo "$STUB_WS/runs/${BASH_REMATCH[1]}"; }
 case "$args" in
+  *"pgrep -f '[r]os2 launch"*) [ "${STUB_SIM_RUNNING:-0}" = 1 ] && exit 0; exit 1 ;;
+  *"grep -c 'Node name"*) echo "${STUB_CONTROLLERS:-1}" ;;
+  *"cat /tmp/run-scenario.lock/owner"*) echo "${STUB_OWNER:-}" ;;
   *pgrep*)
     if [ "${STUB_LEFTOVER:-0}" = 1 ]; then exit 0; fi
     if [ "${STUB_STUCK:-0}" = 1 ] && [ -f "$STUB_WS/started" ]; then exit 0; fi
@@ -63,7 +66,7 @@ run_case() {
   : > "$STUB_LOG"
   export STUB_LOG STUB_WS
   set +e
-  ERR="$(PATH="$TMP:$PATH" STUB_RUNNING="$running" RUN_SCENARIO_WORKSPACE="$STUB_WS" \
+  ERR="$(cd "${RUN_CWD:-$ROOT}" && PATH="$TMP:$PATH" STUB_RUNNING="$running" RUN_SCENARIO_WORKSPACE="$STUB_WS" \
     bash "$ROOT/scripts/run-scenario.sh" "$@" 2>&1 >/dev/null)"
   RC=$?
   set -e
@@ -116,6 +119,11 @@ grep -q "別の run-scenario が実行中" <<<"$ERR" || fail "実行中: 案内�
 if lock_released; then fail "実行中の他人のロックを外した: $LOG"; fi
 if grep -qE "scenario_observer --out|x11grab|ros2 launch" <<<"$LOG"; then fail "実行中なのに記録・シミュが動いた: $LOG"; fi
 
+# ロックが取れない・同じホストで持ち主のプロセスが生きている（記録前の段階）→ 実行中として exit 2
+STUB_EXEC_FAIL='mkdir /tmp/run-scenario.lock' STUB_OWNER="20990101-000000 $(hostname -s 2>/dev/null || echo host) $$" run_case "$ALL"
+[ "$RC" -eq 2 ] || fail "持ち主が生きているロックは exit 2 のはずが $RC: $ERR"
+grep -q "別の run-scenario が実行中（開始 20990101-000000）" <<<"$ERR" || fail "持ち主が生きている: 実行中と案内しない: $ERR"
+
 # ロックが取れない・記録プロセスは無い → 取り残しとして外し方を案内（自分では外さない）
 STUB_EXEC_FAIL='mkdir /tmp/run-scenario.lock' run_case "$ALL"
 [ "$RC" -eq 2 ] || fail "取り残しのロックは exit 2 のはずが $RC: $ERR"
@@ -128,6 +136,26 @@ STUB_LEFTOVER=1 run_case "$ALL"
 grep -q "前回の記録プロセスが残っている" <<<"$ERR" || fail "残留: 案内が無い: $ERR"
 lock_released || fail "残留で終わったのに自分のロックを外していない: $LOG"
 if grep -qE "scenario_observer --out|x11grab" <<<"$LOG"; then fail "残留なのに記録を始めた: $LOG"; fi
+
+# --start-sim でも、別のシミュ（カメラ無しなど）が動いていれば重ねて起動しない
+STUB_EXEC_FAIL='ros2 topic echo' STUB_SIM_RUNNING=1 run_case "$ALL" --start-sim
+[ "$RC" -eq 2 ] || fail "別のシミュが動いているときは exit 2 のはずが $RC: $ERR"
+grep -q "別のシミュ" <<<"$ERR" || fail "別のシミュ: 案内が無い: $ERR"
+if grep -q "ros2 launch ros2_poc_sim" <<<"$LOG"; then fail "別のシミュに重ねて起動した: $LOG"; fi
+
+# コントローラが 2 つ見える（二重起動・実機と混在）→ 送信せずに exit 2
+STUB_CONTROLLERS=2 run_case "$ALL"
+[ "$RC" -eq 2 ] || fail "コントローラ 2 つは exit 2 のはずが $RC: $ERR"
+grep -q "2 個見える" <<<"$ERR" || fail "コントローラ 2 つ: 案内が無い: $ERR"
+if sent; then fail "コントローラ 2 つで送信した: $LOG"; fi
+
+# --scenario の相対パスは呼び出し元のディレクトリから解決する
+mkdir -p "$TMP/caller"
+printf 'steps:\n  - {name: a, positions: [0, 0, 0, 0, 0, 0, 0]}\n' > "$TMP/caller/my.yaml"
+RUN_CWD="$TMP/caller" run_case "$ALL" --scenario my.yaml
+[ "$RC" -eq 0 ] || fail "呼び出し元からの相対パスが解決されない: $RC: $ERR"
+RUN_CWD="$TMP" run_case "$ALL" --scenario my.yaml
+[ "$RC" -eq 64 ] || fail "別のディレクトリからは見つからないはずが $RC: $ERR"
 
 # --- シナリオの展開と送信前の検査
 # commands が 64（シナリオの誤り）→ 64、それ以外の失敗 → 2
@@ -166,6 +194,20 @@ grep "pkill -INT" <<<"$LOG" | grep -q "cenario_observer --out" || fail "INT を 
 # 記録を始める前に終わったときは、記録の停止を試みない
 STUB_EXEC_FAIL='scenario_cli commands' STUB_EXEC_RC=64 run_case "$ALL"
 if grep -q "pkill" <<<"$LOG"; then fail "記録前の終了で pkill した: $LOG"; fi
+
+# 指令を送れなかったステップがある → judge が PASS でも実行時の問題として exit 2（result.json は残す）
+STUB_EXEC_FAIL='date \+%s\.%N; timeout 30' STUB_EXEC_RC=125 run_case "$ALL"
+[ "$RC" -eq 2 ] || fail "送信失敗は exit 2 のはずが $RC: $ERR"
+grep -q "指令を送れなかったステップが 1 個" <<<"$ERR" || fail "送信失敗: 案内が無い: $ERR"
+grep -q "scenario_cli judge" <<<"$LOG" || fail "送信失敗でも判定（result.json）は残すはず: $LOG"
+
+# 不正なステップ名・待ち秒 → 送信せずに exit 2
+for tsv in 'a b\tlab\t3.0\tros2 topic pub -w 1 --times 3 -r 2 /crane_x7_arm_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory "{a: [1]}"\n' \
+           'a\tlab\t3;id\tros2 topic pub -w 1 --times 3 -r 2 /crane_x7_arm_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory "{a: [1]}"\n'; do
+  STUB_TSV="$tsv" run_case "$ALL"
+  [ "$RC" -eq 2 ] || fail "不正な名前・待ち秒は exit 2 のはずが $RC: $tsv"
+  if sent; then fail "不正な名前・待ち秒で送信した: $tsv"; fi
+done
 
 # FAIL あり（judge 1）→ 1
 STUB_JUDGE_RC=1 run_case "$ALL"

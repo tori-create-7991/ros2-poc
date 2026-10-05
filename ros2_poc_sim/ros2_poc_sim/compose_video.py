@@ -106,7 +106,9 @@ def build(*, results, commands, t0, cam_t0, cam_h, has_desktop=True, font=FONT):
         stack = '[d][c]hstack=inputs=2'
     else:
         stack = '[c]null'
-    graph.append(','.join([stack, f'pad=iw:ih+{BAR}:0:0:color=black'] + draw_t) + '[out]')
+    # 記録は最後の判定の直後に止まるので、最後の判定と総合結果が読めるよう末尾のフレームを延ばす
+    graph.append(','.join([stack, f'tpad=stop_mode=clone:stop_duration={TAIL_SEC:g}',
+                           f'pad=iw:ih+{BAR}:0:0:color=black'] + draw_t) + '[out]')
     return ';'.join(graph), texts
 
 

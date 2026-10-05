@@ -209,8 +209,8 @@ docker compose exec ros2lab-a bash -lc 'ros2 topic echo --once /joint_states'
 
 `trajectory_msgs` は ros-base に含まれるので、`ros2lab` 側に追加インストールは不要。
 
-複数の指令を順に送って判定・録画まで 1 コマンドで行うには `bash scripts/run-scenario.sh --start-sim`
-（[docs/sim-scenario-recording.md](docs/sim-scenario-recording.md)）。
+複数の指令を順に送って判定・録画まで 1 コマンドで行うには、デモ 2 を止めてから `bash scripts/run-scenario.sh --start-sim`
+（仮想カメラ付きで起動し直す。[docs/sim-scenario-recording.md](docs/sim-scenario-recording.md)）。
 
 ### 注意
 

@@ -19,7 +19,7 @@ def _results():
 def test_build_stacks_desktop_and_camera_with_bar():
     g, _ = C.build(results=_results(), commands=CMDS, t0=100.0, cam_t0=101.5, cam_h=480)
     assert g.startswith('[0:v]fps=10,scale=-2:720,setsar=1[d];[1:v]tpad=start_duration=1.500')
-    assert '[d][c]hstack=inputs=2,pad=iw:ih+170:0:0:color=black' in g and g.endswith('[out]')
+    assert '[d][c]hstack=inputs=2,tpad=stop_mode=clone:stop_duration=3,pad=iw:ih+170:0:0:color=black' in g and g.endswith('[out]')
 
 
 def test_camera_started_before_desktop_is_trimmed():
@@ -58,7 +58,7 @@ def test_failed_send_shows_reason_without_t_end():
 
 def test_camera_only_when_no_desktop():
     g, _ = C.build(results=_results(), commands=CMDS, t0=100.0, cam_t0=100.0, cam_h=480, has_desktop=False)
-    assert g.startswith('[0:v]tpad') and '[c]null,pad=' in g and 'hstack' not in g
+    assert g.startswith('[0:v]tpad') and '[c]null,tpad=stop_mode=clone' in g and 'hstack' not in g
     assert C.ffmpeg_args(g, has_desktop=False)[4:6] == ['-i', 'camera.mp4']
 
 

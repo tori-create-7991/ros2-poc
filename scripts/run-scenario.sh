@@ -3,9 +3,11 @@
 #   ros2lab-a からアームへ関節指令（README と同じ ros2 topic pub）、グリッパは ros2arm から action を送る。
 #   ros2arm で記録（カメラ・/joint_states・手先 TF・デスクトップ画面）→ 終了後に判定 → 1 本の mp4 に合成。
 # 出力: workspace/runs/<日時>/（scenario.mp4, result.json, commands.log ほか）
-# 終了コード: 0 = 全ステップ PASS / 1 = FAIL あり / 2 = 環境・実行時の問題 / 64 = 引数の誤り
+# 終了コード: 0 = 全ステップ PASS / 1 = FAIL あり / 2 = 環境・実行時の問題（指令が送れなかった場合を含む）/
+#            64 = 引数の誤り / 130 = Ctrl-C
 set -euo pipefail
 
+CALLER_DIR="$PWD"   # --scenario の相対パスは呼び出し元から解決する
 cd "$(dirname "$0")/.."
 
 usage() {
@@ -39,8 +41,13 @@ if [ -z "$TIMEOUT" ]; then
 fi
 case "$TIMEOUT" in ''|*[!0-9]*) echo "--timeout は秒数（整数）" >&2; exit 64 ;; esac
 
-if [ -f "$SCENARIO" ]; then
-  SCENARIO_FILE="$SCENARIO"
+if [[ "$SCENARIO" == */* || "$SCENARIO" == *.yaml || "$SCENARIO" == *.yml ]]; then
+  # パス指定: 呼び出し元のディレクトリから解決する（リポジトリ内の同名ファイルを黙って選ばない）
+  case "$SCENARIO" in /*) SCENARIO_FILE="$SCENARIO" ;; *) SCENARIO_FILE="$CALLER_DIR/$SCENARIO" ;; esac
+  if [ ! -f "$SCENARIO_FILE" ]; then
+    echo "シナリオが見つからない: $SCENARIO" >&2
+    exit 64
+  fi
 elif [[ "$SCENARIO" =~ ^[A-Za-z0-9_-]+$ ]] && [ -f "ros2_poc_sim/config/scenarios/$SCENARIO.yaml" ]; then
   SCENARIO_FILE="ros2_poc_sim/config/scenarios/$SCENARIO.yaml"
 else
@@ -82,8 +89,11 @@ arm "ros2 run ros2_poc_sim scenario_cli doctor" < /dev/null \
   || fail_env "ros2arm に録画・合成の前提が揃っていない（上のメッセージ参照。'bash scripts/up-arm.sh' でイメージを作り直す）"
 
 TS="$(date +%Y%m%d-%H%M%S)"
-# ホスト側の ./workspace（テストでは差し替える）。コンテナ内では /workspace
-WORKSPACE_HOST="${RUN_SCENARIO_WORKSPACE:-workspace}"
+# ホスト側の出力先は ros2arm の /workspace のマウント元（up-arm.sh を実行した checkout の ./workspace）。
+# このスクリプトのある checkout とは限らない（git worktree など）。テストでは RUN_SCENARIO_WORKSPACE で差し替える
+WORKSPACE_HOST="${RUN_SCENARIO_WORKSPACE:-$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' ros2arm 2>/dev/null || true)}"
+[ -n "$WORKSPACE_HOST" ] && [ -d "$WORKSPACE_HOST" ] \
+  || fail_env "ros2arm の /workspace のマウント元が分からない（${WORKSPACE_HOST:-空}）。'bash scripts/up-arm.sh' で作り直す"
 RUN_HOST="$WORKSPACE_HOST/runs/$TS"
 RUN="/workspace/runs/$TS"
 # 記録プロセス（observer・カメラ用 ffmpeg・デスクトップ録画）。[s] などは pkill / pgrep 自身を呼ぶ
@@ -97,9 +107,14 @@ ANY_RECORDERS='[s]cenario_observer --out /workspace/runs/|[r]awvideo.*/workspace
 # 同時実行の拒否（同じアームに 2 本の指令が混ざる）。ロックは ros2arm の /tmp に置く。
 # コンテナを作り直す（up-arm.sh）と消えるが、docker restart や Colima の再起動では残る
 LOCK=/tmp/run-scenario.lock
-if ! arm "mkdir $LOCK && echo '$TS' > $LOCK/started" < /dev/null 2>/dev/null; then
-  started="$(arm "cat $LOCK/started" < /dev/null 2>/dev/null || true)"
-  if arm "pgrep -f '$ANY_RECORDERS'" > /dev/null 2>&1 < /dev/null; then
+OWNER="$TS $(hostname -s 2>/dev/null || echo host) $$"
+if ! arm "mkdir $LOCK && echo '$OWNER' > $LOCK/owner" < /dev/null 2>/dev/null; then
+  owner="$(arm "cat $LOCK/owner" < /dev/null 2>/dev/null || true)"
+  read -r started owner_host owner_pid <<<"${owner:-}" || true
+  # 記録中、または同じホストで持ち主のプロセスが生きている（シミュ起動待ちなど記録前の段階）なら実行中
+  if arm "pgrep -f '$ANY_RECORDERS'" > /dev/null 2>&1 < /dev/null \
+     || { [ "${owner_host:-}" = "$(hostname -s 2>/dev/null || echo host)" ] && [ -n "${owner_pid:-}" ] \
+          && kill -0 "$owner_pid" 2>/dev/null; }; then
     fail_env "別の run-scenario が実行中（開始 ${started:-不明}）"
   fi
   fail_env "前回の run-scenario のロックが残っている（開始 ${started:-不明}、記録プロセスは無い）。実行中でなければ外す: docker exec ros2arm rm -r $LOCK"
@@ -139,6 +154,8 @@ stop_recorders() {
 # shellcheck disable=SC2317,SC2329  # trap から呼ぶ（shellcheck のバージョンでコードが違う）
 cleanup() {
   trap '' INT   # 後片付けの途中で Ctrl-C されてもロックを外すところまで進める
+  # docker exec は（TTY なしでは）シグナルを転送しないので、コンテナ内の wait は明示的に止める
+  [ "$RECORDING" = 0 ] || arm "pkill -f '[s]cenario_cli wait $RUN '" < /dev/null > /dev/null 2>&1 || true
   stop_recorders || true
   release_lock
 }
@@ -156,16 +173,20 @@ sim_ready() { topic_ok /joint_states && topic_ok /camera/color/image_raw; }
 
 if ! sim_ready; then
   if [ "$START_SIM" = 1 ]; then
+    # 別のシミュ（カメラ無しの公式 launch など）や起動途中のシミュに重ねて起動すると、Gazebo と
+    # コントローラが二重になり、指令が両方に届いて判定が無意味になる
+    if arm "pgrep -f '[r]os2 launch|[g]z sim'" > /dev/null 2>&1 < /dev/null; then
+      fail_env "ros2arm で別のシミュ（またはカメラ無しのシミュ・起動途中のシミュ）が動いている。止めてから --start-sim で起動し直す: docker exec ros2arm pkill -INT -f '[r]os2 launch'"
+    fi
     # シミュは実行の後も動き続けるので、ログは実行ごとのディレクトリの外に置く
-    SIM_LOG="workspace/runs/sim-$TS.log"
-    echo "シミュを起動する（初回やホストが重いときは数分〜十数分かかる）。ログ: $SIM_LOG"
-    arm_bg "exec ros2 launch ros2_poc_sim arm_with_camera.launch.py placement:=fixed_front_wide > /$SIM_LOG 2>&1"
+    echo "シミュを起動する（初回やホストが重いときは数分〜十数分かかる）。ログ: $WORKSPACE_HOST/runs/sim-$TS.log"
+    arm_bg "exec ros2 launch ros2_poc_sim arm_with_camera.launch.py placement:=fixed_front_wide > /workspace/runs/sim-$TS.log 2>&1"
   fi
   echo "トピック（/joint_states, /camera/color/image_raw）を待つ（最大 ${TIMEOUT} 秒）"
   deadline=$(( $(date +%s) + TIMEOUT ))
   until sim_ready; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
-      fail_env "トピックが流れない。シミュを起動していなければ --start-sim を付ける（docs/sim-scenario-recording.md）。"
+      fail_env "トピックが流れない。カメラ付きのシミュ（arm_with_camera.launch.py）が動いていなければ、他のシミュを止めて --start-sim を付ける（docs/sim-scenario-recording.md）。"
     fi
     sleep 5
   done
@@ -174,9 +195,16 @@ fi
 lab true < /dev/null > /dev/null || fail_env "ros2lab-a でコマンドを実行できない"
 # ros2lab-a からアームのコントローラが見えるまで待つ。`ros2 topic pub -w 1` は「誰か 1 つ」の購読者で
 # 送ってしまうので、Discovery が遅れている（同じネットワークの別コンテナが多いと起きる）と指令が届かない
-controller_seen() {
+# 購読者がちょうど 1 つであることも確かめる（シミュの二重起動や実機ドライバと混ざっていないこと）
+controller_count() {
   lab "timeout 25 ros2 topic info -v --no-daemon /crane_x7_arm_controller/joint_trajectory 2>/dev/null \
-       | grep -q 'Node name: crane_x7_arm_controller'" < /dev/null > /dev/null 2>&1
+       | grep -c 'Node name: crane_x7_arm_controller'" < /dev/null 2>/dev/null || true
+}
+controller_seen() {
+  local n
+  n="$(controller_count)"
+  [ "${n:-0}" -gt 1 ] && fail_env "crane_x7_arm_controller が ${n} 個見える（シミュの二重起動か実機ドライバと混在）。シミュを止めて起動し直す"
+  [ "${n:-0}" -eq 1 ]
 }
 deadline=$(( $(date +%s) + TIMEOUT ))
 until controller_seen; do
@@ -203,7 +231,9 @@ fi
 # （引用の中なのでグロブやブレース展開も起きない）
 CMD_RE_LAB='^ros2 topic pub -w 1 --times 3 -r 2 /crane_x7_arm_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory "[][A-Za-z0-9_ .:{},-]+"$'
 CMD_RE_SIM='^ros2 action send_goal /crane_x7_gripper_controller/gripper_cmd control_msgs/action/ParallelGripperCommand "[][A-Za-z0-9_ .:{},-]+"$'
-while IFS=$'\t' read -r _ target _ cmd; do
+while IFS=$'\t' read -r name target wait cmd; do
+  [[ "$name" =~ ^[A-Za-z0-9_#-]{1,48}$ ]] || fail_env "想定外のステップ名なので実行しない: $name"
+  [[ "$wait" =~ ^[0-9]+(\.[0-9]+)?$ ]] || fail_env "想定外の待ち秒なので実行しない: $wait"
   case "$target" in
     lab) re="$CMD_RE_LAB" ;;
     sim) re="$CMD_RE_SIM" ;;
@@ -230,6 +260,7 @@ for _ in $(seq 1 60); do
 done
 [ "$(frames_recorded)" -ge 4 ] || fail_env "カメラのフレームが記録されない（$RUN_HOST/observer.log を確認）"
 
+SEND_FAILED=0
 : > "$RUN_HOST/events.jsonl"
 : > "$RUN_HOST/commands.log"
 total=$(wc -l < "$RUN_HOST/commands.tsv" | tr -d ' ')
@@ -250,7 +281,10 @@ while IFS=$'\t' read -r name target wait cmd <&3; do
     [ "$rc" = 0 ] && rc=2
     t_start="${t_start:-0}"; t_sent="${t_sent:-$t_start}"
   fi
-  [ "$rc" = 0 ] || echo "  命令が失敗した（rc=$rc）" >&2
+  if [ "$rc" != 0 ]; then
+    echo "  命令が失敗した（rc=$rc）" >&2
+    SEND_FAILED=$((SEND_FAILED + 1))
+  fi
   # name は scenario.py で英数字・_・-（と repeat の #k）に限られるので JSON の文字列にそのまま入れてよい
   printf '{"index": %d, "name": "%s", "target": "%s", "t_start": %s, "t_sent": %s, "rc": %d}\n' \
     "$((i - 1))" "$name" "$target" "$t_start" "$t_sent" "$rc" >> "$RUN_HOST/events.jsonl"
@@ -272,4 +306,8 @@ else
   echo "合成に失敗した（$RUN_HOST/overlay/filtergraph.txt を確認）。判定は result.json を見る" >&2
 fi
 echo "判定: $RUN_HOST/result.json"
+if [ "$SEND_FAILED" -gt 0 ]; then
+  # 判定（result.json）は残すが、指令が届いていないので動作の FAIL ではなく実行時の問題として返す
+  fail_env "指令を送れなかったステップが ${SEND_FAILED} 個ある（result.json の send_failed）"
+fi
 exit "$judge_rc"

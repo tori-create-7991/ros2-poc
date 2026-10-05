@@ -13,13 +13,15 @@ bash scripts/run-scenario.sh --scenario <path/to/my.yaml>
 
 | 引数 | 既定 | 内容 |
 |---|---|---|
-| `--scenario` | `default` | `default` / `fail_demo` / `examples`（`ros2_poc_sim/config/scenarios/`）または YAML のパス |
+| `--scenario` | `default` | `default` / `fail_demo` / `examples`（`ros2_poc_sim/config/scenarios/`）または YAML のパス（相対パスは実行したディレクトリから） |
 | `--repeat` | YAML の `repeat`（無ければ 1） | シナリオ全体の繰り返し回数（1〜20） |
-| `--start-sim` | なし | シミュ（公式 Gazebo + MoveIt + 仮想カメラ、視点 `fixed_front_wide`）が動いていなければ起動する |
+| `--start-sim` | なし | シミュ（公式 Gazebo + MoveIt + 仮想カメラ、視点 `fixed_front_wide`）が動いていなければ起動する。カメラ無しのシミュ（README のデモ 2 など）が動いているときは、重ねて起動せずに止める |
 | `--timeout` | 120（`--start-sim` 時 900） | トピックが流れ始めるまで待つ秒数 |
 
 終了コード: `0` = 全ステップ PASS / `1` = FAIL あり / `2` = 環境・記録の問題（判定できなかった。camera_info が届かない・
-camera.mp4 を書き終えられない・記録プロセスを止められない等を含む）/ `64` = 引数・シナリオの誤り。
+camera.mp4 を書き終えられない・記録プロセスを止められない・指令を送れなかった等を含む）/ `64` = 引数・シナリオの誤り /
+`130` = Ctrl-C（記録とロックは後片付けする。送信中の指令はコンテナ内で最大 30 秒残りうる）。
+指令を送れなかったステップがあるときも `result.json` は書く（該当ステップは `send_failed`）。
 合成（scenario.mp4）に失敗しても終了コードは判定結果のまま（判定の正は `result.json`）。
 
 実行前に次を確かめ、満たさなければ `2` で止まる。
@@ -27,10 +29,12 @@ camera.mp4 を書き終えられない・記録プロセスを止められない
 - `ros2real`（実機ドライバ）が起動していない
 - ros2arm に ffmpeg（libx264・drawtext 等）・xdpyinfo・フォントがある（`scenario_cli doctor`）
 - 別の run-scenario が実行中でない（ros2arm 内の `/tmp/run-scenario.lock`）、前回の記録プロセスが残っていない
-- ros2lab-a からアームのコントローラ（`crane_x7_arm_controller`）が見える（Discovery 待ち）
+- ros2lab-a からアームのコントローラ（`crane_x7_arm_controller`）がちょうど 1 つ見える（Discovery 待ち。2 つ以上ならシミュの二重起動か実機と混在として止める）
 - 送るコマンドが想定の形（送信先ごとにトピック・型まで固定し、メッセージは二重引用符の中の数値・名前・記号のみ）
 
 ## 出力（`workspace/runs/<日時>/`）
+
+`workspace` は ros2arm の `/workspace` のマウント元（`up-arm.sh` を実行した checkout の `./workspace`）。
 
 | ファイル | 内容 |
 |---|---|
