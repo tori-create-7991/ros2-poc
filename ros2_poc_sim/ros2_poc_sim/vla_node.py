@@ -37,15 +37,17 @@ SETTLE_SEC = 1.5     # motion_judge.SETTLE_SEC と同じ（カメラは関節状
 
 
 class VlaNode(Node):
-    def __init__(self, image_topic):
+    def __init__(self, image_topic, image_reliability=ReliabilityPolicy.RELIABLE):
         super().__init__('vla_node')
         self.pub = self.create_publisher(String, A.ACTION_TOPIC, 10)
         self._cond = threading.Condition()
         self._image = None
         self._want_image = False    # fresh_image が待っている間だけ画像を処理する（CPU 描画のシミュへの負荷を避ける）
         self._acks = {}
+        # 既定は RELIABLE（仮想カメラのプロファイルが reliable。docs/sim-camera-profile.md）。BEST_EFFORT だと、約 900KB の画像を
+        # 暗号化（SROS2 環境 c）で別コンテナへ送るとき、落ちた断片が再送されず、フレームが 1 枚も完成しないことがあった（実測）
         self.create_subscription(Image, image_topic, self._on_image,
-                                 QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+                                 QoSProfile(depth=1, reliability=image_reliability))
         self.create_subscription(String, A.ACK_TOPIC, self._on_ack, 10)
 
     def _on_image(self, msg):
@@ -115,6 +117,8 @@ def parse_args(argv):
                     help='POST /act の URL（既定: 環境変数 VLA_ENDPOINT、なければ %(default)s）')
     ap.add_argument('--unnorm-key', default=None, help='OpenVLA の unnorm_key（スタブは無視。CRANE-X7 向けは未検証）')
     ap.add_argument('--image-topic', default=IMAGE_TOPIC)
+    ap.add_argument('--image-qos', choices=('reliable', 'best_effort'), default='reliable',
+                    help='画像の購読の信頼性。発行側（実カメラなど）が best_effort のときだけ best_effort にする（既定: reliable）')
     ap.add_argument('--request-timeout', type=float, default=60.0, help='POST /act のタイムアウト [s]')
     ap.add_argument('--ack-timeout', type=float, default=240.0, help='1 ステップの ack を待つ上限 [s]（シミュは遅い）')
     return ap.parse_args(argv)
@@ -132,7 +136,7 @@ def main(argv=None):
         print(f'引数の誤り: {e}', file=sys.stderr)
         return 64
     rclpy.init()
-    node = VlaNode(a.image_topic)
+    node = VlaNode(a.image_topic, ReliabilityPolicy.RELIABLE if a.image_qos == 'reliable' else ReliabilityPolicy.BEST_EFFORT)
     executor = SingleThreadedExecutor()
     executor.add_node(node)
     spinner = threading.Thread(target=_spin, args=(executor,), daemon=True)

@@ -385,14 +385,19 @@ ros2lab は止まらない。シミュに戻すときは `bash scripts/up-arm.sh
 ```bash
 bash scripts/sros2/gen-keystore.sh c      # b / c は先に keystore を生成する（鍵は git に入れない）
 bash scripts/up-env.sh c                  # 環境 a|b|c に切り替えて ros2lab-a/b を起動し直す
+bash scripts/up-env.sh c --arm --vla      # ros2arm（アームシミュ）と ros2server・vla-server（VLA 連携）も同じ環境で起動し直す
 docker compose build ros2lab-a && docker compose --profile diag up -d --build ros2diag   # 診断コンテナ（閉域のネットワークだけ）
 bash scripts/verify-env.sh c              # その環境になっていることを確認する
 bash scripts/env-status.sh                # 起動中のコンテナの環境を表示
 ```
 
 - 環境 a は、これまでどおり `docker compose up` でも起動できる。b / c は必ず `up-env.sh` 経由で起動する。
-- ros2arm は SROS2 化していないため、環境 b / c と一緒には起動できない（`--arm` は環境 a のときだけ）。
-  カメラプロファイルなど ros2arm の機能は環境 a で使う。ros2real（実機）は対象外。
+- ros2arm（アームシミュ）と ros2server（VLA 連携）も、`up-env.sh` の `--arm` / `--vla` で ros2lab-a/b と同じ環境（a / b / c）で
+  起動できる。環境が違うコンテナどうしは DDS で通信できないので、揃えて起動し直す。ros2real（実機）は対象外。
+  環境 c の ros2arm / ros2server のポリシーは、稼働中のグラフと拒否ログから生成した最小権限で、ノード名が起動のたびに変わるノードの
+  標準のパラメータ系サービスだけ `*/<サービス名>` のパターンにしている（[docs/sros2/README.md](docs/sros2/README.md) の「ros2arm / ros2server」）。
+  `run-scenario.sh` は ros2lab-a から指令するので環境 a のときだけ使える（環境 c の ros2lab-a はアームのトピックに触れない）。
+  VLA 連携の `run-vla.sh` は ros2server と ros2arm が同じ環境なら a / b / c のどれでも使える（[docs/openvla-ros2-bridge.md](docs/openvla-ros2-bridge.md)）。
 - 鍵は `./workspace` に置かない（全コンテナから読み書きできてしまう）。`sros2/keystores/` に生成し、
   各コンテナには自分の enclave だけを read-only で渡す。環境 b だけ、不備の注入として `./workspace` にも置く。
 

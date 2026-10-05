@@ -63,7 +63,7 @@ bash scripts/run-vla.sh --instruction "move up" --steps 3
 
 - `ros2real`（実機ドライバ）が起動していない
 - `ros2arm` / `ros2server`（`--endpoint` 未指定なら `vla-server` も）が起動している
-- `ros2server` が SROS2 環境 a（`ros2arm` は SROS2 化しておらず環境 a でしか通信できない）
+- `ros2server` と `ros2arm` が同じ SROS2 環境（a / b / c。ラベル `ros2poc.env`。違うと DDS で通信できない。`bash scripts/up-env.sh <環境> --arm --vla` で揃える）
 - `run-scenario.sh` が実行中でない（`ros2arm` の `/tmp/run-scenario.lock`。同じアームに指令が混ざるため）、別の `run-vla.sh` が実行中でない
 - `ros2server` からアームのコントローラ（`crane_x7_arm_controller`）がちょうど 1 つ見える（Discovery 待ち。2 つ以上ならシミュの二重起動か実機との混在として止める）
 
@@ -146,7 +146,8 @@ bash scripts/run-vla.sh --instruction "pick up the blue cube" --steps 5 \
 | グリッパ値の意味 | 0.5 を閾値に、高いほど開くとして扱っている（変換ノードのパラメータ `gripper_open_when_high` で向きを反転できる）。学習データでの向きは未検証 |
 | 実時間の制御（5 Hz） | 対象外。シミュの RTF では届かない。GPU 実機への移行時に non-blocking 設計が要る |
 | 実機（`ros2real`） | 未検証。arm 層が同じインターフェース（`/compute_ik`、`gripper_cmd`、`joint_trajectory`、TF、`/joint_states`）を出せば変換ノードはそのまま使える想定 |
-| SROS2 環境 b / c | 未対応（`ros2arm` が SROS2 化されていない）。`run-vla.sh` は `ros2server` が環境 b / c なら起動前に止める |
+| SROS2 環境 b | `ros2server` と `ros2arm` が同じ環境なら起動前のガードは通る。環境 b での疎通は未確認（誤設定を意図的に注入した環境） |
+| SROS2 環境 c | 実コンテナで確認済み（`run-vla.sh` が 2 ステップとも ok）。最小権限のポリシーは稼働中のグラフと拒否ログから生成したもので、グラフに現れないエンドポイントは拒否される（[sros2/README.md](sros2/README.md)） |
 
 ## 検証結果（2026-10-05、Colima 4 CPU、シミュ起動中）
 
@@ -167,6 +168,7 @@ ROS 非依存の単体テストは `cd ros2_poc_sim && python -m pytest -q test/
 
 - **初期姿勢は到達範囲の端**。腕が真上に伸びきった姿勢（手先 z ≈ 0.624 m）は特異点で、そこへ戻す差分は IK の解が出ず `ik_failed` になる（z = 0.604 から +0.02 で確認）。フェイルセーフとして期待どおり。初期姿勢に戻すときは関節角の指令を使う。
 - **最初のステップは遅い**。変換ノードを起動した直後は `/tf` と `/joint_states` の Discovery が終わっておらず、最大 15 秒待つ。
+- **画像の購読は既定で RELIABLE**（`vla_node --image-qos best_effort` で変えられる）。仮想カメラのプロファイルが reliable で、BEST_EFFORT だと暗号化（SROS2 環境 c）下で落ちた断片が再送されず、フレームが完成しないことがあった。発行側（実カメラなど）が best_effort のときだけ best_effort にする。
 - **カメラ映像は `/joint_states` より約 1〜1.5 秒遅れる**ので、2 ステップ目以降は 1.5 秒待ってから新しいフレームを取る（[sim-scenario-recording.md](sim-scenario-recording.md) と同じ実測）。
 - 変換ノードは前のステップの `gripper` を覚えていて、変化したときだけ `gripper_cmd` を送る。起動直後の最初のステップは必ず送る（現在のグリッパ状態を読まないため）。
 - シミュ（CPU 描画）は遅く、`ros2arm` のシナリオ実行（`run-scenario.sh`）と同時には動かせない。排他は**片方向**で、`run-vla.sh` は `run-scenario.sh` のロックを見るが、`run-scenario.sh` は `run-vla` のロックを見ない（確認してから実行までの隙間も残る）。同時に実行しない。

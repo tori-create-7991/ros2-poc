@@ -93,13 +93,68 @@ bash scripts/sros2/wipe-rogue.sh          # 不正証明書を削除する
   不要になったら `bash scripts/sros2/wipe-rogue.sh` で削除する。期限切れの証明書は、時間に依存するため
   `bash scripts/sros2/gen-rogue.sh c expired 40` で試験の直前に作る（`verify-env.sh c` が自動で行う）。
 
+## ros2arm / ros2server（アームシミュと VLA 連携）
+
+`ros2lab-a/b` と同じ仕組み（enclave 単位の鍵、`sros2/entrypoint.sh`、`docker-compose.sros2.yml`、`gen-keystore.sh`）で、
+`ros2arm`（Gazebo / MoveIt 2 / RViz / 仮想カメラ）と `ros2server`（VLA ノード・変換ノード）も環境 b / c で動く。
+
+```bash
+bash scripts/sros2/gen-keystore.sh c
+bash scripts/up-env.sh c --arm --vla     # ros2lab-a/b と ros2arm・ros2server・vla-server を環境 c で起動し直す
+# ros2arm のデスクトップ（noVNC）の端末、または docker exec -u ubuntu ros2arm で、シミュを起動する（環境変数は自動で入る）
+bash scripts/run-vla.sh --instruction "move down" --steps 2
+```
+
+`ros2lab` と違う点（`docker-compose.sros2.yml` のコメントにも書いてある）:
+
+- **ベースイメージの entrypoint に引き継ぐ**: ros2arm のベースは `/entrypoint.sh`（supervisord でデスクトップを起動）。
+  `SROS2_NEXT=/entrypoint.sh` で、鍵を置いたあとに渡す。
+- **鍵の所有者**: ノードは root ではなく `ubuntu`（uid 1000）で動く。`SROS2_CHOWN=1000:1000` と tmpfs の `uid=1000,gid=1000` で
+  `ubuntu` だけが読めるようにする（モードは 0700 / 0600 のまま）。
+- **端末の環境変数**: デスクトップの端末はコンテナの ENV を継承しない。`SROS2_ENV_FILE` が書く環境ファイル（`ROS_SECURITY_*`。
+  鍵は含まない）を `~/.bashrc` が読む。読まないと、端末から起動したノードだけセキュリティなしで動いてしまう。
+
+### 環境 c のポリシー（最小権限、生成して使う）
+
+`ros2arm` と `ros2server` は 1 コンテナ 1 enclave（`ROS_SECURITY_ENCLAVE_OVERRIDE`）で多数のノードが共有するので、
+permissions はノードの和集合になる。`sros2/policy/lab-c.xml` の `/lab/ros2arm` と `/lab/ros2server` は、
+稼働中のグラフ（`ros2 security generate_policy`）と、そのポリシーで動かしたときの Fast DDS の拒否ログから
+[`scripts/sros2/lib/sim_policy.py`](../../scripts/sros2/lib/sim_policy.py) で生成した（手順はそのファイルの先頭）。
+
+- 実在するトピック・サービス名を列挙している（ワイルドカードなし）。
+- 例外: 起動のたびに名前が変わるノード（`moveit_<数字>`、`transform_listener_impl_<ハッシュ>`、ros2 CLI の `_ros2cli_<数字>`）の標準の
+  パラメータ・ログ系サービス（`describe_parameters` など）だけ `*/<サービス名>` のパターン。ノード名ごとの列挙は次の起動で外れるため。
+- 稼働中のグラフには、短命のプロセス（controller の `spawner`）や起動時だけ作られるクライアントが載らない。拒否ログを
+  `sim_policy.py` の `--denials` に渡して足りない分を足し、拒否が無くなるまで繰り返した（実測は下）。
+- グラフに現れない（オンデマンドで作られる）エンドポイントは拒否され、そのノードが落ちる。見つかったら生成し直す。
+- `ros2lab-a/b` の権限（トピック 6 件、ワイルドカードなし、default DENY）は変わらない。`verify-env.sh c` の C10 はこちらを見る。
+- 環境 c の `ros2arm` に ROS CLI（`ros2 topic hz` など）で入っても、CLI の購読は許可されていない（`ros2server` からは許可済みの範囲で使える）。
+
+実測（Colima 4 CPU、`ros2arm` は CPU 2 つに制限、Fast DDS 2.14.6）:
+
+| 項目 | 結果 |
+|---|---|
+| 環境 c（Enforce + ENCRYPT）でのシミュ起動 | 約 1 分でコントローラとカメラの準備まで完了。最小権限のポリシーで拒否 0、プロセス死亡 0（反復の最後のラウンド） |
+| 負荷（セキュリティなしとの比較） | カメラ約 0.8 Hz と約 0.6 Hz、`/joint_states` 約 85 Hz と約 69 Hz、RTF 0.5〜0.9 と 0.25〜0.5。差はノイズの範囲で、ENCRYPT による目立った劣化は見えない（どちらも CPU 描画で律速） |
+| `ros2server` ⇄ `ros2arm`（`run-vla.sh --steps 2`） | 環境 c で 2 ステップとも ok（約 40 秒。探索の `--spin-time 15` を含む） |
+| 鍵なしの参加者 | 見えない（ノード 0）。セキュリティが効いている |
+
+実測で分かった注意:
+
+- **探索に時間がかかる**: SROS2 では Discovery に認証のやり取りが入り、`ros2 topic info` などの CLI は既定の待ち時間では何も見えない
+  （`--spin-time 15` で見える）。`run-vla.sh` は環境 a 以外で自動的に延ばす。
+- **画像の購読は RELIABLE**: 約 900KB の画像を暗号化して別コンテナへ送るとき、BEST_EFFORT では落ちた断片が再送されず、
+  フレームが 1 枚も完成しないことがあった。`vla_node` は既定で RELIABLE（仮想カメラの QoS が reliable）。
+- **短命の ROS プロセスを大量に作ると詰まることがある**: 検証中に、使い捨ての ROS プロセスを何十個も作って落としたあと、
+  アーム側のカメラ配信が詰まって新しい購読者が画像を受け取れなくなった。シミュを起動し直すと直った（原因は未確認）。
+  環境 c では、手で ROS CLI を連打せず、詰まったらシミュを起動し直す。
+
 ## 制約
 
 - DDS 実装は Fast DDS（`rmw_fastrtps_cpp`）。実測は Fast DDS 2.14.6 / sros2 0.13.6。バージョンが違えば
   挙動が変わりうる（[実測メモ](spike-results.md)）。Cyclone DDS は対象外。
-- ros2arm は SROS2 化していない。環境 b / c と同時には起動できず、カメラプロファイルなどは環境 a で使う。
-  ros2arm の SROS2 化は Gazebo / MoveIt 2 のトピックが多く、最小権限の permissions を `ros2 security generate_policy`
-  で実際のグラフから生成する作業が別に要る。
+- ros2arm / ros2server は `up-env.sh --arm --vla` で環境 a / b / c に対応する（下の「ros2arm / ros2server」）。
+  ros2real（実機）は SROS2 化していない。
 - enclave はコンテナ単位。同じコンテナの複数プロセスは同じ enclave を共有する。
 - 鍵は `/sros2/src`（read-only の bind mount）にも見える。macOS の bind mount ではホスト側のパーミッションを
   コンテナから制御できないため、パーミッションの保証は tmpfs 側（`/run/sros2`）だけに限られる。

@@ -156,6 +156,12 @@ STUB_VLA_LOCK=1 run_case "$ALL" --instruction "move up"
 grep -q "別の run-vla" <<<"$ERR" || fail "run-vla ロックのメッセージが無い: $ERR"
 if started || lock_released; then fail "他人のロックを外した、または起動した: $LOG"; fi
 
+# --- 探索の待ち時間: 環境 a は短く、SROS2（b / c）は認証のやり取りぶん長い
+run_case "$ALL" --instruction "move up" --timeout 0
+grep -q -- "--spin-time 2 --no-daemon" <<<"$LOG" || fail "環境 a の --spin-time が 2 でない: $LOG"
+STUB_SRV_ENV=c STUB_ARM_ENV=c run_case "$ALL" --instruction "move up" --timeout 0
+grep -q -- "--spin-time 15 --no-daemon" <<<"$LOG" || fail "環境 c の --spin-time が 15 でない: $LOG"
+
 # --- コントローラが見えない / 2 つ以上 → 2（ロックは後始末する）
 STUB_CONTROLLERS=0 run_case "$ALL" --instruction "move up" --timeout 0
 [ "$RC" = 2 ] || fail "コントローラ 0: $RC"

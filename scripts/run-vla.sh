@@ -115,8 +115,11 @@ srv "pkill -INT -f '$NODE'; pkill -INT -f '$CONVERTER'; true" < /dev/null > /dev
 
 # ros2server からアームのコントローラがちょうど 1 つ見えるまで待つ（Discovery 待ち。2 つ以上ならシミュの二重起動か
 # 実機ドライバと混在として止める）
+# SROS2（環境 b / c）では Discovery に認証のやり取りが入り、既定の待ち時間では何も見えない（実測: --spin-time 15 で見える）
+SPIN=2
+if [ "$srv_env" != a ]; then SPIN=15; fi
 controller_count() {
-  srv "timeout 25 ros2 topic info -v --no-daemon /crane_x7_arm_controller/joint_trajectory 2>/dev/null \
+  srv "timeout $((SPIN + 25)) ros2 topic info -v --spin-time $SPIN --no-daemon /crane_x7_arm_controller/joint_trajectory 2>/dev/null \
        | grep -c 'Node name: crane_x7_arm_controller'" < /dev/null 2>/dev/null || true
 }
 controller_seen() {

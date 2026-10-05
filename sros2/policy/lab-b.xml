@@ -2,6 +2,8 @@
 <!--
   環境 B（誤設定）の permissions 元。コンテナ全体で 1 つの enclave（/lab/shared）を使い回し（B-AU-03）、
   トピックにワイルドカードを使って実質すべてを許可する（B-AC-01）。
+  ros2arm（Gazebo / MoveIt のサービス・アクション）と ros2server も同じ enclave で動かすため、サービスにも同じワイルドカードを置く
+  （ラボのトピックだけでは、パラメータ・コントローラ・アクション・/compute_ik のサービスが拒否されてシミュが起動しない）。
   これは意図的な不備であり、環境 C（lab-c.xml）とは違う。
 -->
 <policy version="0.2.0" xmlns:xi="http://www.w3.org/2001/XInclude">
@@ -15,6 +17,9 @@
           <topics subscribe="ALLOW">
             <topic>*</topic>
           </topics>
+          <services reply="ALLOW" request="ALLOW">
+            <service>*</service>
+          </services>
         </profile>
       </profiles>
     </enclave>
