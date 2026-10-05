@@ -22,7 +22,8 @@ MOTION_MIN = 0.005         # アーム: 動いたとみなす変化画素率
 GRIPPER_MOTION_MIN = 0.001  # グリッパは画面上で小さいので下げる
 SETTLE_MAX = 0.002         # 静止とみなす変化画素率の上限
 BBOX_MARGIN = 40           # 差分領域の外接矩形に足す余白 [px]
-MAX_GAP_SEC = 1.5          # 最近傍の記録がこれより離れていたら「記録なし」（CPU 描画でカメラは 2〜3fps）
+MAX_GAP_SEC = 1.5          # /joint_states・TF の最近傍がこれより離れていたら「記録なし」
+FRAME_MAX_GAP_SEC = 10.0   # カメラフレームの許容間隔。負荷が高いと 1fps 以下、間隔 7 秒まで落ちる（実測）
 STILL_EPS = 0.002          # 静止とみなす関節角の変化 [rad]（STILL_WINDOW の間の最大変化）
 STILL_WINDOW = 0.8         # 静止判定の区間 [s]（/joint_states は負荷時 2Hz 程度まで落ちる）
 SETTLE_TIMEOUT_FACTOR = 5  # 静止を待つ上限 = 指令時間 × これ + SETTLE_TIMEOUT_EXTRA（シミュは実時間より遅い）
@@ -153,6 +154,27 @@ class Series:
             return None
         return self.records[i]
 
+    def after(self, t, max_gap=MAX_GAP_SEC):
+        """t 以後で最初の記録。"""
+        i = bisect.bisect_left(self.ts, t)
+        if i >= len(self.ts) or self.ts[i] - t > max_gap:
+            return None
+        return self.records[i]
+
+
+def judge_frames(frames, t_start, t_end):
+    """判定に使う 3 枚（送信前・判定時刻・静止確認）の記録。
+
+    低フレームレートでも判定時刻より前の（まだ動いている）フレームを使わないよう、
+    判定時刻「以後」の最初のフレームと、その SETTLE_WINDOW 以上あとのフレームを使う。
+    """
+    before = frames.before(t_start, FRAME_MAX_GAP_SEC)
+    after = frames.after(t_end, FRAME_MAX_GAP_SEC)
+    settled = None
+    if after is not None:
+        settled = frames.after(max(t_end + S.SETTLE_WINDOW_SEC, after['t'] + 1e-6), FRAME_MAX_GAP_SEC)
+    return before, after, settled
+
 
 def read_jsonl(path):
     p = Path(path)
@@ -263,13 +285,12 @@ def judge_run(run_dir, run=subprocess.run):
         settled = t_still is not None
         # 止まらなかったときは待ちの上限時刻で判定する（静止条件が FAIL になる）
         t_end = (t_still + S.SETTLE_SEC) if settled else settle_deadline(ev['t_sent'], st['duration'])
-        t_settled = t_end + S.SETTLE_WINDOW_SEC
+        fb, fa, fs = judge_frames(frames, ev['t_start'], t_end)
         ee_rec = ee.nearest(t_end)
         r = judge_step(
             joints=st['joints'], expected=st['expect'], tolerance=st['tolerance'],
             actual_before=joints_at(joints, ev['t_start']), actual_after=joints_at(joints, t_end),
-            frame_before=frame(frames.before(ev['t_start'])), frame_after=frame(frames.nearest(t_end)),
-            frame_settled=frame(frames.nearest(t_settled)),
+            frame_before=frame(fb), frame_after=frame(fa), frame_settled=frame(fs),
             ee_xyz=None if ee_rec is None else ee_rec['xyz'], K=K,
             motion_min=GRIPPER_MOTION_MIN if st['kind'] == S.GRIPPER else MOTION_MIN)
         if not settled:

@@ -42,21 +42,26 @@ def cmd_wait(a):
         print(f'events.jsonl にステップ {a.index} が無い', file=sys.stderr)
         return 2
     deadline = M.settle_deadline(ev['t_sent'], st['duration'])
+    t_end = None
     while True:
         now = time.time()
-        t = M.settle_time(M.read_jsonl(d / 'joints.jsonl'), st['joints'], st['expect'],
-                          st['tolerance'], ev['t_sent'], st['duration'])
-        if t is not None:
-            # 判定時刻（静止 + SETTLE_SEC）と静止判定のフレーム（+ SETTLE_WINDOW_SEC）が記録されるまで
-            rest = t + S.SETTLE_SEC + S.SETTLE_WINDOW_SEC + M.MAX_GAP_SEC - now
-            if rest > 0:
-                time.sleep(rest)
-            print(f'静止 {t - ev["t_sent"]:.1f}s 後')
-            return 0
-        if now > deadline:
-            print(f'静止しない（{deadline - ev["t_sent"]:.0f}s 待った）。判定で FAIL になる', file=sys.stderr)
-            time.sleep(S.SETTLE_SEC + S.SETTLE_WINDOW_SEC + M.MAX_GAP_SEC)
-            return 0
+        if t_end is None:
+            t = M.settle_time(M.read_jsonl(d / 'joints.jsonl'), st['joints'], st['expect'],
+                              st['tolerance'], ev['t_sent'], st['duration'])
+            if t is not None:
+                t_end = t + S.SETTLE_SEC
+                print(f'静止 {t - ev["t_sent"]:.1f}s 後')
+            elif now > deadline:
+                t_end = deadline
+                print(f'静止しない（{deadline - ev["t_sent"]:.0f}s 待った）。判定で FAIL になる', file=sys.stderr)
+        if t_end is not None:
+            # 判定に使うフレーム（判定時刻以後の 1 枚と、その後の静止確認の 1 枚）が記録されるまで待つ
+            frames = M.Series(M.read_frames_csv(d / 'camera_frames.csv'))
+            if M.judge_frames(frames, ev['t_start'], t_end)[2] is not None:
+                return 0
+            if now > t_end + S.SETTLE_WINDOW_SEC + 2 * M.FRAME_MAX_GAP_SEC:
+                print('判定に使うカメラフレームが来ない。判定で FAIL になる', file=sys.stderr)
+                return 0
         time.sleep(0.3)
 
 

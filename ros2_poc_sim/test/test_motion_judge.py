@@ -225,3 +225,11 @@ def test_settle_time_skips_gaps_in_records():
     recs = [r for r in _traj(10.0, 20.0, HOME, POSE_A, until=26.0) if not 14.0 < r['t'] < 15.2]
     t = M.settle_time(recs, J, POSE_A, 0.05, t_sent=10.0, duration=3.0)
     assert t is not None and 19.5 <= t <= 20.25
+
+
+def test_judge_frames_uses_frames_after_judge_time_even_when_sparse():
+    frames = M.Series([{'n': i, 't': t} for i, t in enumerate([1.0, 4.0, 9.5, 16.0, 17.0, 30.0])])
+    before, after, settled = M.judge_frames(frames, t_start=5.0, t_end=10.0)
+    assert (before['n'], after['n'], settled['n']) == (1, 3, 4)   # 9.5 は判定時刻より前なので使わない
+    assert M.judge_frames(frames, t_start=5.0, t_end=17.5)[2] is None   # 17.5 以後は 30.0 だけ（間隔超過）
+    assert M.judge_frames(M.Series([]), 1.0, 2.0) == (None, None, None)
