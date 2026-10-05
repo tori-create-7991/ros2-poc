@@ -41,7 +41,7 @@ docker exec -u ubuntu ros2arm bash -c 'source /opt/ros/jazzy/setup.bash; source 
 
 ```
 Mac: scripts/run-scenario.sh
-  ├─ ros2lab-a: ros2 topic pub --once -w 1 /crane_x7_arm_controller/joint_trajectory ...（README と同じ経路）
+  ├─ ros2lab-a: ros2 topic pub -w 1 --times 3 -r 2 /crane_x7_arm_controller/joint_trajectory ...（README と同じ経路。--once は Discovery 直後に落ちることがあるので 3 回送る）
   ├─ ros2arm:   ros2 action send_goal /crane_x7_gripper_controller/gripper_cmd ...（ros2lab に control_msgs が無いため）
   ├─ ros2arm:   scenario_observer（カメラ・/joint_states・手先 TF を記録）、ffmpeg x11grab（デスクトップ）
   └─ ros2arm:   scenario_cli wait / judge / compose

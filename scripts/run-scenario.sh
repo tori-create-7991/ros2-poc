@@ -96,6 +96,22 @@ if ! sim_ready; then
   done
 fi
 
+# ros2lab-a からアームのコントローラが見えるまで待つ。`ros2 topic pub -w 1` は「誰か 1 つ」の購読者で
+# 送ってしまうので、Discovery が遅れている（同じネットワークの別コンテナが多いと起きる）と指令が届かない
+controller_seen() {
+  lab "timeout 25 ros2 topic info -v --no-daemon /crane_x7_arm_controller/joint_trajectory 2>/dev/null \
+       | grep -q 'Node name: crane_x7_arm_controller'" < /dev/null > /dev/null 2>&1
+}
+deadline=$(( $(date +%s) + TIMEOUT ))
+until controller_seen; do
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    echo "ros2lab-a から crane_x7_arm_controller が見えない（Discovery の問題）。数十秒待ってから再実行する。" >&2
+    exit 2
+  fi
+  echo "ros2lab-a から crane_x7_arm_controller が見えるのを待つ"
+  sleep 5
+done
+
 REPEAT_ARG=""
 [ -n "$REPEAT" ] && REPEAT_ARG="--repeat $REPEAT"
 if ! arm "ros2 run ros2_poc_sim scenario_cli commands $RUN/scenario.yaml $REPEAT_ARG --steps-out $RUN/steps.json" \
@@ -116,6 +132,10 @@ stop_recorders() {
 trap stop_recorders EXIT
 
 SIZE="$(arm "xdpyinfo -display :1 | awk '/dimensions:/{print \$2}'" < /dev/null)"
+if [[ ! "$SIZE" =~ ^[0-9]+x[0-9]+$ ]]; then
+  echo "デスクトップ（DISPLAY=:1）の大きさが取れない（${SIZE:-空}）。noVNC のデスクトップが起動しているか確認する。" >&2
+  exit 2
+fi
 arm_bg "exec ros2 run ros2_poc_sim scenario_observer --out $RUN > $RUN/observer.log 2>&1"
 arm_bg "date +%s.%N > $RUN/desktop_t0.txt; exec ffmpeg -y -v error -f x11grab -framerate 10 -video_size $SIZE -i :1 -c:v libx264 -preset ultrafast -pix_fmt yuv420p $RUN/desktop.mp4 2> $RUN/desktop_ffmpeg.log"
 # 記録の立ち上がり待ち: 送信前のフレームが要るので、カメラのフレームが記録され始めるまで待つ

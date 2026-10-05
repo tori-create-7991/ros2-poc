@@ -219,7 +219,9 @@ def to_command(step):
     pts = ', '.join(f'{{positions: [{", ".join(fmt(x) for x in p)}], '
                     f'time_from_start: {_duration_msg(t)}}}' for p, t in step.points)
     msg = f'{{joint_names: [{", ".join(ARM_JOINTS)}], points: [{pts}]}}'
-    return 'ros2lab-a', (f'ros2 topic pub --once -w 1 {ARM_TOPIC} '
+    # --once だと送信直後に終了し、相手側の Discovery が終わっていないと落ちることがある（実測）。
+    # 0.5 秒間隔で 3 回送る。コントローラは同じ目標の軌道に置き換えるだけなので最終姿勢は変わらない
+    return 'ros2lab-a', (f'ros2 topic pub -w 1 --times 3 -r 2 {ARM_TOPIC} '
                          f'trajectory_msgs/msg/JointTrajectory "{msg}"')
 
 
@@ -229,7 +231,7 @@ def display_lines(step):
         return [f'$ ros2 action send_goal {GRIPPER_ACTION} control_msgs/action/ParallelGripperCommand',
                 f'    {GRIPPER_JOINT} -> {fmt(step.points[0][0][0])} rad']
     pts = '  '.join(f'[{", ".join(fmt(x) for x in p)}] @{fmt(t)}s' for p, t in step.points)
-    return [f'$ ros2 topic pub --once -w 1 {ARM_TOPIC} trajectory_msgs/msg/JointTrajectory',
+    return [f'$ ros2 topic pub -w 1 --times 3 -r 2 {ARM_TOPIC} trajectory_msgs/msg/JointTrajectory',
             f'    positions: {pts}']
 
 

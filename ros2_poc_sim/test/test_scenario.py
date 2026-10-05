@@ -85,12 +85,12 @@ def test_repeat_suffixes_names_and_cli_overrides_yaml():
     assert [s.name for s in S.parse_scenario(data, repeat=1)] == ['a', 'b']
 
 
-def test_arm_command_matches_readme_form():
+def test_arm_command_matches_readme_form_but_publishes_three_times():
     (s,) = _one({'positions': POSE_A, 'time_from_start': 3})
     target, cmd = S.to_command(s)
     assert target == 'ros2lab-a'
     assert cmd == (
-        'ros2 topic pub --once -w 1 /crane_x7_arm_controller/joint_trajectory '
+        'ros2 topic pub -w 1 --times 3 -r 2 /crane_x7_arm_controller/joint_trajectory '
         'trajectory_msgs/msg/JointTrajectory "{joint_names: [crane_x7_shoulder_fixed_part_pan_joint, '
         'crane_x7_shoulder_revolute_part_tilt_joint, crane_x7_upper_arm_revolute_part_twist_joint, '
         'crane_x7_upper_arm_revolute_part_rotate_joint, crane_x7_lower_arm_fixed_part_joint, '
@@ -135,6 +135,6 @@ def test_display_lines_show_values_without_joint_names():
         {'waypoints': [{'positions': [0.0] * 7, 'time_from_start': 1.5},
                        {'positions': POSE_A, 'time_from_start': 3}]}, {'gripper': 'close'}]})
     lines = S.display_lines(arm)
-    assert lines[0].startswith('$ ros2 topic pub --once -w 1 /crane_x7_arm_controller/joint_trajectory')
+    assert lines[0].startswith('$ ros2 topic pub -w 1 --times 3 -r 2 /crane_x7_arm_controller/joint_trajectory')
     assert lines[1] == '    positions: [0, 0, 0, 0, 0, 0, 0] @1.5s  [0.5, 0.3, 0, -1.2, 0, -0.5, 0] @3s'
     assert S.display_lines(grip)[1] == '    crane_x7_gripper_finger_a_joint -> 0 rad'
