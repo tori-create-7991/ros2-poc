@@ -170,7 +170,8 @@ ROS 非依存の単体テストは `cd ros2_poc_sim && python -m pytest -q test/
 - **カメラ映像は `/joint_states` より約 1〜1.5 秒遅れる**ので、2 ステップ目以降は 1.5 秒待ってから新しいフレームを取る（[sim-scenario-recording.md](sim-scenario-recording.md) と同じ実測）。
 - 変換ノードは前のステップの `gripper` を覚えていて、変化したときだけ `gripper_cmd` を送る。起動直後の最初のステップは必ず送る（現在のグリッパ状態を読まないため）。
 - シミュ（CPU 描画）は遅く、`ros2arm` のシナリオ実行（`run-scenario.sh`）と同時には動かせない。排他は**片方向**で、`run-vla.sh` は `run-scenario.sh` のロックを見るが、`run-scenario.sh` は `run-vla` のロックを見ない（確認してから実行までの隙間も残る）。同時に実行しない。
-- 前のステップの `joint_trajectory` が届いてからグリッパが失敗すると、アームは動いたのに `rejected`（reason に「アームの指令は送信済み」）になる。
+- アームの指令を送ったあとにグリッパが失敗すると、アームは動いたのに `rejected`（reason に「アームの指令は送信済み」）になる。
+- `run-vla.sh` の Ctrl-C / SIGTERM では VLA ノードと変換ノードを止めてロックを外す（`docker exec` はシグナルを転送しないため）。この後始末は docker スタブのテストの範囲で、実コンテナでの確認は未実施。
 - `ros2server` は `ros2lab` と同じ使い勝手のため root・権限制限なしで動く（`vla-server` は読み取り専用・権限なし）。
 - ROS 依存部（`vla_converter.py` / `vla_node.py`）に単体テストは無く、実コンテナでの検証のみ（CI は構文チェックだけ）。手順は ROS 非依存の `vla_step` / `vla_loop` に寄せてテストしている。
 - 実機（`ros2real`）へ移す前に: 作業空間・上限・関節の変化量をパラメータ化し、arm 定数を `scenario`（シミュ用）から切り出す。変換ノードを実機で単独起動できないようにするガードも要る（現状の実機拒否は `run-vla.sh` のみ）。
