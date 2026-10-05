@@ -105,6 +105,65 @@ services:
     volumes:
       - ./workspace:/workspace
 
+  ros2server:
+    # VLA ノード（画像 → /act → /vla/action）と変換ノード（手先差分 → IK → アーム指令）を動かす ROS 2 側のコンテナ。
+    # arm 層（ros2arm → 将来 ros2real）は DDS 越しに標準インターフェースで呼ぶだけで、手を入れない。
+    # ros2lab-a/b と同じ使い勝手（ROS CLI・./workspace・lab ネットワーク参加）。使い方は docs/openvla-ros2-bridge.md。
+    #   docker compose --profile vla up -d --build   （bash scripts/up-arm.sh でシミュを起動したうえで）
+    # SROS2 化していない（当面は環境 A。環境ラベルだけ付ける）。
+    profiles: [vla]
+    build:
+      context: .
+      dockerfile: Dockerfile.ros2server
+    image: ros2server:jazzy
+    container_name: ros2server
+    hostname: ros2server
+    labels:
+      ros2poc.env: a
+    tty: true
+    stdin_open: true
+    init: true
+    # ROS_DOMAIN_ID / ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET は Dockerfile.ros2server 側で設定済み。
+    # lab: ros2arm と同じく ros2-lab-net に参加する。DDS は無認証なので、同じ lab のコンテナ（kali-vnc など）から
+    # /vla/action や joint_trajectory を偽装され、シミュ上のアームを動かされうる（docs/openvla-ros2-bridge.md）。
+    networks:
+      - default
+      - lab
+    environment:
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      # 既定の VLA サーバー。本物の GPU サーバーに替えるときは VLA_ENDPOINT で上書きする
+      - VLA_ENDPOINT=${VLA_ENDPOINT:-http://vla-server:8000/act}
+    volumes:
+      - ./workspace:/workspace
+
+  vla-server:
+    # OpenVLA の REST サーバー（POST /act）の代わりのスタブ。GPU 不要・標準ライブラリだけ。
+    # 本物の OpenVLA は別マシンの GPU サーバーに置き、ros2server の VLA_ENDPOINT で指す（docs/openvla-ros2-bridge.md）。
+    profiles: [vla]
+    build:
+      context: .
+      dockerfile: Dockerfile.vla-server
+    image: vla-server:stub
+    container_name: vla-server
+    hostname: vla-server
+    init: true
+    # 外へ出す必要がないものは出さない: default ネットワークだけ（lab には繋がない）、読み取り専用、権限なし
+    networks:
+      - default
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # ホストへの公開は 127.0.0.1 限定（LAN や 0.0.0.0 に広げない）。ホストのポートが使用中なら VLA_SERVER_PORT で変える
+    ports:
+      - "127.0.0.1:${VLA_SERVER_PORT:-8000}:8000"
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
   ros2diag:
     # SROS2 の診断コンテナ。鍵なし・不正証明書の参加者を作って、各環境の挙動を確認する。
     # scripts/verify-env.sh が使う。ros2-lab-net（internal）だけに接続し、ポートは公開しない。

@@ -1,0 +1,24 @@
+# vla-server: OpenVLA の REST サーバー（vla-scripts/deploy.py の POST /act）の代わりのスタブ。GPU 不要。
+# 標準ライブラリだけの Python（ros2_poc_sim の vla_codec.py と vla_stub_server.py の 2 ファイルのみ入れる）。
+# 本物の OpenVLA サーバー（別マシンの GPU）とは URL を差し替えるだけで入れ替わる。手順は docs/openvla-ros2-bridge.md。
+# ベースは tag + digest で固定する（multi-arch の manifest list。2026-10-05 取得）。更新するときは digest を差し替える。
+FROM python:3.12-slim@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# 非 root で動かす（読み取り専用のルートファイルシステムでも動く。docker-compose.yml の read_only と合わせる）
+RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin vla
+
+WORKDIR /app
+COPY ros2_poc_sim/ros2_poc_sim/__init__.py ros2_poc_sim/ros2_poc_sim/vla_codec.py ros2_poc_sim/ros2_poc_sim/vla_stub_server.py /app/ros2_poc_sim/
+
+USER vla
+EXPOSE 8000
+
+# コンテナ内は 0.0.0.0 で待ち受ける（同じ compose の default ネットワークからの接続用）。
+# ホストへの公開は docker-compose.yml で 127.0.0.1 に限定している。
+CMD ["python", "-m", "ros2_poc_sim.vla_stub_server", "--host", "0.0.0.0", "--port", "8000"]
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=3s --retries=3 \
+    CMD ["python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 2).close()"]
