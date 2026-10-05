@@ -115,8 +115,8 @@ def test_commands_outputs_logical_targets_and_rejects_bad_yaml(tmp_path, capsys)
 
 
 def test_unexpected_error_is_exit_2_not_fail(tmp_path, capsys):
-    assert CLI.main(['judge', str(tmp_path)]) == 2   # steps.json が無い
-    assert 'judge が失敗した' in capsys.readouterr().err
+    assert CLI.main(['budget', str(tmp_path)]) == 2   # steps.json が無い
+    assert 'budget が失敗した' in capsys.readouterr().err
 
 
 def test_budget_covers_every_step_deadline(tmp_path, capsys):
@@ -139,5 +139,51 @@ def test_doctor_reports_missing_font(tmp_path, capsys):
     ([400, 0, 320, 0, 400, 240, 0, 0, 1], 4000, 4000, None, False),      # 上限超え
 ])
 def test_valid_camera_info(k, w, h, size, ok):
-    obs = pytest.importorskip('ros2_poc_sim.scenario_observer')
-    assert obs.valid_camera_info(k, w, h, size) is ok
+    assert M.valid_camera_info(k, w, h, size) is ok
+
+
+def _recorded(tmp_path, info=True, incomplete=False):
+    d = _run_dir(tmp_path)
+    (d / 'camera_frames.csv').write_text('n,t\n0,9.0\n1,9.5\n')
+    (d / 'camera.mp4').write_bytes(b'')
+    if info:
+        (d / 'camera_info.json').write_text(json.dumps({'k': [400, 0, 2, 0, 400, 2, 0, 0, 1], 'width': 2, 'height': 2}))
+    if incomplete:
+        (d / M.INCOMPLETE_MARK).write_text('x')
+    return d
+
+
+class _R:
+    def __init__(self, out):
+        self.stdout = out
+
+
+@pytest.mark.parametrize('kw, frame_ok, needle', [
+    ({'info': False}, True, 'camera_info.json'),
+    ({'incomplete': True}, True, '書き終えられなかった'),
+    ({}, False, '読めない'),
+])
+def test_missing_recording_is_environment_error_not_fail(tmp_path, kw, frame_ok, needle):
+    d = _recorded(tmp_path, **kw)
+    problems = M.recording_problems(d, run=lambda cmd, **k: _R(bytes(12) if frame_ok else b''))
+    assert problems and any(needle in p for p in problems)
+
+
+def test_judge_returns_2_when_recording_is_broken(tmp_path, capsys):
+    d = _recorded(tmp_path, info=False)
+    assert CLI.main(['judge', str(d)]) == 2
+    assert '判定しない' in capsys.readouterr().err and not (d / 'result.json').exists()
+
+
+def test_wait_records_decision_and_judge_uses_it(tmp_path):
+    d = _run_dir(tmp_path)
+    w = _writer(d, stop_at=14.0)
+    clock = Clock(10.0, w)
+    w(10.0)
+    assert CLI.cmd_wait(_args(d), now=clock.now, sleep=clock.sleep) == 0
+    (rec,) = M.read_jsonl(d / 'wait.jsonl')
+    assert rec['index'] == 0 and rec['settled'] is True
+    # 事後に記録が書き換わっても（書き込み遅れなど）、judge は wait の判定時刻を使う
+    (d / 'joints.jsonl').write_text('')
+    (r,) = M.judge_run(d, run=lambda cmd, **k: _R(b''))['steps']
+    assert r['t_end'] == pytest.approx(rec['t_end'])

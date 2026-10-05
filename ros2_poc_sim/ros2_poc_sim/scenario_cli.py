@@ -92,6 +92,9 @@ def cmd_wait(a, now=time.time, sleep=time.sleep):
             decided = M.judge_time(M.read_jsonl(d / 'joints.jsonl'), st, ev, now=t)
             if decided is not None:
                 t_end, settled = decided
+                # judge はこの判定時刻を使う（待った時刻と判定に使うフレームを一致させる）
+                with (d / 'wait.jsonl').open('a', encoding='utf-8') as f:
+                    f.write(json.dumps({'index': a.index, 't_end': t_end, 'settled': settled}) + '\n')
                 if settled:
                     print(f'静止 {t_end - M.SETTLE_SEC - ev["t_sent"]:.1f}s 後')
                 else:
@@ -109,6 +112,11 @@ def cmd_wait(a, now=time.time, sleep=time.sleep):
 
 
 def cmd_judge(a):
+    problems = M.recording_problems(a.run_dir)
+    if problems:
+        for p in problems:
+            print(f'記録が欠けているので判定しない: {p}', file=sys.stderr)
+        return 2
     res = M.judge_run(a.run_dir)
     Path(a.run_dir, 'result.json').write_text(
         json.dumps(res, ensure_ascii=False, indent=1), encoding='utf-8')

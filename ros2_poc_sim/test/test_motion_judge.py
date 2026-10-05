@@ -252,3 +252,8 @@ def test_judge_time_undecided_while_waiting_then_decided():
     done = _traj(10.0, 12.0, HOME, POSE_A, until=16.0)
     t_end, settled = M.judge_time(done, st, {'t_sent': 10.0}, now=16.0)
     assert settled and t_end == pytest.approx(12.0 + M.SETTLE_SEC, abs=0.3)   # 12 秒で届いて静止
+
+
+def test_settle_time_holds_while_window_still_open():
+    recs = _traj(10.0, 12.0, HOME, POSE_A, until=12.6)   # 静止区間が 0.6 秒ぶんしかない
+    assert M.settle_time(recs, J, POSE_A, 0.05, 10.0, 3.0, now=12.6) is None   # 実行中は区間が終わるまで保留

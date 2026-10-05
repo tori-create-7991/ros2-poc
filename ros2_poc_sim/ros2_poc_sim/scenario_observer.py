@@ -11,7 +11,6 @@
 """
 import argparse
 import json
-import math
 import subprocess
 import time
 from pathlib import Path
@@ -24,17 +23,7 @@ from sensor_msgs.msg import CameraInfo, Image, JointState
 from tf2_ros import Buffer, TransformException, TransformListener
 
 EE_LINK = 'crane_x7_gripper_base_link'
-MAX_PIXELS = 1920 * 1080   # DDS は無認証。巨大な画像でディスク・メモリを使い切られないよう上限を置く
-MAX_FPS = 30.0             # これより速く届くフレームは捨てる（同上。シミュは 1〜3fps）
-
-
-def valid_camera_info(k, width, height, image_size=None):
-    """CameraInfo を判定・合成に使えるか（無認証の DDS から来るので値を信用しない）。"""
-    if not 0 < width * height <= MAX_PIXELS:
-        return False
-    if image_size is not None and (width, height) != image_size:
-        return False
-    return len(k) == 9 and all(math.isfinite(x) for x in k) and k[0] > 0 and k[4] > 0
+from ros2_poc_sim.motion_judge import INCOMPLETE_MARK, MAX_FPS, MAX_PIXELS, valid_camera_info
 
 
 class Observer(Node):
@@ -129,7 +118,13 @@ class Observer(Node):
             f.close()
         if self.ffmpeg is not None:
             self.ffmpeg.stdin.close()
-            self.ffmpeg.wait(timeout=60)
+            try:
+                self.ffmpeg.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                # 書き出しが終わらない: 止めて、判定が未完の camera.mp4 を FAIL と取り違えないよう目印を残す
+                self.ffmpeg.kill()
+                (self.out / INCOMPLETE_MARK).write_text('ffmpeg did not finish within 60s\n')
+                self.get_logger().error('camera.mp4 の書き出しが 60 秒で終わらなかった')
         self.get_logger().info(f'記録終了: カメラ {self.n} フレーム')
 
 

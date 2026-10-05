@@ -81,24 +81,40 @@ fail_env() { echo "$1" >&2; exit 2; }
 arm "ros2 run ros2_poc_sim scenario_cli doctor" < /dev/null \
   || fail_env "ros2arm に録画・合成の前提が揃っていない（上のメッセージ参照。'bash scripts/up-arm.sh' でイメージを作り直す）"
 
-# 同時実行の拒否（同じアームに 2 本の指令が混ざる）。ロックはコンテナ内に置き、コンテナを作り直せば消える
+TS="$(date +%Y%m%d-%H%M%S)"
+# ホスト側の ./workspace（テストでは差し替える）。コンテナ内では /workspace
+WORKSPACE_HOST="${RUN_SCENARIO_WORKSPACE:-workspace}"
+RUN_HOST="$WORKSPACE_HOST/runs/$TS"
+RUN="/workspace/runs/$TS"
+# 記録プロセス（observer・カメラ用 ffmpeg・デスクトップ録画）。[s] などは pkill / pgrep 自身を呼ぶ
+# bash -c のコマンドラインに一致させないため。ANY_* は他の実行（前回の残り）も含めて探すとき用
+RECORDERS="[s]cenario_observer --out $RUN|[r]awvideo.*$RUN/camera\.mp4|[x]11grab.*$RUN/desktop\.mp4"
+ANY_RECORDERS='[s]cenario_observer --out /workspace/runs/|[r]awvideo.*/workspace/runs/[0-9-]*/camera\.mp4|[x]11grab.*/workspace/runs/[0-9-]*/desktop\.mp4'
+
+# 同時実行の拒否（同じアームに 2 本の指令が混ざる）。ロックは ros2arm の /tmp に置く。
+# コンテナを作り直す（up-arm.sh）と消えるが、docker restart や Colima の再起動では残る
 LOCK=/tmp/run-scenario.lock
-arm "mkdir $LOCK" < /dev/null 2>/dev/null \
-  || fail_env "別の run-scenario が実行中（終わっているなら: docker exec ros2arm rmdir $LOCK）"
+if ! arm "mkdir $LOCK && echo '$TS' > $LOCK/started" < /dev/null 2>/dev/null; then
+  started="$(arm "cat $LOCK/started" < /dev/null 2>/dev/null || true)"
+  if arm "pgrep -f '$ANY_RECORDERS'" > /dev/null 2>&1 < /dev/null; then
+    fail_env "別の run-scenario が実行中（開始 ${started:-不明}）"
+  fi
+  fail_env "前回の run-scenario のロックが残っている（開始 ${started:-不明}、記録プロセスは無い）。実行中でなければ外す: docker exec ros2arm rm -r $LOCK"
+fi
+# shellcheck disable=SC2317,SC2329  # trap から呼ぶ
+release_lock() { arm "rm -r $LOCK" < /dev/null > /dev/null 2>&1 || true; }
+trap release_lock EXIT
 # 前回の記録プロセスが残っていたら止めてもらう（残るとシミュがさらに遅くなる）
-if arm "pgrep -f '[s]cenario_observer --out |[x]11grab -i :1|[x]11grab.*desktop.mp4'" > /dev/null 2>&1 < /dev/null; then
-  arm "rmdir $LOCK" < /dev/null || true
-  fail_env "前回の記録プロセスが残っている。止めてから再実行する: docker exec ros2arm pkill -INT -f '[s]cenario_observer --out|[x]11grab'"
+if arm "pgrep -f '$ANY_RECORDERS'" > /dev/null 2>&1 < /dev/null; then
+  fail_env "前回の記録プロセスが残っている。止めてから再実行する: docker exec ros2arm pkill -INT -f '$ANY_RECORDERS'"
 fi
 
-TS="$(date +%Y%m%d-%H%M%S)"
-RUN_HOST="workspace/runs/$TS"
-RUN="/workspace/runs/$TS"
-RECORDERS="[s]cenario_observer --out $RUN|[x]11grab.*$RUN/desktop.mp4"
-
+STOPPED=0
 stop_recorders() {
-  # [s] / [x] は pkill 自身を呼ぶ bash -c のコマンドラインに一致させないため。
   # observer は ffmpeg の書き出しを最大 60 秒待つので、それより長く待ってから TERM → KILL に上げる
+  [ "$STOPPED" = 1 ] && return 0
+  STOPPED=1
+  echo "記録を止めている（最大 2 分ほどかかる）"
   local sig
   for sig in INT TERM KILL; do
     arm "pkill -$sig -f '$RECORDERS'" < /dev/null > /dev/null 2>&1 || true
@@ -112,8 +128,9 @@ stop_recorders() {
 }
 # shellcheck disable=SC2317,SC2329  # trap から呼ぶ（shellcheck のバージョンでコードが違う）
 cleanup() {
+  trap '' INT   # 後片付けの途中で Ctrl-C されてもロックを外すところまで進める
   stop_recorders || true
-  arm "rmdir $LOCK" < /dev/null > /dev/null 2>&1 || true
+  release_lock
 }
 trap cleanup EXIT
 
@@ -172,11 +189,20 @@ fi
 [ "$rc" = 0 ] || fail_env "シナリオを展開できない（rc=$rc）"
 # 送るコマンドは scenario.py が作る 2 種類の形に限る（YAML の値は数値に変換済み。生成側の検証が漏れても
 # ここで止める）。bash -c の文字列に入るので、シェルの特殊文字が混ざったら実行しない
-CMD_RE='^ros2 (topic pub|action send_goal) [][A-Za-z0-9_ /.:{},"#-]+$'
-while IFS=$'\t' read -r _ _ _ cmd; do
-  [[ "$cmd" =~ $CMD_RE ]] || fail_env "想定外の形のコマンドなので実行しない: $cmd"
+# 送信先・トピック・型まで固定し、メッセージ部分は二重引用符の中の数値・名前・記号だけを許す
+# （引用の中なのでグロブやブレース展開も起きない）
+CMD_RE_LAB='^ros2 topic pub -w 1 --times 3 -r 2 /crane_x7_arm_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory "[][A-Za-z0-9_ .:{},-]+"$'
+CMD_RE_SIM='^ros2 action send_goal /crane_x7_gripper_controller/gripper_cmd control_msgs/action/ParallelGripperCommand "[][A-Za-z0-9_ .:{},-]+"$'
+while IFS=$'\t' read -r _ target _ cmd; do
+  case "$target" in
+    lab) re="$CMD_RE_LAB" ;;
+    sim) re="$CMD_RE_SIM" ;;
+    *) fail_env "不明な送信先なので実行しない: $target" ;;
+  esac
+  (export LC_ALL=C; [[ "$cmd" =~ $re ]]) || fail_env "想定外の形のコマンドなので実行しない: $cmd"
 done < "$RUN_HOST/commands.tsv"
 MAX_SEC="$(arm "ros2 run ros2_poc_sim scenario_cli budget $RUN" < /dev/null)" || fail_env "記録時間の上限を計算できない"
+[[ "$MAX_SEC" =~ ^[0-9]+$ ]] || fail_env "記録時間の上限が数値でない: $MAX_SEC"
 
 SIZE="$(arm "xdpyinfo -display :1 | awk '/dimensions:/{print \$2}'" < /dev/null)"
 if [[ ! "$SIZE" =~ ^[0-9]+x[0-9]+$ ]]; then

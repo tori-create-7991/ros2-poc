@@ -18,7 +18,8 @@ bash scripts/run-scenario.sh --scenario <path/to/my.yaml>
 | `--start-sim` | なし | シミュ（公式 Gazebo + MoveIt + 仮想カメラ、視点 `fixed_front_wide`）が動いていなければ起動する |
 | `--timeout` | 120（`--start-sim` 時 900） | トピックが流れ始めるまで待つ秒数 |
 
-終了コード: `0` = 全ステップ PASS / `1` = FAIL あり / `2` = 環境・記録の問題（判定できなかった）/ `64` = 引数・シナリオの誤り。
+終了コード: `0` = 全ステップ PASS / `1` = FAIL あり / `2` = 環境・記録の問題（判定できなかった。camera_info が届かない・
+camera.mp4 を書き終えられない・記録プロセスを止められない等を含む）/ `64` = 引数・シナリオの誤り。
 合成（scenario.mp4）に失敗しても終了コードは判定結果のまま（判定の正は `result.json`）。
 
 実行前に次を確かめ、満たさなければ `2` で止まる。
@@ -27,7 +28,7 @@ bash scripts/run-scenario.sh --scenario <path/to/my.yaml>
 - ros2arm に ffmpeg（libx264・drawtext 等）・xdpyinfo・フォントがある（`scenario_cli doctor`）
 - 別の run-scenario が実行中でない（ros2arm 内の `/tmp/run-scenario.lock`）、前回の記録プロセスが残っていない
 - ros2lab-a からアームのコントローラ（`crane_x7_arm_controller`）が見える（Discovery 待ち）
-- 送るコマンドが想定の形（`ros2 topic pub` / `ros2 action send_goal` と数値・記号のみ）
+- 送るコマンドが想定の形（送信先ごとにトピック・型まで固定し、メッセージは二重引用符の中の数値・名前・記号のみ）
 
 ## 出力（`workspace/runs/<日時>/`）
 
@@ -126,7 +127,8 @@ docker exec ros2arm pkill -INT -f '[r]os2 launch ros2_poc_sim'   # 数秒で Gaz
 | `joints_not_still` | シミュが極端に遅い、またはコントローラが目標に届かない。`gz topic -e -t /stats` で RTF を確認 |
 | 動画の左側が RViz で、Gazebo の GUI が見えない | デスクトップをそのまま録画しているため。Gazebo のシーンは右側の仮想カメラで見える。必要なら noVNC で Gazebo のウィンドウを前に出してから実行する |
 | `合成に失敗した` | `overlay/filtergraph.txt` と ffmpeg のメッセージを確認 |
-| `別の run-scenario が実行中` | 前回を強制終了した。実行中でなければ `docker exec ros2arm rmdir /tmp/run-scenario.lock` |
+| `別の run-scenario が実行中` | 記録プロセスが動いている。終わるのを待つ |
+| `前回の run-scenario のロックが残っている` | 前回を強制終了した（SIGKILL・VM 停止など）。記録プロセスが無いことを確かめて `docker exec ros2arm rm -r /tmp/run-scenario.lock`。ロックはコンテナを作り直すと消えるが、`docker restart` や Colima の再起動では残る |
 | `前回の記録プロセスが残っている` | 前回を強制終了した。案内のコマンドで止めてから再実行する。記録プロセスは停止の指示が届かなくても、シナリオから計算した上限時間で止まる |
 | `記録プロセスを止められない` | 判定に使う camera.mp4 が未完の可能性があるので判定しない（終了コード 2） |
 

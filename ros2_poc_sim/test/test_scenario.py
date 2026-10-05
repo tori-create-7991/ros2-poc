@@ -151,11 +151,17 @@ def test_display_lines_show_values_without_joint_names():
 
 
 def test_generated_commands_pass_run_scenario_check():
-    """run-scenario.sh の送信前検査（CMD_RE）を、同梱シナリオの全コマンドが通ること。"""
+    """run-scenario.sh の送信前検査（送信先ごとの CMD_RE_*）を、同梱シナリオの全コマンドが通ること。"""
     import re
     sh = (Path(__file__).resolve().parents[2] / 'scripts' / 'run-scenario.sh').read_text(encoding='utf-8')
-    pattern = re.search(r"^CMD_RE='(.*)'$", sh, re.M).group(1)
+    patterns = {t: re.search(rf"^CMD_RE_{t.upper()}='(.*)'$", sh, re.M).group(1) for t in (S.LAB, S.SIM)}
     for name in ('default', 'fail_demo', 'examples'):
         for s in S.load_scenario(SCENARIOS / f'{name}.yaml', repeat=2):
-            cmd = S.to_command(s)[1]
-            assert re.fullmatch(pattern, cmd), cmd
+            target, cmd = S.to_command(s)
+            assert re.fullmatch(patterns[target], cmd), cmd
+    for bad in ['ros2 topic pub -w 1 --times 3 -r 2 /crane_x7_arm_controller/joint_trajectory '
+                'trajectory_msgs/msg/JointTrajectory "{a: 1}"; id',
+                'ros2 topic pub -w 1 --times 3 -r 2 /crane_x7_arm_controller/joint_trajectory '
+                'trajectory_msgs/msg/JointTrajectory "{a: $(id)}"',
+                'ros2 topic pub -w 1 --times 3 -r 2 /other trajectory_msgs/msg/JointTrajectory "{a: 1}"']:
+        assert not re.fullmatch(patterns[S.LAB], bad), bad

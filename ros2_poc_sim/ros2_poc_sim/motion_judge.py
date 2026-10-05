@@ -31,6 +31,19 @@ SETTLE_TIMEOUT_FACTOR = 5  # 静止を待つ上限 = 指令時間 × これ + SE
 SETTLE_TIMEOUT_EXTRA = 10.0
 SETTLE_SEC = 1.5           # 関節が静止してから判定するまでの待ち（カメラ映像は /joint_states より 1〜1.5s 遅れる。実測）
 SETTLE_WINDOW_SEC = 1.0    # 静止確認のフレームを、判定時刻からこれ以上あとに取る
+# 記録の上限（DDS は無認証。巨大・高頻度の画像でディスク・メモリを使い切られないため。scenario_observer が使う）
+MAX_PIXELS = 1920 * 1080
+MAX_FPS = 30.0             # シミュは 1〜3fps
+INCOMPLETE_MARK = 'camera.incomplete'   # observer が camera.mp4 を書き終えられなかった目印
+
+
+def valid_camera_info(k, width, height, image_size=None):
+    """CameraInfo を判定・合成に使えるか（無認証の DDS から来るので値を信用しない）。"""
+    if not 0 < width * height <= MAX_PIXELS:
+        return False
+    if image_size is not None and (width, height) != image_size:
+        return False
+    return len(k) == 9 and all(math.isfinite(x) for x in k) and k[0] > 0 and k[4] > 0
 
 
 def diff_mask(a, b, thresh=DIFF_THRESH):
@@ -202,7 +215,7 @@ def read_frames_csv(path):
         return [{'n': int(r['n']), 't': float(r['t'])} for r in csv.DictReader(f)]
 
 
-def settle_time(records, joints, expected, tolerance, t_sent, duration, t_limit=None):
+def settle_time(records, joints, expected, tolerance, t_sent, duration, t_limit=None, now=math.inf):
     """送信後に腕が止まった時刻（t_limit までに止まらなければ None）。
 
     シミュは実時間より遅い（RTF < 1）ので、指令の time_from_start ではなく /joint_states の静止で決める。
@@ -210,6 +223,7 @@ def settle_time(records, joints, expected, tolerance, t_sent, duration, t_limit=
     指令が届く前の静止（送信直後）を拾わないよう、期待値に届くか指令時間が過ぎるまでは待つ。
     t_limit（既定は settle_deadline）より後の記録は見ない。上限を過ぎてから止まった場合に、
     次のステップの区間で判定してしまわないため。
+    実行中（now が有限）は、区間 STILL_WINDOW が過ぎるまで判断を保留する（事後の判定と結果を揃える）。
     """
     if t_limit is None:
         t_limit = settle_deadline(t_sent, duration)
@@ -225,6 +239,8 @@ def settle_time(records, joints, expected, tolerance, t_sent, duration, t_limit=
         if not reached and r['t'] < t_sent + duration:
             continue
         k = bisect.bisect_right(ts, r['t'] + STILL_WINDOW)   # 区間の末尾（rs[i:k]）
+        if k == len(rs) and now < r['t'] + STILL_WINDOW:
+            return None   # 実行中: 区間がまだ終わっていない
         if ts[k - 1] - r['t'] < STILL_WINDOW * 0.6:
             if k == len(rs):
                 return None   # 記録の末尾: まだ区間ぶんの記録が無い
@@ -252,7 +268,7 @@ def judge_time(records, step, event, now=math.inf):
     """
     deadline = settle_deadline(event['t_sent'], step['duration'])
     t = settle_time(records, step['joints'], step['expect'], step['tolerance'],
-                    event['t_sent'], step['duration'], deadline)
+                    event['t_sent'], step['duration'], deadline, now)
     if t is not None:
         return t + SETTLE_SEC, True
     if now >= deadline + STILL_WINDOW:
@@ -275,9 +291,30 @@ def frame_at(video, n, width, height, run=subprocess.run):
     return np.frombuffer(out, np.uint8).reshape(height, width, 3)
 
 
+def recording_problems(run_dir, run=subprocess.run):
+    """判定の前提になる記録が揃っているか。欠けていれば理由のリスト（判定ではなく環境・記録の問題）。"""
+    d = Path(run_dir)
+    problems = []
+    if (d / INCOMPLETE_MARK).exists():
+        problems.append('camera.mp4 を書き終えられなかった（observer の停止が間に合わなかった）')
+    info_p = d / 'camera_info.json'
+    info = json.loads(info_p.read_text(encoding='utf-8')) if info_p.exists() else None
+    if info is None:
+        problems.append('camera_info.json が無い（画像に合う CameraInfo が届かなかった）')
+    frames = read_frames_csv(d / 'camera_frames.csv')
+    if not frames:
+        problems.append('camera_frames.csv にフレームが無い')
+    if info is not None and frames and not problems:
+        if frame_at(d / 'camera.mp4', frames[0]['n'], info['width'], info['height'], run=run) is None:
+            problems.append('camera.mp4 からフレームを読めない')
+    return problems
+
+
 def judge_run(run_dir, run=subprocess.run):
     """run_dir の記録を読んで result.json の中身を返す。"""
     d = Path(run_dir)
+    # 実行中の scenario_cli wait が決めた判定時刻（あればそれを正とし、待った時刻と判定時刻を一致させる）
+    decided = {w['index']: w for w in read_jsonl(d / 'wait.jsonl')}
     steps = json.loads((d / 'steps.json').read_text(encoding='utf-8'))
     events = {e['index']: e for e in read_jsonl(d / 'events.jsonl')}
     joints = Series(read_jsonl(d / 'joints.jsonl'))
@@ -306,7 +343,10 @@ def judge_run(run_dir, run=subprocess.run):
                             'codes': [f'send_failed rc={rc}'],
                             **({'t_start': ev['t_start'], 't_sent': ev['t_sent']} if ev else {})})
             continue
-        t_end, settled = judge_time(joints.records, st, ev)
+        if i in decided:
+            t_end, settled = decided[i]['t_end'], decided[i]['settled']
+        else:
+            t_end, settled = judge_time(joints.records, st, ev)
         fb, fa, fs = judge_frames(frames, ev['t_start'], t_end)
         ee_rec = ee.nearest(t_end)
         r = judge_step(
