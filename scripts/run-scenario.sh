@@ -110,7 +110,7 @@ stop_recorders() {
   done
   return 1
 }
-# shellcheck disable=SC2329  # trap から呼ぶ
+# shellcheck disable=SC2317,SC2329  # trap から呼ぶ（shellcheck のバージョンでコードが違う）
 cleanup() {
   stop_recorders || true
   arm "rmdir $LOCK" < /dev/null > /dev/null 2>&1 || true
