@@ -171,8 +171,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ros2arm の ubuntu が書けるよう、ディレクトリはコンテナ側で作る（/workspace は root と ubuntu が混在する）
-arm "mkdir -p $RUN" < /dev/null || fail_env "出力先を作れない: $RUN_HOST"
+# ros2arm の ubuntu が書けるよう、ディレクトリはコンテナ側で作る（/workspace は root と ubuntu が混在する）。
+# Linux ホストではホストのユーザーが ubuntu(uid 1000) と別になりうるので、ホスト側からも書けるよう 777 にする
+arm "mkdir -p $RUN && chmod 777 $RUN" < /dev/null || fail_env "出力先を作れない: $RUN_HOST"
 cp "$SCENARIO_FILE" "$RUN_HOST/scenario.yaml" || fail_env "シナリオをコピーできない"
 echo "出力先: $RUN_HOST"
 
