@@ -40,9 +40,9 @@ services:
       context: .
       dockerfile: Dockerfile.arm
     container_name: ros2arm
-    # SROS2 化していない（常に環境 A）。環境ラベルだけ付ける。
+    # SROS2 の環境（a: 未適用 / b: 誤設定 / c: 適正）。scripts/up-env.sh が SROS2_ENV を渡す（ros2lab と同じ）。
     labels:
-      ros2poc.env: a
+      ros2poc.env: ${SROS2_ENV:-a}
     # noVNC (6080) とネイティブ VNC (5901)。どちらも LAN には出さずホストのローカルからのみ接続させる。
     # VNC はコンテナ側 5900（Dockerfile.arm の socat ブリッジ）。ホスト側を 5901 にしているのは、
     # macOS の画面共有サーバー（既定 5900）と衝突させないため。
@@ -110,7 +110,7 @@ services:
     # arm 層（ros2arm → 将来 ros2real）は DDS 越しに標準インターフェースで呼ぶだけで、手を入れない。
     # ros2lab-a/b と同じ使い勝手（ROS CLI・./workspace・lab ネットワーク参加）。使い方は docs/openvla-ros2-bridge.md。
     #   docker compose --profile vla up -d --build   （bash scripts/up-arm.sh でシミュを起動したうえで）
-    # SROS2 化していない（当面は環境 A。環境ラベルだけ付ける）。
+    # SROS2 の環境（a: 未適用 / b: 誤設定 / c: 適正）。scripts/up-env.sh が SROS2_ENV を渡す（ros2lab と同じ）。
     profiles: [vla]
     build:
       context: .
@@ -119,7 +119,7 @@ services:
     container_name: ros2server
     hostname: ros2server
     labels:
-      ros2poc.env: a
+      ros2poc.env: ${SROS2_ENV:-a}
     tty: true
     stdin_open: true
     init: true

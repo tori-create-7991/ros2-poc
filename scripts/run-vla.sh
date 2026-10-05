@@ -71,11 +71,18 @@ need="ros2arm ros2server"
 for c in $need; do
   running "$c" || fail_env "$c が起動していない。'bash scripts/up-arm.sh' でシミュを起動し、'docker compose --profile vla up -d --build ros2server vla-server' で ros2server と vla-server を起動する。"
 done
-# ros2arm は SROS2 化していない（常に環境 a）。ros2server が環境 b / c だと DDS で通信できない。
+# ros2server と ros2arm が別の SROS2 環境（a: 未適用 / b: 誤設定 / c: 適正）だと DDS で通信できず、
+# コントローラ待ちで時間切れになる。同じ環境ならどの環境でも使える。
 # 空（docker によっては <no value>）はラベル導入前のコンテナなので a として扱う
-srv_env="$(docker inspect -f '{{index .Config.Labels "ros2poc.env"}}' ros2server 2>/dev/null || true)"
-if [ -n "$srv_env" ] && [ "$srv_env" != a ] && [ "$srv_env" != '<no value>' ]; then
-  fail_env "ros2server が SROS2 環境 $srv_env で起動している。ros2arm は環境 a でしか使えない。"
+env_of() {
+  local e
+  e="$(docker inspect -f '{{index .Config.Labels "ros2poc.env"}}' "$1" 2>/dev/null || true)"
+  case "$e" in "" | '<no value>') echo a ;; *) echo "$e" ;; esac
+}
+srv_env="$(env_of ros2server)"
+arm_env="$(env_of ros2arm)"
+if [ "$srv_env" != "$arm_env" ]; then
+  fail_env "ros2server が SROS2 環境 $srv_env、ros2arm が環境 $arm_env で起動していて、DDS で通信できない。同じ環境に揃える: 'bash scripts/up-env.sh $srv_env --arm --vla'（または a / b / c のどれかに合わせる）"
 fi
 
 ROS_ENV='source /opt/ros/jazzy/setup.bash; source /opt/ros2_poc_ws/install/setup.bash'
@@ -108,8 +115,11 @@ srv "pkill -INT -f '$NODE'; pkill -INT -f '$CONVERTER'; true" < /dev/null > /dev
 
 # ros2server からアームのコントローラがちょうど 1 つ見えるまで待つ（Discovery 待ち。2 つ以上ならシミュの二重起動か
 # 実機ドライバと混在として止める）
+# SROS2（環境 b / c）では Discovery に認証のやり取りが入り、既定の待ち時間では何も見えない（実測: --spin-time 15 で見える）
+SPIN=2
+if [ "$srv_env" != a ]; then SPIN=15; fi
 controller_count() {
-  srv "timeout 25 ros2 topic info -v --no-daemon /crane_x7_arm_controller/joint_trajectory 2>/dev/null \
+  srv "timeout $((SPIN + 25)) ros2 topic info -v --spin-time $SPIN --no-daemon /crane_x7_arm_controller/joint_trajectory 2>/dev/null \
        | grep -c 'Node name: crane_x7_arm_controller'" < /dev/null 2>/dev/null || true
 }
 controller_seen() {

@@ -1,0 +1,6 @@
+# ros2arm / ros2server のポリシー（sros2/policy/lab-c.xml）を生成するときに、拒否ログから足した分。
+# 稼働中のグラフ（live-graph.xml）には載らない短命のプロセス（controller の spawner）や、起動時だけ作られるクライアント・遅れて作られる購読。
+# 形式は <publish|subscribe|reply|request>:<名前>。再生成の手順は scripts/sros2/lib/sim_policy.py の先頭。
+request:/controller_manager/list_controllers
+request:/controller_manager/load_controller
+subscribe:/sim_camera/realsense_d435/raw/image

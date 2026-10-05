@@ -114,6 +114,56 @@ rm -rf "$TMP/dst"
 got="$(umask 022; env ROS_SECURITY_ENABLE=true SROS2_SRC="$TMP/full" SROS2_DST="$TMP/dst" SROS2_NEXT="$TMP/next.sh" sh "$ROOT/sros2/entrypoint.sh")"
 [ "$got" = "0022" ] || fail "次の entrypoint の umask が元の値でない: $got"
 
+# 4i) SROS2_ENV_FILE: 端末が ENV を継承しないコンテナ（ros2arm のデスクトップ）向けに、ROS_SECURITY_* を source できる形で書く。
+#     SROS2 が有効なときだけ、決めた変数だけ。値は source されるので、想定外の文字を含むものは拒否する
+rm -f "$TMP/env.sh"
+run "$TMP/full" ROS_SECURITY_ENABLE=true ROS_SECURITY_STRATEGY=Enforce ROS_SECURITY_KEYSTORE=/run/sros2/keystore \
+  ROS_SECURITY_ENCLAVE_OVERRIDE=/lab/ros2arm SROS2_ENV_FILE="$TMP/env.sh" SROS2_SECRET_LIKE=do-not-write
+[ "$RC" -eq 0 ] || fail "ENV_FILE: exit 0 のはずが $RC: $ERR"
+[ "$(mode "$TMP/env.sh")" = "644" ] || fail "env ファイルが 0644 でない: $(mode "$TMP/env.sh")"
+for want in "export ROS_SECURITY_ENABLE=true" "export ROS_SECURITY_STRATEGY=Enforce" \
+  "export ROS_SECURITY_KEYSTORE=/run/sros2/keystore" "export ROS_SECURITY_ENCLAVE_OVERRIDE=/lab/ros2arm"; do
+  grep -qx "$want" "$TMP/env.sh" || fail "env ファイルに '$want' が無い: $(cat "$TMP/env.sh")"
+done
+[ "$(wc -l < "$TMP/env.sh" | tr -d ' ')" = 4 ] || fail "env ファイルに余計な行がある: $(cat "$TMP/env.sh")"
+# 値に特殊文字があれば拒否（source でコマンドが実行されるのを防ぐ）
+# shellcheck disable=SC2016  # シェルに展開させず、そのまま文字列として渡すのが目的
+for bad in '/lab/x;id' '/lab/$(id)' '/lab/a b' '/lab/`id`'; do
+  rm -f "$TMP/env.sh"
+  run "$TMP/full" ROS_SECURITY_ENABLE=true ROS_SECURITY_ENCLAVE_OVERRIDE="$bad" SROS2_ENV_FILE="$TMP/env.sh"
+  [ "$RC" -eq 1 ] || fail "ENV_FILE の値 '$bad': exit 1 のはずが $RC"
+  grep -q "ROS_SECURITY_ENCLAVE_OVERRIDE" <<<"$ERR" || fail "ENV_FILE の値 '$bad': 説明が無い: $ERR"
+  [ ! -e "$TMP/env.sh" ] || fail "不正な値なのに env ファイルを書いた"
+done
+# 一部の変数が未設定でも（最後のものが空でも）書ける。未設定の変数は書かない
+rm -f "$TMP/env.sh"
+run "$TMP/full" ROS_SECURITY_ENABLE=true ROS_SECURITY_STRATEGY=Enforce SROS2_ENV_FILE="$TMP/env.sh"
+[ "$RC" -eq 0 ] || fail "ENV_FILE（一部未設定）: exit 0 のはずが $RC: $ERR"
+[ "$(wc -l < "$TMP/env.sh" | tr -d ' ')" = 2 ] || fail "未設定の変数まで書いている: $(cat "$TMP/env.sh")"
+# SROS2 が無効なら env ファイルは書かない（セキュリティ有効のように見せない）
+rm -f "$TMP/env.sh"
+run "$TMP/none" ROS_SECURITY_ENABLE=false SROS2_ENV_FILE="$TMP/env.sh"
+[ "$RC" -eq 0 ] || fail "SROS2 無効 + ENV_FILE: exit 0 のはずが $RC: $ERR"
+[ ! -e "$TMP/env.sh" ] || fail "SROS2 無効なのに env ファイルを書いた"
+
+# 4j) SROS2_CHOWN: ノードを root 以外で動かすコンテナ（ros2arm の ubuntu）が鍵を読めるように所有者を変える。
+#     モードは変えない（0700/0600 のまま）。user[:group] 以外の値は拒否する
+me="$(id -u):$(id -g)"
+run "$TMP/full" ROS_SECURITY_ENABLE=true SROS2_CHOWN="$me"
+[ "$RC" -eq 0 ] || fail "SROS2_CHOWN=$me: exit 0 のはずが $RC: $ERR"
+[ "$(mode "$TMP/dst/enclaves/lab/test_enclave/key.pem")" = "600" ] || fail "chown 後に key.pem のモードが変わった"
+# shellcheck disable=SC2016
+for bad in 'root;id' '$(id)' 'a b' '-R' '..'; do
+  run "$TMP/full" ROS_SECURITY_ENABLE=true SROS2_CHOWN="$bad"
+  [ "$RC" -eq 1 ] || fail "SROS2_CHOWN='$bad': exit 1 のはずが $RC"
+  # 値の検査で止まっていること（chown に渡る前）。検査を外しても chown の失敗で exit 1 になるので、メッセージで区別する
+  grep -q "SROS2_CHOWN の値が不正" <<<"$ERR" || fail "SROS2_CHOWN='$bad': 値の検査で止まっていない: $ERR"
+done
+# 存在しないユーザーなら chown が失敗して起動しない（鍵が読めないまま「健全」に見えるのを防ぐ）
+run "$TMP/full" ROS_SECURITY_ENABLE=true SROS2_CHOWN="no-such-user-xyz"
+[ "$RC" -eq 1 ] || fail "存在しないユーザー: exit 1 のはずが $RC"
+grep -q "所有者を変えられない" <<<"$ERR" || fail "存在しないユーザー: chown 失敗の説明が無い: $ERR"
+
 # 5) SROS2 無効 → 鍵が無くても素通し
 run "$TMP/none"
 [ "$RC" -eq 0 ] || fail "SROS2 無効: exit 0 のはずが $RC: $ERR"

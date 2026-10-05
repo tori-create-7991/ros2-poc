@@ -68,14 +68,17 @@ for c in ros2arm ros2lab-a; do
     exit 2
   fi
 done
-# ros2arm は SROS2 化していない（常に環境 a）。ros2lab-a が環境 b / c だと DDS で通信できず、
-# コントローラ待ちで時間切れになって Discovery の問題と誤って案内してしまう。
+# このスクリプトは ros2lab-a から ros2arm へ指令する。ros2lab-a は環境 b / c では最小権限のポリシーで、アームの
+# トピックに触れない（ros2arm と ros2lab-a が別の環境でも DDS で通信できず、コントローラ待ちで時間切れになって
+# Discovery の問題と誤って案内してしまう）。両方が環境 a のときだけ使える。
 # 空（docker によっては <no value>）はラベル導入前のコンテナなので a として扱う
-lab_env="$(docker inspect -f '{{index .Config.Labels "ros2poc.env"}}' ros2lab-a 2>/dev/null || true)"
-if [ -n "$lab_env" ] && [ "$lab_env" != a ] && [ "$lab_env" != '<no value>' ]; then
-  echo "ros2lab-a が SROS2 環境 $lab_env で起動している。ros2arm は環境 a でしか使えないので 'bash scripts/up-env.sh a' で戻す。" >&2
-  exit 2
-fi
+for c in ros2lab-a ros2arm; do
+  c_env="$(docker inspect -f '{{index .Config.Labels "ros2poc.env"}}' "$c" 2>/dev/null || true)"
+  if [ -n "$c_env" ] && [ "$c_env" != a ] && [ "$c_env" != '<no value>' ]; then
+    echo "$c が SROS2 環境 $c_env で起動している。run-scenario は ros2lab-a から指令するので、ros2lab-a と ros2arm を環境 a に揃える: 'bash scripts/up-env.sh a --arm'" >&2
+    exit 2
+  fi
+done
 
 ROS_ENV='source /opt/ros/jazzy/setup.bash; source /opt/crane_ws/install/setup.bash; source /opt/ros2_poc_ws/install/setup.bash'
 arm() { docker exec -u ubuntu -e DISPLAY=:1 ros2arm bash -c "$ROS_ENV; $1"; }

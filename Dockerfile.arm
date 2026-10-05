@@ -76,3 +76,8 @@ RUN source /opt/ros/jazzy/setup.bash \
     && cd /opt/ros2_poc_ws && colcon build \
     && rm -rf /opt/ros2_poc_ws/build /opt/ros2_poc_ws/log \
     && printf '%s\n' 'source /opt/ros2_poc_ws/install/setup.bash' >> /home/ubuntu/.bashrc
+
+# SROS2（環境 b / c）: sros2/entrypoint.sh が書く環境ファイル（ROS_SECURITY_*。鍵は含まない）を読む。
+# デスクトップの端末はコンテナの ENV を継承しないので、ここで読まないと端末から起動したノードだけ
+# セキュリティなしで動いてしまう。環境 a ではファイルが無いので何もしない。
+RUN printf '%s\n' '[ -f /run/sros2-env.sh ] && source /run/sros2-env.sh' >> /home/ubuntu/.bashrc

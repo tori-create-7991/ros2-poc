@@ -1,0 +1,588 @@
+<policy version="0.2.0">
+  <enclaves>
+    <enclave path="/">
+      <profiles>
+        <profile node="camera_adapter_realsense_d435" ns="/">
+          <topics publish="ALLOW">
+            <topic>/camera/aligned_depth_to_color/camera_info</topic>
+            <topic>/camera/aligned_depth_to_color/image_raw</topic>
+            <topic>/camera/color/camera_info</topic>
+            <topic>/camera/color/image_raw</topic>
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+            <topic>tf_static</topic>
+          </topics>
+        </profile>
+        <profile node="controller_manager" ns="/">
+          <services reply="ALLOW">
+            <service>~/cleanup_controller</service>
+            <service>~/configure_controller</service>
+            <service>~/describe_parameters</service>
+            <service>~/get_logger_levels</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_controller_types</service>
+            <service>~/list_controllers</service>
+            <service>~/list_hardware_components</service>
+            <service>~/list_hardware_interfaces</service>
+            <service>~/list_parameters</service>
+            <service>~/load_controller</service>
+            <service>~/reload_controller_libraries</service>
+            <service>~/set_hardware_component_state</service>
+            <service>~/set_logger_levels</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+            <service>~/switch_controller</service>
+            <service>~/unload_controller</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+            <topic>robot_description</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>diagnostics</topic>
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+            <topic>~/activity</topic>
+            <topic>~/introspection_data/full</topic>
+            <topic>~/introspection_data/names</topic>
+            <topic>~/introspection_data/values</topic>
+            <topic>~/statistics/full</topic>
+            <topic>~/statistics/names</topic>
+            <topic>~/statistics/values</topic>
+          </topics>
+        </profile>
+        <profile node="crane_x7_arm_controller" ns="/">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/follow_joint_trajectory/_action/cancel_goal</service>
+            <service>~/follow_joint_trajectory/_action/get_result</service>
+            <service>~/follow_joint_trajectory/_action/send_goal</service>
+            <service>~/get_logger_levels</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/query_state</service>
+            <service>~/set_logger_levels</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+            <topic>~/joint_trajectory</topic>
+            <topic>~/speed_scaling_input</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+            <topic>~/controller_state</topic>
+            <topic>~/follow_joint_trajectory/_action/feedback</topic>
+            <topic>~/follow_joint_trajectory/_action/status</topic>
+            <topic>~/transition_event</topic>
+          </topics>
+        </profile>
+        <profile node="crane_x7_gripper_controller" ns="/">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/get_logger_levels</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/gripper_cmd/_action/cancel_goal</service>
+            <service>~/gripper_cmd/_action/get_result</service>
+            <service>~/gripper_cmd/_action/send_goal</service>
+            <service>~/list_parameters</service>
+            <service>~/set_logger_levels</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+            <topic>~/gripper_cmd/_action/feedback</topic>
+            <topic>~/gripper_cmd/_action/status</topic>
+            <topic>~/transition_event</topic>
+          </topics>
+        </profile>
+        <profile node="gz_ros_control" ns="/">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>parameter_events</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="interactive_marker_display_211801118610416" ns="/">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <services request="ALLOW">
+            <service>/rviz_moveit_motion_planning_display/robot_interaction_interactive_marker_topic/get_interactive_markers</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>/rviz_moveit_motion_planning_display/robot_interaction_interactive_marker_topic/update</topic>
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>/rviz_moveit_motion_planning_display/robot_interaction_interactive_marker_topic/feedback</topic>
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="joint_state_controller" ns="/">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/get_logger_levels</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_logger_levels</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>dynamic_joint_states</topic>
+            <topic>joint_states</topic>
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+            <topic>~/transition_event</topic>
+          </topics>
+        </profile>
+        <profile node="move_group" ns="/">
+          <services reply="ALLOW">
+            <service>/execute_trajectory/_action/cancel_goal</service>
+            <service>/execute_trajectory/_action/get_result</service>
+            <service>/execute_trajectory/_action/send_goal</service>
+            <service>/move_action/_action/cancel_goal</service>
+            <service>/move_action/_action/get_result</service>
+            <service>/move_action/_action/send_goal</service>
+            <service>apply_planning_scene</service>
+            <service>check_state_validity</service>
+            <service>clear_octomap</service>
+            <service>compute_cartesian_path</service>
+            <service>compute_fk</service>
+            <service>compute_ik</service>
+            <service>get_planner_params</service>
+            <service>get_urdf</service>
+            <service>load_geometry_from_file</service>
+            <service>load_map</service>
+            <service>plan_kinematic_path</service>
+            <service>query_planner_interface</service>
+            <service>save_geometry_to_file</service>
+            <service>save_map</service>
+            <service>set_planner_params</service>
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+            <topic>trajectory_execution_event</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>/execute_trajectory/_action/feedback</topic>
+            <topic>/execute_trajectory/_action/status</topic>
+            <topic>/move_action/_action/feedback</topic>
+            <topic>/move_action/_action/status</topic>
+            <topic>display_contacts</topic>
+            <topic>display_planned_path</topic>
+            <topic>parameter_events</topic>
+            <topic>pipeline_state</topic>
+            <topic>robot_description_semantic</topic>
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="move_group_private_189982223692880" ns="/">
+          <services reply="ALLOW">
+            <service>get_planning_scene</service>
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>attached_collision_object</topic>
+            <topic>clock</topic>
+            <topic>collision_object</topic>
+            <topic>joint_states</topic>
+            <topic>parameter_events</topic>
+            <topic>planning_scene</topic>
+            <topic>planning_scene_world</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>monitored_planning_scene</topic>
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="moveit" ns="/move_group">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>/clock</topic>
+            <topic>/parameter_events</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>/parameter_events</topic>
+            <topic>/rosout</topic>
+          </topics>
+        </profile>
+        <profile node="moveit_587508927" ns="/">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="moveit_929338823" ns="/">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="moveit_simple_controller_manager" ns="/">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <services request="ALLOW">
+            <service>/crane_x7_arm_controller/follow_joint_trajectory/_action/cancel_goal</service>
+            <service>/crane_x7_arm_controller/follow_joint_trajectory/_action/get_result</service>
+            <service>/crane_x7_arm_controller/follow_joint_trajectory/_action/send_goal</service>
+            <service>/crane_x7_gripper_controller/gripper_cmd/_action/cancel_goal</service>
+            <service>/crane_x7_gripper_controller/gripper_cmd/_action/get_result</service>
+            <service>/crane_x7_gripper_controller/gripper_cmd/_action/send_goal</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>/crane_x7_arm_controller/follow_joint_trajectory/_action/feedback</topic>
+            <topic>/crane_x7_arm_controller/follow_joint_trajectory/_action/status</topic>
+            <topic>/crane_x7_gripper_controller/gripper_cmd/_action/feedback</topic>
+            <topic>/crane_x7_gripper_controller/gripper_cmd/_action/status</topic>
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="rep_realsense_d435_color_image" ns="/">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>/camera/color/image_raw/compressed</topic>
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="robot_state_publisher" ns="/">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>joint_states</topic>
+            <topic>parameter_events</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>parameter_events</topic>
+            <topic>robot_description</topic>
+            <topic>rosout</topic>
+            <topic>tf</topic>
+            <topic>tf_static</topic>
+          </topics>
+        </profile>
+        <profile node="ros_gz_bridge" ns="/">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="rviz" ns="/">
+          <services reply="ALLOW">
+            <service>/rviz_moveit_motion_planning_display/robot_interaction_interactive_marker_topic/get_interactive_markers</service>
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/reset_time</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <services request="ALLOW">
+            <service>/execute_trajectory/_action/cancel_goal</service>
+            <service>/execute_trajectory/_action/get_result</service>
+            <service>/execute_trajectory/_action/send_goal</service>
+            <service>/move_action/_action/cancel_goal</service>
+            <service>/move_action/_action/get_result</service>
+            <service>/move_action/_action/send_goal</service>
+            <service>clear_octomap</service>
+            <service>compute_cartesian_path</service>
+            <service>get_planner_params</service>
+            <service>query_planner_interface</service>
+            <service>set_planner_params</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>/execute_trajectory/_action/feedback</topic>
+            <topic>/execute_trajectory/_action/status</topic>
+            <topic>/move_action/_action/feedback</topic>
+            <topic>/move_action/_action/status</topic>
+            <topic>/rviz_moveit_motion_planning_display/robot_interaction_interactive_marker_topic/feedback</topic>
+            <topic>clock</topic>
+            <topic>display_planned_path</topic>
+            <topic>parameter_events</topic>
+            <topic>recognized_object_array</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>/rviz_moveit_motion_planning_display/robot_interaction_interactive_marker_topic/update</topic>
+            <topic>attached_collision_object</topic>
+            <topic>clicked_point</topic>
+            <topic>goal_pose</topic>
+            <topic>initialpose</topic>
+            <topic>parameter_events</topic>
+            <topic>planning_scene</topic>
+            <topic>planning_scene_world</topic>
+            <topic>rosout</topic>
+            <topic>trajectory_execution_event</topic>
+          </topics>
+        </profile>
+        <profile node="rviz_private_269425985113072" ns="/">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>monitored_planning_scene</topic>
+            <topic>parameter_events</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="sim_camera_bridge_realsense_d435" ns="/">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>/sim_camera/realsense_d435/raw/camera_info</topic>
+            <topic>/sim_camera/realsense_d435/raw/depth_image</topic>
+            <topic>/sim_camera/realsense_d435/raw/image</topic>
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="transform_listener_impl_acc9af12c910" ns="/">
+          <services reply="ALLOW">
+            <service>~/get_type_description</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+            <topic>tf</topic>
+            <topic>tf_static</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="transform_listener_impl_c0a1ca0f5740" ns="/">
+          <services reply="ALLOW">
+            <service>~/get_type_description</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+            <topic>tf</topic>
+            <topic>tf_static</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="transform_listener_impl_c0a1ca1fa090" ns="/">
+          <services reply="ALLOW">
+            <service>~/get_type_description</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+            <topic>tf</topic>
+            <topic>tf_static</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="transform_listener_impl_f50aa0343070" ns="/">
+          <services reply="ALLOW">
+            <service>~/get_type_description</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>clock</topic>
+            <topic>parameter_events</topic>
+            <topic>tf</topic>
+            <topic>tf_static</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+        <profile node="vla_converter" ns="/">
+          <services reply="ALLOW">
+            <service>~/describe_parameters</service>
+            <service>~/get_parameter_types</service>
+            <service>~/get_parameters</service>
+            <service>~/get_type_description</service>
+            <service>~/list_parameters</service>
+            <service>~/set_parameters</service>
+            <service>~/set_parameters_atomically</service>
+          </services>
+          <services request="ALLOW">
+            <service>/crane_x7_gripper_controller/gripper_cmd/_action/cancel_goal</service>
+            <service>/crane_x7_gripper_controller/gripper_cmd/_action/get_result</service>
+            <service>/crane_x7_gripper_controller/gripper_cmd/_action/send_goal</service>
+            <service>compute_ik</service>
+          </services>
+          <topics subscribe="ALLOW">
+            <topic>/crane_x7_gripper_controller/gripper_cmd/_action/feedback</topic>
+            <topic>/crane_x7_gripper_controller/gripper_cmd/_action/status</topic>
+            <topic>/vla/action</topic>
+            <topic>joint_states</topic>
+            <topic>tf</topic>
+            <topic>tf_static</topic>
+          </topics>
+          <topics publish="ALLOW">
+            <topic>/crane_x7_arm_controller/joint_trajectory</topic>
+            <topic>/vla/ack</topic>
+            <topic>parameter_events</topic>
+            <topic>rosout</topic>
+          </topics>
+        </profile>
+      </profiles>
+    </enclave>
+  </enclaves>
+</policy>

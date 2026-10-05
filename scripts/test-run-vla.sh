@@ -8,7 +8,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 # docker スタブ。呼び出しを STUB_LOG に記録し、コンテナ内の動作をまねる:
 #   docker ps --filter name=^X$   STUB_RUNNING（空白区切り）に X があれば ID を返す
-#   docker inspect（ros2poc.env）  STUB_SRV_ENV を返す（未設定なら a、空文字なら空 = ラベル導入前）
+#   docker inspect（ros2poc.env）  ros2server は STUB_SRV_ENV、ros2arm は STUB_ARM_ENV を返す（未設定なら a、空文字なら空 = ラベル導入前）
 #   test -d /tmp/run-scenario.lock STUB_SCENARIO_LOCK=1 のとき「ある」
 #   mkdir /tmp/run-vla.lock        STUB_VLA_LOCK=1 のとき「すでにある」（失敗）
 #   grep -c 'Node name             STUB_CONTROLLERS を返す（既定 1）
@@ -28,7 +28,12 @@ if [ "${1:-}" = "ps" ]; then
   exit 0
 fi
 if [ "${1:-}" = "inspect" ]; then
-  [[ "$*" == *ros2poc.env* ]] && echo "${STUB_SRV_ENV-a}"
+  if [[ "$*" == *ros2poc.env* ]]; then
+    case "$*" in
+      *" ros2arm") echo "${STUB_ARM_ENV-a}" ;;
+      *) echo "${STUB_SRV_ENV-a}" ;;
+    esac
+  fi
   exit 0
 fi
 [ "${1:-}" = "exec" ] || exit 0
@@ -114,16 +119,33 @@ done
 run_case "ros2arm ros2server" --instruction "move up" --endpoint http://gpu-host:8000/act --timeout 0
 [ "$RC" = 0 ] || fail "--endpoint 指定で vla-server 不要のはず: $RC $ERR"
 
-# --- ros2server が SROS2 環境 b / c → 2。空（ラベル導入前）と <no value> は a 扱い
+# --- ros2server と ros2arm が別の SROS2 環境 → 2（up-env.sh で揃える案内）。同じ環境なら a / b / c のどれでも通る。
+# 空（ラベル導入前）と <no value> は a 扱い
 for env in b c; do
   STUB_SRV_ENV="$env" run_case "$ALL" --instruction "move up"
-  [ "$RC" = 2 ] || fail "ros2server 環境 $env: $RC"
-  grep -q "環境 $env" <<<"$ERR" || fail "環境 $env のメッセージが無い: $ERR"
-  no_exec "ros2server 環境 $env"
+  [ "$RC" = 2 ] || fail "ros2server 環境 $env / ros2arm a: $RC"
+  grep -q "ros2server が SROS2 環境 $env、ros2arm が環境 a" <<<"$ERR" || fail "環境 $env のメッセージが無い: $ERR"
+  grep -q "up-env.sh $env --arm --vla" <<<"$ERR" || fail "環境 $env: up-env.sh の案内が無い: $ERR"
+  no_exec "ros2server 環境 $env / ros2arm a"
+  STUB_ARM_ENV="$env" run_case "$ALL" --instruction "move up"
+  [ "$RC" = 2 ] || fail "ros2server a / ros2arm 環境 $env: $RC"
+  grep -q "ros2arm が環境 $env" <<<"$ERR" || fail "ros2arm 環境 $env のメッセージが無い: $ERR"
+  no_exec "ros2server a / ros2arm 環境 $env"
+  STUB_SRV_ENV="$env" STUB_ARM_ENV="$env" run_case "$ALL" --instruction "move up" --timeout 0
+  [ "$RC" = 0 ] || fail "ros2server と ros2arm が同じ環境 $env なら通るはず: $RC $ERR"
+  started || fail "環境 $env（同じ）で起動していない: $LOG"
 done
+STUB_SRV_ENV=b STUB_ARM_ENV=c run_case "$ALL" --instruction "move up"
+[ "$RC" = 2 ] || fail "b と c の混在は止まるはず: $RC"
+# ラベル導入前（空）のコンテナは a 扱い。環境 c のコンテナと混在したら止まる
+STUB_SRV_ENV="" STUB_ARM_ENV=c run_case "$ALL" --instruction "move up"
+[ "$RC" = 2 ] || fail "空ラベル（a 扱い）と c の混在は止まるはず: $RC"
+grep -q "ros2server が SROS2 環境 a、ros2arm が環境 c" <<<"$ERR" || fail "空ラベルは a と表示されるはず: $ERR"
 for env in "" "<no value>"; do
   STUB_SRV_ENV="$env" run_case "$ALL" --instruction "move up"
   [ "$RC" = 0 ] || fail "環境ラベル [$env] は a 扱いのはず: $RC $ERR"
+  STUB_SRV_ENV="$env" STUB_ARM_ENV="$env" run_case "$ALL" --instruction "move up"
+  [ "$RC" = 0 ] || fail "ros2arm も空ラベルなら a 同士で通るはず: $RC $ERR"
 done
 
 # --- run-scenario が実行中 → 2（変換ノードも起動しない。ロックも取らない）
@@ -137,6 +159,12 @@ STUB_VLA_LOCK=1 run_case "$ALL" --instruction "move up"
 [ "$RC" = 2 ] || fail "run-vla 実行中: $RC"
 grep -q "別の run-vla" <<<"$ERR" || fail "run-vla ロックのメッセージが無い: $ERR"
 if started || lock_released; then fail "他人のロックを外した、または起動した: $LOG"; fi
+
+# --- 探索の待ち時間: 環境 a は短く、SROS2（b / c）は認証のやり取りぶん長い
+run_case "$ALL" --instruction "move up" --timeout 0
+grep -q -- "--spin-time 2 --no-daemon" <<<"$LOG" || fail "環境 a の --spin-time が 2 でない: $LOG"
+STUB_SRV_ENV=c STUB_ARM_ENV=c run_case "$ALL" --instruction "move up" --timeout 0
+grep -q -- "--spin-time 15 --no-daemon" <<<"$LOG" || fail "環境 c の --spin-time が 15 でない: $LOG"
 
 # --- コントローラが見えない / 2 つ以上 → 2（ロックは後始末する）
 STUB_CONTROLLERS=0 run_case "$ALL" --instruction "move up" --timeout 0
