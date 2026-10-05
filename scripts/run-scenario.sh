@@ -89,6 +89,9 @@ RUN="/workspace/runs/$TS"
 # 記録プロセス（observer・カメラ用 ffmpeg・デスクトップ録画）。[s] などは pkill / pgrep 自身を呼ぶ
 # bash -c のコマンドラインに一致させないため。ANY_* は他の実行（前回の残り）も含めて探すとき用
 RECORDERS="[s]cenario_observer --out $RUN|[r]awvideo.*$RUN/camera\.mp4|[x]11grab.*$RUN/desktop\.mp4"
+# 最初の停止指示（INT）はカメラ用 ffmpeg に直接送らない。observer が入力を閉じれば ffmpeg は残りを
+# 書き出して終わる。ffmpeg に INT を送ると読み残したフレーム（最後のステップの判定用）が落ちる
+RECORDERS_INT="[s]cenario_observer --out $RUN|[x]11grab.*$RUN/desktop\.mp4"
 ANY_RECORDERS='[s]cenario_observer --out /workspace/runs/|[r]awvideo.*/workspace/runs/[0-9-]*/camera\.mp4|[x]11grab.*/workspace/runs/[0-9-]*/desktop\.mp4'
 
 # 同時実行の拒否（同じアームに 2 本の指令が混ざる）。ロックは ros2arm の /tmp に置く。
@@ -109,21 +112,28 @@ if arm "pgrep -f '$ANY_RECORDERS'" > /dev/null 2>&1 < /dev/null; then
   fail_env "前回の記録プロセスが残っている。止めてから再実行する: docker exec ros2arm pkill -INT -f '$ANY_RECORDERS'"
 fi
 
-STOPPED=0
+RECORDING=0     # 記録プロセスを起動したか
+STOPPED=0       # 記録プロセスが止まったことを確かめたか
+STOP_GAVE_UP=0  # KILL まで送っても止まらなかったか（後片付けで同じ待ちを繰り返さない）
 stop_recorders() {
   # observer は ffmpeg の書き出しを最大 60 秒待つので、それより長く待ってから TERM → KILL に上げる
-  [ "$STOPPED" = 1 ] && return 0
-  STOPPED=1
+  [ "$RECORDING" = 1 ] && [ "$STOPPED" = 0 ] || return 0
+  [ "$STOP_GAVE_UP" = 0 ] || return 1
   echo "記録を止めている（最大 2 分ほどかかる）"
   local sig
   for sig in INT TERM KILL; do
-    arm "pkill -$sig -f '$RECORDERS'" < /dev/null > /dev/null 2>&1 || true
+    arm "pkill -$sig -f '$([ "$sig" = INT ] && echo "$RECORDERS_INT" || echo "$RECORDERS")'" \
+      < /dev/null > /dev/null 2>&1 || true
     for _ in $(seq 1 "$([ "$sig" = INT ] && echo 90 || echo 10)"); do
-      arm "pgrep -f '$RECORDERS'" > /dev/null 2>&1 < /dev/null || return 0
+      if ! arm "pgrep -f '$RECORDERS'" > /dev/null 2>&1 < /dev/null; then
+        STOPPED=1
+        return 0
+      fi
       sleep 1
     done
     echo "記録プロセスが SIG$sig で止まらない" >&2
   done
+  STOP_GAVE_UP=1
   return 1
 }
 # shellcheck disable=SC2317,SC2329  # trap から呼ぶ（shellcheck のバージョンでコードが違う）
@@ -209,6 +219,7 @@ if [[ ! "$SIZE" =~ ^[0-9]+x[0-9]+$ ]]; then
   fail_env "デスクトップ（DISPLAY=:1）の大きさが取れない（${SIZE:-空}）。noVNC のデスクトップが起動しているか確認する。"
 fi
 # 記録プロセスは停止の指示が届かなくても MAX_SEC 秒で止まる（-t / --max-duration）
+RECORDING=1
 arm_bg "exec ros2 run ros2_poc_sim scenario_observer --out $RUN --max-duration $MAX_SEC > $RUN/observer.log 2>&1"
 arm_bg "date +%s.%N > $RUN/desktop_t0.txt; exec ffmpeg -y -v error -f x11grab -framerate 10 -video_size $SIZE -t $MAX_SEC -i :1 -c:v libx264 -preset ultrafast -pix_fmt yuv420p $RUN/desktop.mp4 2> $RUN/desktop_ffmpeg.log"
 # 記録の立ち上がり待ち: 送信前のフレームが要るので、カメラのフレームが記録され始めるまで待つ

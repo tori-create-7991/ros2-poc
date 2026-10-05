@@ -153,6 +153,20 @@ sent || fail "正常系で指令が送られていない: $LOG"
 grep -q "^exec ros2lab-a bash -lc date" <<<"$LOG" || fail "アームの指令が ros2lab-a から送られていない: $LOG"
 lock_released || fail "正常系でロックを外していない: $LOG"
 
+# グリッパ（sim）の指令は ros2arm から送る
+STUB_TSV='g\tsim\t0.0\tros2 action send_goal /crane_x7_gripper_controller/gripper_cmd control_msgs/action/ParallelGripperCommand "{command: {name: [crane_x7_gripper_finger_a_joint], position: [1.047198]}}"\n' run_case "$ALL"
+[ "$RC" -eq 0 ] || fail "グリッパの正常系は exit 0 のはずが $RC: $ERR"
+grep -q "ros2arm bash -c .*date +%s.%N; timeout 30 ros2 action send_goal" <<<"$LOG" || fail "グリッパの指令が ros2arm から送られていない: $LOG"
+
+# 最初の停止指示（INT）はカメラ用 ffmpeg に送らない（読み残したフレームが落ちる）。TERM / KILL では含める
+run_case "$ALL"
+grep "pkill -INT" <<<"$LOG" | grep -q "awvideo" && fail "INT をカメラ用 ffmpeg に送っている: $LOG"
+grep "pkill -INT" <<<"$LOG" | grep -q "cenario_observer --out" || fail "INT を observer に送っていない: $LOG"
+
+# 記録を始める前に終わったときは、記録の停止を試みない
+STUB_EXEC_FAIL='scenario_cli commands' STUB_EXEC_RC=64 run_case "$ALL"
+if grep -q "pkill" <<<"$LOG"; then fail "記録前の終了で pkill した: $LOG"; fi
+
 # FAIL あり（judge 1）→ 1
 STUB_JUDGE_RC=1 run_case "$ALL"
 [ "$RC" -eq 1 ] || fail "judge 1 は exit 1 のはずが $RC: $ERR"
@@ -171,7 +185,9 @@ STUB_STUCK=1 run_case "$ALL"
 [ "$RC" -eq 2 ] || fail "記録が止まらないときは exit 2 のはずが $RC: $ERR"
 if grep -q "scenario_cli judge" <<<"$LOG"; then fail "記録が止まらないのに判定した: $LOG"; fi
 grep -q "pkill -KILL" <<<"$LOG" || fail "KILL まで上げていない: $LOG"
+grep "pkill -KILL" <<<"$LOG" | grep -q "awvideo" || fail "KILL でカメラ用 ffmpeg を含めていない: $LOG"
 lock_released || fail "記録が止まらないときもロックは外す: $LOG"
+[ "$(grep -c "pkill -KILL" <<<"$LOG")" -eq 1 ] || fail "止められなかった後に停止を繰り返した: $LOG"
 rm "$TMP/seq"
 
 echo "OK: run-scenario guard tests passed"

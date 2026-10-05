@@ -162,10 +162,16 @@ class _R:
     ({'info': False}, True, 'camera_info.json'),
     ({'incomplete': True}, True, '書き終えられなかった'),
     ({}, False, '読めない'),
+    ({}, 'first-only', 'フレーム 1 を読めない'),   # 末尾（最後のステップの判定用）だけ欠けている
 ])
 def test_missing_recording_is_environment_error_not_fail(tmp_path, kw, frame_ok, needle):
     d = _recorded(tmp_path, **kw)
-    problems = M.recording_problems(d, run=lambda cmd, **k: _R(bytes(12) if frame_ok else b''))
+    def run(cmd, **k):
+        n = int(cmd[cmd.index('-vf') + 1].split('\\,')[1].rstrip(')'))
+        ok = frame_ok is True or (frame_ok == 'first-only' and n == 0)
+        return _R(bytes(12) if ok else b'')
+
+    problems = M.recording_problems(d, run=run)
     assert problems and any(needle in p for p in problems)
 
 

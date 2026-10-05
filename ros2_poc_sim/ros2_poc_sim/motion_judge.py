@@ -305,8 +305,12 @@ def recording_problems(run_dir, run=subprocess.run):
     if not frames:
         problems.append('camera_frames.csv にフレームが無い')
     if info is not None and frames and not problems:
-        if frame_at(d / 'camera.mp4', frames[0]['n'], info['width'], info['height'], run=run) is None:
-            problems.append('camera.mp4 からフレームを読めない')
+        # 先頭と末尾（最後のステップの判定に使う）のフレームが読めること。末尾が欠けていると
+        # 判定は「静止確認のフレームが無い」で FAIL になり、記録の問題と区別できない
+        for rec in (frames[0], frames[-1]):
+            if frame_at(d / 'camera.mp4', rec['n'], info['width'], info['height'], run=run) is None:
+                problems.append(f"camera.mp4 からフレーム {rec['n']} を読めない（書き出しが途中で止まった可能性）")
+                break
     return problems
 
 
