@@ -43,7 +43,7 @@ run_case() {
   : > "$STUB_LOG"
   export STUB_LOG
   set +e
-  ERR="$(PATH="$TMP:$PATH" STUB_RUNNING="$running" SROS2_KEYSTORE_ROOT="$ks_root" \
+  ERR="$(PATH="$TMP:$PATH" STUB_RUNNING="$running" SROS2_KEYSTORE_ROOT="$ks_root" SROS2_WORKSPACE_DIR="${WS_DIR:-$TMP/ws-none}" \
     bash "$ROOT/scripts/up-env.sh" "$@" 2>&1 >/dev/null)"
   RC=$?
   set -e
@@ -113,5 +113,16 @@ done
 run_case "ros2arm" "$TMP/keystores" c
 [ "$RC" -eq 0 ] || fail "c(ros2arm 起動中): exit 0 のはずが $RC: $ERR"
 grep -q "ros2arm" <<<"$ERR" || fail "c(ros2arm 起動中): 警告が出ない: $ERR"
+
+# (i) c に切り替えるとき、環境 b が ./workspace に置いた鍵のコピーを削除する（b では残す）
+mkdir -p "$TMP/ws/sros2-keystore"
+touch "$TMP/ws/sros2-keystore/key.pem"
+WS_DIR="$TMP/ws" run_case "" "$TMP/keystores" b
+[ "$RC" -eq 0 ] || fail "b(workspace の鍵): exit 0 のはずが $RC: $ERR"
+[ -f "$TMP/ws/sros2-keystore/key.pem" ] || fail "b: workspace の鍵のコピーが消えた"
+WS_DIR="$TMP/ws" run_case "" "$TMP/keystores" c
+[ "$RC" -eq 0 ] || fail "c(workspace の鍵): exit 0 のはずが $RC: $ERR"
+[ ! -e "$TMP/ws/sros2-keystore" ] || fail "c: workspace の鍵のコピーが残っている"
+grep -q "削除" <<<"$ERR" || fail "c: 削除したことが stderr に出ない: $ERR"
 
 echo "OK: up-env guard script tests passed"

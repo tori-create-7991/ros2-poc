@@ -194,6 +194,11 @@ for c in $CONTAINERS; do
   echo "export $var=$(enclave_of "$c")" >> "$KS_OUT/env.sh"
 done
 
+# 環境 c を作るときは、環境 b が ./workspace に置いた鍵のコピーを消す（c では全コンテナから読めてしまうため）
+if [ "$ENV_NAME" = "c" ] && [ -n "$WORKSPACE_DIR" ]; then
+  rm -rf "$WORKSPACE_DIR/sros2-keystore"
+fi
+
 # 環境 B の残りの不備
 if [ "$ENV_NAME" = "b" ]; then
   # B-AU-02: ros2lab-b の enclave 名を 1 文字間違え（shared → shred）、Permissive のままセキュリティなしに

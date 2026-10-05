@@ -74,6 +74,14 @@ if [ -n "$(docker ps --filter 'name=^ros2arm$' --filter 'status=running' -q)" ];
   echo "警告: ros2arm が起動中。ros2arm は SROS2 化していない（環境 A のまま）ため、ros2lab とは通信できない。" >&2
 fi
 
+# 環境 b の不備（B-AU-07）として ./workspace に置いた鍵のコピーは、環境 c では全コンテナから読めてしまい
+# 「鍵は自分の enclave だけ」を壊すため、c に切り替えるときに削除する（このリポジトリが生成したものだけ）。
+WS_DIR="${SROS2_WORKSPACE_DIR:-workspace}"
+if [ "$ENV_NAME" = "c" ] && [ -d "$WS_DIR/sros2-keystore" ]; then
+  echo "環境 b の不備として $WS_DIR に置いた鍵のコピー（sros2-keystore）を削除する。" >&2
+  rm -rf "$WS_DIR/sros2-keystore"
+fi
+
 # gen-keystore.sh が書く、コンテナごとの enclave 名の対応（SROS2_ENCLAVE_*）を読む
 if [ -f "$KS_ROOT/$ENV_NAME/env.sh" ]; then
   # shellcheck source=/dev/null
