@@ -92,8 +92,9 @@ TS="$(date +%Y%m%d-%H%M%S)"
 # ホスト側の出力先は ros2arm の /workspace のマウント元（up-arm.sh を実行した checkout の ./workspace）。
 # このスクリプトのある checkout とは限らない（git worktree など）。テストでは RUN_SCENARIO_WORKSPACE で差し替える
 WORKSPACE_HOST="${RUN_SCENARIO_WORKSPACE:-$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' ros2arm 2>/dev/null || true)}"
-[ -n "$WORKSPACE_HOST" ] && [ -d "$WORKSPACE_HOST" ] \
-  || fail_env "ros2arm の /workspace のマウント元が分からない（${WORKSPACE_HOST:-空}）。'bash scripts/up-arm.sh' で作り直す"
+if [ -z "$WORKSPACE_HOST" ] || [ ! -d "$WORKSPACE_HOST" ]; then
+  fail_env "ros2arm の /workspace のマウント元が分からない（${WORKSPACE_HOST:-空}）。'bash scripts/up-arm.sh' で作り直す"
+fi
 RUN_HOST="$WORKSPACE_HOST/runs/$TS"
 RUN="/workspace/runs/$TS"
 # 記録プロセス（observer・カメラ用 ffmpeg・デスクトップ録画）。[s] などは pkill / pgrep 自身を呼ぶ
@@ -137,8 +138,9 @@ stop_recorders() {
   echo "記録を止めている（最大 2 分ほどかかる）"
   local sig
   for sig in INT TERM KILL; do
-    arm "pkill -$sig -f '$([ "$sig" = INT ] && echo "$RECORDERS_INT" || echo "$RECORDERS")'" \
-      < /dev/null > /dev/null 2>&1 || true
+    local pattern="$RECORDERS"
+    if [ "$sig" = INT ]; then pattern="$RECORDERS_INT"; fi
+    arm "pkill -$sig -f '$pattern'" < /dev/null > /dev/null 2>&1 || true
     for _ in $(seq 1 "$([ "$sig" = INT ] && echo 90 || echo 10)"); do
       if ! arm "pgrep -f '$RECORDERS'" > /dev/null 2>&1 < /dev/null; then
         STOPPED=1
