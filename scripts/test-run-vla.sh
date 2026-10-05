@@ -369,6 +369,10 @@ for env in b c; do
   STUB_SRV_ENV="$env" STUB_ARM_ENV="$env" run_case "$ALL" "${RC_ARGS[@]}"
   [ "$RC" = 0 ] || fail "環境 $env の --record: $RC $ERR"
   if ! { called "scenario_observer --out" && called "scenario_cli judge"; }; then fail "環境 $env の --record: 記録・判定が動いていない: $LOG"; fi
+  # ROS CLI の購読が許可されない環境なので、トピックの確認（ros2 topic echo）はしない
+  if called "ros2 topic echo"; then fail "環境 $env の --record: ros2 topic echo を呼んだ: $LOG"; fi
 done
+run_case "$ALL" "${RC_ARGS[@]}"
+called "ros2 topic echo" || fail "環境 a の --record は、シミュのトピックを確認するはず: $LOG"
 
 echo "test-run-vla: OK"

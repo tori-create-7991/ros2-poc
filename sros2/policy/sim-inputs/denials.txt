@@ -4,3 +4,6 @@
 request:/controller_manager/list_controllers
 request:/controller_manager/load_controller
 subscribe:/sim_camera/realsense_d435/raw/image
+# --record（scenario_observer が ros2arm 内で購読する。コミット済みの稼働中グラフには載らず、静的に足した。実コンテナの拒否ログでの確認は未実施）
+subscribe:/camera/color/image_raw
+subscribe:/camera/color/camera_info

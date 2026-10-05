@@ -103,6 +103,8 @@
             <topic>trajectory_execution_event</topic>
           </topics>
           <topics subscribe="ALLOW">
+            <topic>/camera/color/camera_info</topic>
+            <topic>/camera/color/image_raw</topic>
             <topic>/clock</topic>
             <topic>/crane_x7_arm_controller/follow_joint_trajectory/_action/feedback</topic>
             <topic>/crane_x7_arm_controller/follow_joint_trajectory/_action/status</topic>
@@ -440,6 +442,7 @@
             <topic>rosout</topic>
           </topics>
           <topics subscribe="ALLOW">
+            <topic>/camera/color/camera_info</topic>
             <topic>/camera/color/image_raw</topic>
             <topic>/crane_x7_gripper_controller/gripper_cmd/_action/feedback</topic>
             <topic>/crane_x7_gripper_controller/gripper_cmd/_action/status</topic>

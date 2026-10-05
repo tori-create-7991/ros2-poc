@@ -140,8 +140,14 @@ if [ "$RECORD" = 1 ]; then
   rec_check_leftovers
   rec_make_run_dir
   echo "出力先: $RUN_HOST"
-  if ! sim_ready; then
-    rec_wait_sim "$TIMEOUT" "カメラ付きのシミュ（arm_with_camera.launch.py）が動いているか確認する（'bash scripts/run-scenario.sh --start-sim' でも起動できる。docs/sim-scenario-recording.md）。"
+  if [ "$arm_env" = a ]; then
+    if ! sim_ready; then
+      rec_wait_sim "$TIMEOUT" "カメラ付きのシミュ（arm_with_camera.launch.py）が動いているか確認する（'bash scripts/run-scenario.sh --start-sim' でも起動できる。docs/sim-scenario-recording.md）。"
+    fi
+  else
+    # SROS2（環境 b / c）の ros2arm では ROS CLI（ros2 topic echo）の購読が許可されていないので、トピックの確認は省く。
+    # 代わりに記録の立ち上がり（カメラのフレームが 4 枚記録されるか）で確かめる
+    echo "SROS2 環境 $arm_env: ROS CLI で購読できないので、シミュのトピックの確認は記録の立ち上がりで代える"
   fi
 fi
 
