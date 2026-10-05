@@ -35,9 +35,15 @@ class StepRunner:
         self.open_when_high = open_when_high
         self.clock = clock
         self._last_gripper = None     # 最後に送ることに成功した 'open' / 'close'
+        # 直近の run() の記録（記録・判定用。vla_action.DETAIL_KEYS のキー。取れたものだけ入る）
+        self.last_detail = {}
 
     def run(self, action):
-        """1 ステップ実行して (status, reason) を返す。status は vla_action.STATUSES のどれか。"""
+        """1 ステップ実行して (status, reason) を返す。status は vla_action.STATUSES のどれか。
+
+        実行の記録（目標関節・送信時刻・手先の前／指令／静止後の位置と誤差）は self.last_detail に残す。
+        """
+        self.last_detail = detail = {}
         notes = []
         delta, clamped = A.clamp_delta(action.delta)
         if clamped:
@@ -45,6 +51,7 @@ class StepRunner:
         pose = self.io.current_pose()
         if pose is None:
             return 'rejected', '現在の手先姿勢（TF）が取れない'
+        detail['ee_before'] = [float(v) for v in pose[0]]
         joints = self.io.current_joints()
         if joints is None or any(j not in joints for j in S.ARM_JOINTS):
             return 'rejected', '/joint_states が取れない'
@@ -52,6 +59,8 @@ class StepRunner:
         pos, ws_clamped = A.clamp_to_workspace(pos)
         if ws_clamped:
             notes.append('作業空間にクランプ')
+        detail['ee_cmd'] = [float(v) for v in pos]
+        detail['clamped'] = bool(clamped or ws_clamped)
         q = self.io.solve_ik(pos, quat, joints)
         if q is None:
             return 'ik_failed', 'IK の解がない'
@@ -63,14 +72,21 @@ class StepRunner:
             return 'rejected', f'関節の変化が大きすぎる（{jump:.2f} rad > {MAX_JOINT_STEP} rad。IK が別の解へ飛んだ可能性）'
         duration = max(MIN_DURATION, jump / MAX_JOINT_SPEED)
         t_sent = self.clock()
+        detail.update(target_joints=[float(v) for v in q], duration=float(duration), t_sent=float(t_sent))
         self.io.send_arm(q, duration)
         target = A.gripper_target(action.gripper, self.gripper_threshold, self.open_when_high)
+        detail['graph'] = target if target != self._last_gripper else None
         if target != self._last_gripper:
             if not self.io.send_gripper(A.gripper_angle(target)):
                 return 'rejected', 'gripper_cmd が失敗した（アームの指令は送信済み）'
             self._last_gripper = target
         if not self.io.wait_settled(q, duration, t_sent):
             return 'timeout', '目標に届いて静止するまでに時間切れ'
+        # 静止後の手先を TF で測り直し、指令した位置（IK に渡した位置）との距離を残す（動画の判定が使う）
+        after = self.io.current_pose()
+        if after is not None:
+            detail['ee_after'] = [float(v) for v in after[0]]
+            detail['ee_error'] = math.dist(detail['ee_after'], detail['ee_cmd'])
         return 'ok', '、'.join(notes)
 
 

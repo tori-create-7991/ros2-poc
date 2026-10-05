@@ -123,3 +123,37 @@ def test_reject_ack_for_answers_invalid_messages_that_have_a_seq():
     assert len(A.parse_ack(long)[2]) <= 200
     assert A.reject_ack_for('not json', ValueError('x')) is None      # seq が読めなければ返せない
     assert A.reject_ack_for('{"seq": true}', ValueError('x')) is None
+
+
+def test_ack_detail_roundtrip_and_old_parse_ack_still_works():
+    detail = {'target_joints': [0.1] * 7, 'duration': 1.5, 't_sent': 1.7e9, 'ee_before': [0.1, 0.0, 0.4],
+              'ee_cmd': [0.1, 0.0, 0.38], 'ee_after': [0.1, 0.0, 0.381], 'ee_error': 0.001, 'graph': None,
+              'clamped': False}
+    raw = A.format_ack(3, 'ok', '', detail)
+    assert len(raw) <= A.MAX_ACK_CHARS
+    assert A.parse_ack_full(raw) == (3, 'ok', '', detail)
+    assert A.parse_ack(raw) == (3, 'ok', '')
+    assert A.parse_ack_full(A.format_ack(3, 'ok'))[3] is None
+    assert A.parse_ack_full(A.format_ack(3, 'ik_failed', 'x', {'ee_before': [0, 0, 0]}))[3] == {'ee_before': [0.0] * 3}
+
+
+@pytest.mark.parametrize('detail', [
+    {'target_joints': [0.0] * 6}, {'target_joints': [float('nan')] * 7}, {'ee_cmd': [0, 0]},
+    {'ee_error': -1.0}, {'ee_error': float('inf')}, {'graph': 'half'}, {'clamped': 1}, {'unknown': 1},
+    {'t_sent': True}, 'x', [1],
+])
+def test_bad_ack_detail_is_rejected(detail):
+    with pytest.raises(ValueError):
+        A.format_ack(1, 'ok', '', detail)
+    raw = json.dumps({'seq': 1, 'status': 'ok', 'reason': '', 'detail': detail})
+    with pytest.raises(ValueError):
+        A.parse_ack_full(raw)
+
+
+def test_ack_size_limit_is_larger_than_action_limit():
+    big = json.dumps({'seq': 1, 'status': 'ok', 'reason': 'x' * 2000})
+    assert len(big) > A.MAX_MESSAGE_CHARS and A.parse_ack(big)[0] == 1
+    with pytest.raises(ValueError):
+        A.parse_ack(json.dumps({'seq': 1, 'status': 'ok', 'reason': 'x' * A.MAX_ACK_CHARS}))
+    with pytest.raises(ValueError):
+        A.parse_action('x' * (A.MAX_MESSAGE_CHARS + 1))

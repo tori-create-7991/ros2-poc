@@ -7,7 +7,8 @@ DDS は無認証なので、`/vla/action` に届くメッセージは信頼せ�
 契約（標準型のみ。ros2server にカスタムメッセージは作れないので std_msgs/String に JSON を載せる）:
   /vla/action: {"seq": int>=0, "delta": [dx, dy, dz, droll, dpitch, dyaw], "gripper": 0..1}
                delta は base_link 基準、並進 [m]・回転 [rad]（ベース基準の増分）、gripper は 0（閉）〜1（開）
-  /vla/ack:    {"seq": int, "status": "ok|rejected|ik_failed|timeout", "reason": str}
+  /vla/ack:    {"seq": int, "status": "ok|rejected|ik_failed|timeout", "reason": str, "detail": {...}}
+               detail は任意（記録・判定用。キーは DETAIL_KEYS、値の検査は check_detail）
 """
 import json
 import math
@@ -19,6 +20,7 @@ ACTION_TOPIC = '/vla/action'
 ACK_TOPIC = '/vla/ack'
 
 MAX_MESSAGE_CHARS = 1024
+MAX_ACK_CHARS = 4096         # ack は detail（関節 7 個・位置 3 点など）を載せるので指令より大きい
 MAX_RAW_DELTA = 1e3          # これを超える値は異常入力として拒否（クランプ対象にしない）
 MAX_LINEAR = 0.03            # 1 ステップの並進の上限 [m]（ノルム）
 MAX_ANGULAR = 0.1            # 1 ステップの回転の上限 [rad]（ノルム）
@@ -26,6 +28,9 @@ MAX_ANGULAR = 0.1            # 1 ステップの回転の上限 [rad]（ノル�
 WORKSPACE = {'x': (-0.5, 0.5), 'y': (-0.5, 0.5), 'z': (0.05, 0.7)}
 GRIPPER_THRESHOLD = 0.5
 STATUSES = ('ok', 'rejected', 'ik_failed', 'timeout')
+# ack の detail（vla_step.StepRunner.last_detail）。どれも任意
+DETAIL_KEYS = ('target_joints', 'duration', 't_sent', 'ee_before', 'ee_cmd', 'ee_after', 'ee_error',
+               'graph', 'clamped')
 
 
 @dataclass(frozen=True)
@@ -102,15 +107,58 @@ def format_action(a):
     return json.dumps({'seq': a.seq, 'delta': list(a.delta), 'gripper': a.gripper})
 
 
-def format_ack(seq, status, reason=''):
+def _finite_list(v, n, where):
+    if not isinstance(v, (list, tuple)) or len(v) != n or not all(_is_number(x) for x in v):
+        raise ValueError(f'{where} は {n} 個の有限の数値のリスト')
+    return [float(x) for x in v]
+
+
+def check_detail(detail):
+    """ack の detail を検査して、検査済みの dict を返す。不正なら ValueError（未知のキーも不正）。"""
+    if not isinstance(detail, dict):
+        raise ValueError('detail はオブジェクト')
+    unknown = set(detail) - set(DETAIL_KEYS)
+    if unknown:
+        raise ValueError(f'detail の不明なキー {sorted(unknown)}')
+    out = {}
+    for k, v in detail.items():
+        if k == 'target_joints':
+            out[k] = _finite_list(v, len(S.ARM_JOINTS), k)
+        elif k in ('ee_before', 'ee_cmd'):
+            out[k] = _finite_list(v, 3, k)
+        elif k == 'ee_after':
+            out[k] = None if v is None else _finite_list(v, 3, k)
+        elif k in ('duration', 't_sent'):
+            if not _is_number(v):
+                raise ValueError(f'{k} は有限の数値')
+            out[k] = float(v)
+        elif k == 'ee_error':
+            if v is not None and (not _is_number(v) or v < 0):
+                raise ValueError('ee_error は 0 以上の有限の数値か null')
+            out[k] = None if v is None else float(v)
+        elif k == 'graph':
+            if v not in ('open', 'close', None):
+                raise ValueError(f'graph は open / close / null（{v!r}）')
+            out[k] = v
+        else:   # clamped
+            if not isinstance(v, bool):
+                raise ValueError('clamped は真偽値')
+            out[k] = v
+    return out
+
+
+def format_ack(seq, status, reason='', detail=None):
     if status not in STATUSES:
         raise ValueError(f'status が不正: {status!r}')
-    return json.dumps({'seq': seq, 'status': status, 'reason': reason}, ensure_ascii=False)
+    d = {'seq': seq, 'status': status, 'reason': reason}
+    if detail is not None:
+        d['detail'] = check_detail(detail)
+    return json.dumps(d, ensure_ascii=False)
 
 
-def parse_ack(raw):
-    """/vla/ack の JSON を (seq, status, reason) にする。不正なら ValueError。"""
-    if not isinstance(raw, str) or len(raw) > MAX_MESSAGE_CHARS:
+def parse_ack_full(raw):
+    """/vla/ack の JSON を (seq, status, reason, detail | None) にする。不正なら ValueError。"""
+    if not isinstance(raw, str) or len(raw) > MAX_ACK_CHARS:
         raise ValueError('ack が大きすぎる')
     try:
         d = json.loads(raw)
@@ -119,7 +167,13 @@ def parse_ack(raw):
     seq, status, reason = (d.get('seq'), d.get('status'), d.get('reason')) if isinstance(d, dict) else (None,) * 3
     if isinstance(seq, bool) or not isinstance(seq, int) or status not in STATUSES or not isinstance(reason, str):
         raise ValueError(f'ack の形が不正: {raw[:80]!r}')
-    return seq, status, reason
+    detail = check_detail(d['detail']) if d.get('detail') is not None else None
+    return seq, status, reason, detail
+
+
+def parse_ack(raw):
+    """/vla/ack の JSON を (seq, status, reason) にする。不正なら ValueError。detail は parse_ack_full。"""
+    return parse_ack_full(raw)[:3]
 
 
 def _scale_to(values, limit):

@@ -75,3 +75,27 @@ def test_ack_with_other_seq_is_ignored_by_waiter_contract():
 def test_rejects_bad_steps(steps):
     with pytest.raises(ValueError):
         L.run_loop(steps, lambda: 'img', lambda i: VEC, lambda a: None, lambda s: None, lambda m: None)
+
+
+def test_on_step_gets_one_record_per_acked_step():
+    infos = []
+    code, _results, _pub, _ = _loop(
+        3, ack=lambda seq: (seq, 'ok', '', {'ee_error': 0.001}), on_step=infos.append, clock=lambda: 42.0)
+    assert code == L.EXIT_OK and [i['index'] for i in infos] == [0, 1, 2]
+    i = infos[1]
+    assert i['vector'] == VEC and i['status'] == 'ok' and i['detail'] == {'ee_error': 0.001}
+    assert i['t_start'] == 42.0 and isinstance(i['action'], A.Action) and i['seq'] == i['action'].seq
+
+
+def test_on_step_is_called_for_the_failed_step_and_detail_defaults_to_none():
+    infos = []
+    code, *_ = _loop(5, ack=lambda seq: (seq, 'ik_failed', 'x') if seq == 2 else (seq, 'ok', ''),
+                     on_step=infos.append)
+    assert code == L.EXIT_STEP_FAILED
+    assert [i['status'] for i in infos] == ['ok', 'ik_failed'] and infos[1]['detail'] is None
+
+
+def test_on_step_is_not_called_when_the_environment_fails():
+    infos = []
+    code, *_ = _loop(2, image=lambda: None, on_step=infos.append)
+    assert code == L.EXIT_ENV and infos == []

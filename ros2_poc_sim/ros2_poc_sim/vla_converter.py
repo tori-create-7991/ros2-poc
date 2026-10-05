@@ -198,8 +198,13 @@ class VlaConverter(Node):
                                  callback_group=ReentrantCallbackGroup())
         self.get_logger().info(f'{A.ACTION_TOPIC} を待つ（IK グループ {p("ik_group").value}）')
 
-    def _ack(self, seq, status, reason=''):
-        self.ack_pub.publish(String(data=A.format_ack(seq, status, reason)))
+    def _ack(self, seq, status, reason='', detail=None):
+        try:
+            data = A.format_ack(seq, status, reason, detail)
+        except ValueError as e:    # detail が不正でも ack は返す（待たせ続けない）
+            self.get_logger().warning(f'ack の detail を捨てた: {e}')
+            data = A.format_ack(seq, status, reason)
+        self.ack_pub.publish(String(data=data))
         self.get_logger().info(f'ack seq={seq} {status} {reason}')
 
     def _on_action(self, msg):
@@ -217,14 +222,16 @@ class VlaConverter(Node):
         threading.Thread(target=self._run, args=(action,), daemon=True).start()
 
     def _run(self, action):
+        detail = None
         try:
             status, reason = self.runner.run(action)
+            detail = dict(self.runner.last_detail) or None   # 次のステップが始まる前に控える
         except Exception as e:    # ノードは落とさない。ack で知らせる
             self.get_logger().error(f'ステップの実行で例外: {e!r}')
             status, reason = 'rejected', f'内部エラー: {type(e).__name__}'
         finally:
             self._busy.release()
-        self._ack(action.seq, status, reason)
+        self._ack(action.seq, status, reason, detail)
 
 
 def main(args=None):

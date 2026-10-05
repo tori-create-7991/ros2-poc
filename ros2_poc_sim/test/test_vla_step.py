@@ -194,3 +194,55 @@ def test_wait_settled_is_false_when_a_joint_is_missing_from_the_record():
     clock = {'now': 100.0}
     assert not T.wait_settled(lambda: partial, [0.1] * 7, 1.0, 100.0, now=lambda: clock['now'],
                               sleep=lambda dt: clock.__setitem__('now', clock['now'] + dt))
+
+
+class MovingIO(FakeIO):
+    """send_arm の後は、手先が指令位置（IK に渡した位置）に offset だけずれて着く。"""
+
+    def __init__(self, offset=(0.0, 0.0, 0.0)):
+        super().__init__()
+        self.offset = offset
+        self.cmd = None
+
+    def solve_ik(self, pos, quat, seed):
+        self.cmd = pos
+        return super().solve_ik(pos, quat, seed)
+
+    def wait_settled(self, expected, duration, t_sent):
+        self.pose = (tuple(c + o for c, o in zip(self.cmd, self.offset)), ID_QUAT)
+        return super().wait_settled(expected, duration, t_sent)
+
+
+def test_last_detail_records_targets_times_and_end_effector_error():
+    io = MovingIO(offset=(0.0, 0.003, 0.004))
+    io.ik = [0.0, 0.1, 0.0, -1.0, 0.0, -0.5, 0.0]
+    runner, (status, _) = _run(io, delta=(0.0, 0.0, -0.02, 0, 0, 0), gripper=0.0)
+    d = runner.last_detail
+    assert status == 'ok'
+    assert d['ee_before'] == [0.1, 0.0, 0.4] and d['ee_cmd'] == pytest.approx([0.1, 0.0, 0.38])
+    assert d['ee_after'] == pytest.approx([0.1, 0.003, 0.384]) and d['ee_error'] == pytest.approx(0.005)
+    assert d['target_joints'] == io.ik and d['t_sent'] == 100.0 and d['duration'] >= T.MIN_DURATION
+    assert d['graph'] == 'close' and d['clamped'] is False
+    A.check_detail(d)       # ack に載せられる形
+    _run(io, runner=runner, gripper=0.0)
+    assert runner.last_detail['graph'] is None      # 同じ向きなら送らない
+
+
+def test_last_detail_is_partial_when_rejected_and_reset_each_run():
+    io = FakeIO()
+    runner, _ = _run(io)
+    assert 'ee_error' in runner.last_detail
+    io.ik = None
+    _run(io, runner=runner)
+    d = runner.last_detail
+    assert set(d) == {'ee_before', 'ee_cmd', 'clamped'} and 'target_joints' not in d
+    io.pose = None
+    _run(io, runner=runner)
+    assert runner.last_detail == {}
+
+
+def test_timeout_has_no_end_effector_error_and_clamp_is_flagged():
+    io = MovingIO()
+    io.settled = False
+    runner, (status, _) = _run(io, delta=(3.0, 0, 0, 0, 0, 0))
+    assert status == 'timeout' and 'ee_error' not in runner.last_detail and runner.last_detail['clamped'] is True
