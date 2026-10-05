@@ -11,6 +11,7 @@ trap 'rm -rf "$TMP"' EXIT
 #   docker exec ...              STUB_EXEC_FAIL（正規表現）に一致すれば STUB_EXEC_RC（既定 2）で失敗。
 #                                pgrep は既定で「プロセス無し」。STUB_LEFTOVER=1 なら起動前から有り、
 #                                STUB_STUCK=1 なら記録の起動後ずっと有り（止まらない）
+#   docker inspect（ros2poc.env）  STUB_LAB_ENV を返す（未設定なら a、空文字なら空 = ラベル導入前）
 #   /workspace/runs/<ts>         $STUB_WS/runs/<ts> に対応させ、記録・判定の成果物を置く
 cat > "$TMP/docker" <<'STUB'
 #!/usr/bin/env bash
@@ -24,6 +25,10 @@ if [ "${1:-}" = "ps" ]; then
         done ;;
     esac
   done
+  exit 0
+fi
+if [ "${1:-}" = "inspect" ]; then
+  [[ "$*" == *ros2poc.env* ]] && echo "${STUB_LAB_ENV-a}"
   exit 0
 fi
 [ "${1:-}" = "exec" ] || exit 0
@@ -107,6 +112,23 @@ for missing in ros2arm ros2lab-a; do
   grep -q "$missing" <<<"$ERR" || fail "$missing: stderr にコンテナ名が無い: $ERR"
   grep -q "up-arm.sh" <<<"$ERR" || fail "$missing: up-arm.sh の案内が無い: $ERR"
   no_exec "$missing 未起動"
+done
+
+# ros2lab-a が SROS2 環境 b / c → ros2arm（環境 a）と通信できないので、up-env.sh a を案内して exit 2
+for env in b c; do
+  STUB_LAB_ENV="$env" run_case "$ALL"
+  [ "$RC" -eq 2 ] || fail "環境 $env は exit 2 のはずが $RC: $ERR"
+  grep -q "SROS2 環境 $env" <<<"$ERR" || fail "環境 $env: stderr に環境名が無い: $ERR"
+  grep -q "up-env.sh a" <<<"$ERR" || fail "環境 $env: up-env.sh a の案内が無い: $ERR"
+  grep -q "^inspect .*ros2poc.env.* ros2lab-a$" <<<"$LOG" || fail "環境 $env: ros2lab-a のラベルを見ていない: $LOG"
+  no_exec "環境 $env"
+done
+
+# 環境 a・ラベル無し（空 / <no value>）は従来どおり進む
+for env in a "" "<no value>"; do
+  STUB_LAB_ENV="$env" run_case "$ALL"
+  [ "$RC" -eq 0 ] || fail "環境 '$env' は従来どおり exit 0 のはずが $RC: $ERR"
+  sent || fail "環境 '$env' で指令が送られていない: $LOG"
 done
 
 # 録画・合成の前提（ffmpeg 等）が無い → 出力先も作らずに exit 2
