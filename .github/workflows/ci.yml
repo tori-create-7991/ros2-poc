@@ -32,7 +32,8 @@ jobs:
       - name: python syntax
         run: python3 -m py_compile scripts/sros2/lib/ledger.py scripts/sros2/lib/test_ledger.py sros2/tools/lab_pub.py sros2/tools/lab_sub.py
 
-  # ROS 非依存のシナリオ実行・VLA 連携まわりの単体テスト（test_scenario_cli の observer は rclpy が無いと skip される）
+  # ROS 非依存の単体テスト。rclpy が要るテストは skip され、skip されないものは deselect する
+  # （シナリオの E2E は重いので scenario-e2e.yml で手動実行）。test_vla_*.py もここで走る
   pytest:
     runs-on: ubuntu-latest
     steps:
@@ -44,10 +45,10 @@ jobs:
         run: pip install pytest numpy pyyaml
       - name: syntax check (ROS 依存の VLA ノードは rclpy が無い CI では import できないので構文だけ)
         run: python -m py_compile ros2_poc_sim/ros2_poc_sim/vla_node.py ros2_poc_sim/ros2_poc_sim/vla_converter.py
-      - name: pytest (scenario / motion judge / compose video / scenario cli / VLA)
+      - name: pytest (ros2_poc_sim, ROS 非依存)
         run: |
           cd ros2_poc_sim
-          python -m pytest -q test/test_scenario.py test/test_motion_judge.py test/test_compose_video.py test/test_scenario_cli.py test/test_vla_*.py
+          python -m pytest -q test --deselect test/test_contract_check.py::test_main_returns_2_for_unreadable_contract
 
   dockerfile:
     runs-on: ubuntu-latest
