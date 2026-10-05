@@ -24,7 +24,10 @@ case "$ENV_NAME" in b | c) ;; *) echo "環境は b か c: $ENV_NAME" >&2; exit 2
 CA_DIR="$BASE/ca-private/$ENV_NAME"
 KS_DIR="$BASE/keystores/$ENV_NAME"
 ROGUE_DIR="$BASE/rogue/$ENV_NAME"
-[ -d "$CA_DIR" ] && [ -d "$KS_DIR" ] || { echo "環境 $ENV_NAME の keystore が無い。先に gen-keystore.sh $ENV_NAME を実行すること。" >&2; exit 1; }
+if [ ! -d "$CA_DIR" ] || [ ! -d "$KS_DIR" ]; then
+  echo "環境 $ENV_NAME の keystore が無い。先に gen-keystore.sh $ENV_NAME を実行すること。" >&2
+  exit 1
+fi
 
 # 雛形: コンテナ ros2lab-a の enclave（subject と permissions を合わせる）
 TMPL="$KS_DIR/containers/ros2lab-a"

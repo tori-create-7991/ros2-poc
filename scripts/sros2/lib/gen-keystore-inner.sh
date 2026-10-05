@@ -208,7 +208,8 @@ esac
 FIRST="$(echo "$CONTAINERS" | cut -d' ' -f1)"
 FIRST_E="$(enclave_of "$FIRST")"
 new_key revoked.key
-issue_cert revoked.key "$FIRST_E" revoked.pem -days "$([ "$ENV_NAME" = c ] && echo "$CERT_DAYS" || echo 3650)"
+if [ "$ENV_NAME" = "c" ]; then revoked_days="$CERT_DAYS"; else revoked_days=3650; fi
+issue_cert revoked.key "$FIRST_E" revoked.pem -days "$revoked_days"
 openssl ca -config openssl.cnf -revoke revoked.pem >/dev/null 2>&1
 make_rogue_dir "$WORK/rogue-revoked" "$FIRST_E" "ks/enclaves$FIRST_E" revoked.pem revoked.key ks/public/identity_ca.cert.pem
 

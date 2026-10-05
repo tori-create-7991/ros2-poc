@@ -13,7 +13,7 @@ usage() {
   exit 2
 }
 
-[ "$#" -ge 2 ] && [ "$#" -le 3 ] || usage
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then usage; fi
 case "$1" in b | c) ;; *) usage ;; esac
 case "$2" in valid | wrongca | selfsigned | expired | all) ;; *) usage ;; esac
 # 秒数は数字だけ（python のコード文字列へ展開されるため）
