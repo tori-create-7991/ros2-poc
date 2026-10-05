@@ -1,0 +1,16 @@
+# 書き方の例: 経由点（waypoints）とランダム姿勢（random）。--repeat N で全体を繰り返せる
+description: 経由点とランダム姿勢の例
+steps:
+  - name: home
+    positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    time_from_start: 3
+  - name: wave
+    waypoints:
+      - {positions: [0.6, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0], time_from_start: 2}
+      - {positions: [-0.6, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0], time_from_start: 4}
+      - {positions: [0.0, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0], time_from_start: 6}
+  - name: random_pose
+    random: {n: 3, seed: 1, time_from_start: 3}
+  - name: home_again
+    positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    time_from_start: 3

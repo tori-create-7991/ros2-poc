@@ -1,0 +1,16 @@
+# 既定シナリオ: home → 姿勢 A（README の例と同じ）→ グリッパ閉 → 開 → home
+description: 基本動作の確認
+steps:
+  - name: home
+    positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    time_from_start: 3
+  - name: pose_a
+    positions: [0.5, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0]
+    time_from_start: 3
+  - name: grip_close
+    gripper: close
+  - name: grip_open
+    gripper: open
+  - name: home_again
+    positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    time_from_start: 3
