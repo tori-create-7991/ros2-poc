@@ -148,3 +148,12 @@ def test_post_act_caps_response_size(server):
     srv.RequestHandlerClass.reply = (200, b' ' * (V.MAX_RESPONSE_BYTES + 10))
     with pytest.raises(V.VlaError, match='大きすぎ'):
         V.post_act(url, V.build_payload(np.zeros((256, 256, 3), np.uint8), 'go'), timeout=5)
+
+
+def test_validate_request_checks_arguments_without_an_image():
+    V.validate_request('move up', 'bridge_orig')
+    V.validate_request('move up')
+    with pytest.raises(ValueError):
+        V.validate_request('')
+    with pytest.raises(ValueError):
+        V.validate_request('go', '../x')

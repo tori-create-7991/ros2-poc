@@ -67,17 +67,22 @@ def resize_nearest(img, size=IMAGE_SIZE):
     return np.ascontiguousarray(img[rows][:, cols])
 
 
-def build_payload(image, instruction, unnorm_key=None):
-    """POST /act の JSON 本体を作る。image は (256, 256, 3) の uint8。"""
+def validate_request(instruction, unnorm_key=None):
+    """instruction と unnorm_key を検査する（画像なしで引数だけ確かめたいとき用）。"""
     if (not isinstance(instruction, str) or not instruction.strip()
             or len(instruction) > MAX_INSTRUCTION_CHARS or any(ord(c) < 32 for c in instruction)):
         raise ValueError('instruction は 1〜500 文字の 1 行の文字列')
+    if unnorm_key is not None and (not isinstance(unnorm_key, str) or not UNNORM_KEY_RE.match(unnorm_key)):
+        raise ValueError(f'unnorm_key は英数字と _ . - の 1〜100 文字（{unnorm_key!r}）')
+
+
+def build_payload(image, instruction, unnorm_key=None):
+    """POST /act の JSON 本体を作る。image は (256, 256, 3) の uint8。"""
+    validate_request(instruction, unnorm_key)
     if tuple(image.shape) != (IMAGE_SIZE, IMAGE_SIZE, 3):
         raise ValueError(f'image は {IMAGE_SIZE}x{IMAGE_SIZE}x3（{image.shape}）')
     payload = {'image': C.encode(image.tobytes(), '|u1', image.shape), 'instruction': instruction}
     if unnorm_key is not None:
-        if not isinstance(unnorm_key, str) or not UNNORM_KEY_RE.match(unnorm_key):
-            raise ValueError(f'unnorm_key は英数字と _ . - の 1〜100 文字（{unnorm_key!r}）')
         payload['unnorm_key'] = unnorm_key
     return payload
 
