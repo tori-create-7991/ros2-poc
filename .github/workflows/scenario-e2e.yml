@@ -4,8 +4,6 @@ name: scenario-e2e
 # GPU・実機は不要。公式 Gazebo + MoveIt + 仮想カメラを ros2arm で動かし、
 # scripts/run-scenario.sh のシナリオ（default / fail_demo / examples）を判定付きで実行する。
 on:
-  pull_request:  # TEMP: 初回検証用。検証後に外す
-    paths: ['.github/workflows/scenario-e2e.yml', 'scripts/ci-scenario-e2e.sh']
   workflow_dispatch:
     inputs:
       scenarios:
