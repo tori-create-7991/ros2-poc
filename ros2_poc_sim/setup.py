@@ -15,6 +15,7 @@ setup(
         (os.path.join('share', package_name, 'config', 'profiles'), glob.glob('config/profiles/*.yaml')),
         (os.path.join('share', package_name, 'config', 'placements'), glob.glob('config/placements/*.yaml')),
         (os.path.join('share', package_name, 'config', 'contracts'), glob.glob('config/contracts/*.yaml')),
+        (os.path.join('share', package_name, 'config', 'scenarios'), glob.glob('config/scenarios/*.yaml')),
         (os.path.join('share', package_name, 'launch'), glob.glob('launch/*.py')),
         (os.path.join('share', package_name, 'scripts'), glob.glob('scripts/*')),
     ],
@@ -28,6 +29,8 @@ setup(
         'console_scripts': [
             'camera_adapter = ros2_poc_sim.camera_adapter:main',
             'gz_setup = ros2_poc_sim.gz_setup:main',
+            'scenario_observer = ros2_poc_sim.scenario_observer:main',
+            'scenario_cli = ros2_poc_sim.scenario_cli:main',
         ],
     },
 )
