@@ -75,6 +75,11 @@ SROS2_ALLOW_TEST_HOOKS=1 SROS2_TEST_FAIL_SWAP=rogue SROS2_TEST_FAIL_ROLLBACK=ks 
 [ "$(val "$FINAL_CA")" = old ] || fail "復元失敗: ca が戻っていない（残りを試していない）"
 [ "$(val "$OLD/ks")" = old ] || fail "復元失敗: 戻せなかった旧 ks が OLD に無い"
 grep -q "$OLD/ks" "$TMP/err" || fail "復元失敗: 旧データの場所が表示されない: $(cat "$TMP/err")"
+# Docker 経由（コンテナ内のパスが BASE）でも、メッセージにはホスト側のパスを出す
+setup existing
+SROS2_DISPLAY_BASE="/host/sros2" SROS2_ALLOW_TEST_HOOKS=1 SROS2_TEST_FAIL_SWAP=rogue SROS2_TEST_FAIL_ROLLBACK=ks quiet swap_all || true
+grep -q "/host/sros2/.old-t/ks" "$TMP/err" || fail "ホスト側のパスが表示されない: $(cat "$TMP/err")"
+if grep -q "$BASE" "$TMP/err"; then fail "コンテナ内のパスが表示されている: $(cat "$TMP/err")"; fi
 
 # 7) 入れ替えの最中に中断された（trap から cleanup_swap が呼ばれる）ら、元に戻す
 setup existing
@@ -104,5 +109,32 @@ old_is_clear "$OLD" && fail "OLD があるのに clear と判定した"
 [ "$(val "$OLD/ks")" = keep ] || fail "判定が OLD を変えた"
 rm -rf "$OLD"
 old_is_clear "$OLD" || fail "OLD が無いのに clear でないと判定した"
+
+# 10) 入れ替えが確定したあと、旧の削除中に中断されても、成功済みの入れ替えを巻き戻さない
+setup existing
+# shellcheck disable=SC2329  # swap_all の中から呼ばれる（シェル関数が組み込みコマンドを上書きする）
+rm() {   # OLD の削除の直前に中断された状態を作る（trap から cleanup_swap が呼ばれる）
+  if [ "${1:-}" = "-rf" ] && [ "${2:-}" = "$OLD" ]; then cleanup_swap 2>/dev/null; fi
+  command rm "$@"
+}
+quiet swap_all || fail "確定後の中断: 成功するはずが失敗"
+unset -f rm
+for d in "$FINAL_KS" "$FINAL_CA" "$FINAL_ROGUE"; do [ "$(val "$d")" = new ] || fail "確定後の中断: $d が巻き戻された（$(val "$d")）"; done
+
+# 11) 記録だけあって退避できていない名前（mv の直前・直後の中断）は、復元で飛ばす。戻し先に入れ子で移さない
+setup existing
+mkdir -p "$OLD"
+MOVED=" ks"       # 記録はあるが OLD/ks は無い（退避前に中断された）
+DONE=""
+quiet rollback || fail "未退避の記録: 復元が失敗した"
+[ "$(val "$FINAL_KS")" = old ] || fail "未退避の記録: 元の ks が変わった"
+[ ! -e "$FINAL_KS/ks" ] || fail "未退避の記録: 入れ子ができた"
+# 戻し先が残っているのに OLD に旧がある（新が入ったまま中断された）なら、入れ子にせず失敗として OLD を残す
+setup existing
+mkdir -p "$OLD/ks"; echo older > "$OLD/ks/v"
+MOVED=" ks"; DONE=""
+quiet rollback && fail "戻し先が残っている: 失敗のはずが成功"
+[ ! -e "$FINAL_KS/ks" ] || fail "戻し先が残っている: 入れ子で移した"
+[ "$(val "$OLD/ks")" = older ] || fail "戻し先が残っている: OLD の旧データが消えた"
 
 echo "OK: swap tests passed"

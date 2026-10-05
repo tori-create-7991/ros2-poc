@@ -15,6 +15,13 @@ new_of() { case "$1" in ks) echo "$KS_OUT" ;; ca) echo "$CA_OUT" ;; rogue) echo 
 
 test_hook() { [ "${SROS2_ALLOW_TEST_HOOKS:-}" = "1" ] && [ "${!1:-}" = "$2" ]; }
 
+# メッセージに出すパス。Docker 経由ではコンテナ内のパス（/w/...）になるので、ホスト側のパス
+# （SROS2_DISPLAY_BASE。gen-keystore.sh が渡す）に読み替える。 shown <パス>
+shown() {
+  local p="$1" base="${BASE:-}" disp="${SROS2_DISPLAY_BASE:-${BASE:-}}"
+  if [ -n "$base" ] && [ "${p#"$base"}" != "$p" ]; then printf '%s' "$disp${p#"$base"}"; else printf '%s' "$p"; fi
+}
+
 MOVED=""        # 旧を OLD へ退避した名前
 DONE=""         # 新しいものを入れた名前
 SWAPPING=0      # 入れ替えの最中（このときに中断されたら trap から rollback する）
@@ -32,22 +39,29 @@ swap_one() {
   n="$(new_of "$name")"
   mkdir -p "$(dirname "$f")" || return 1
   if [ -e "$f" ]; then
-    mv "$f" "$OLD/$name" || return 1
+    # 記録を先にする（mv の直後に中断されても、rollback が退避した旧を見つけられるように。
+    # 実際に退避できていない名前は、rollback が OLD に無いことを見て飛ばす）
     MOVED="$MOVED $name"
+    mv "$f" "$OLD/$name" || return 1
   fi
-  mv "$n" "$f" || return 1
   DONE="$DONE $name"
+  mv "$n" "$f" || return 1
 }
 
 # 復元。ベストエフォート: 1 つ失敗しても残りを試し、失敗した名前と旧データの場所を表示する。全部できたら 0
 rollback() {
-  local name failed=0
+  local name f failed=0
   for name in $DONE; do
-    rm -rf "$(final_of "$name")" || { echo "復元に失敗: 新しい $(final_of "$name") を消せない" >&2; failed=1; }
+    f="$(final_of "$name")"
+    rm -rf "$f" || { echo "復元に失敗: 新しい $(shown "$f") を消せない" >&2; failed=1; }
   done
   for name in $MOVED; do
-    if test_hook SROS2_TEST_FAIL_ROLLBACK "$name" || ! mv "$OLD/$name" "$(final_of "$name")"; then
-      echo "復元に失敗: 旧データは $OLD/$name にある（$(final_of "$name") へ手で戻すか、再生成する）" >&2
+    f="$(final_of "$name")"
+    # 退避できていない（OLD に無い）名前は、戻すものが無いので飛ばす
+    [ -e "$OLD/$name" ] || continue
+    # 戻し先が残っていると、mv は中へ入れ子で移してしまう。残っていたら戻さずに失敗として残す
+    if test_hook SROS2_TEST_FAIL_ROLLBACK "$name" || [ -e "$f" ] || ! mv "$OLD/$name" "$f"; then
+      echo "復元に失敗: 旧データは $(shown "$OLD/$name") にある（$(shown "$f") へ手で戻すか、再生成する）" >&2
       failed=1
     fi
   done
@@ -66,9 +80,12 @@ swap_all() {
     SWAPPING=0
     return 1
   fi
-  # 旧は不要。消せなくても入れ替えは済んでいる（OLD が残ると、次の生成が旧データを消さずに中止する）
-  rm -rf "$OLD" || echo "警告: $OLD を削除できなかった。手で削除すること。" >&2
+  # 入れ替えはここで確定した。以降に中断されても巻き戻さない（成功済みの入れ替えを壊さない）
   SWAPPING=0
+  MOVED=""
+  DONE=""
+  # 旧は不要。消せなくても入れ替えは済んでいる（OLD が残ると、次の生成が旧データを消さずに中止する）
+  rm -rf "$OLD" || echo "警告: $(shown "$OLD") を削除できなかった。手で削除すること。" >&2
 }
 
 # 終了時の後始末（trap から呼ぶ）。入れ替えの最中に中断されたら、先に元に戻す

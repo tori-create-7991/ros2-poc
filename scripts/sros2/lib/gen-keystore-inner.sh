@@ -54,7 +54,7 @@ if [ -n "$WORKSPACE_DIR" ]; then
 fi
 
 if ! acquire_lock "$LOCK"; then
-  echo "別の生成が実行中（$LOCK がある）。別の生成が動いていないことを確認して、$LOCK を削除してから再実行すること。" >&2
+  echo "別の生成が実行中（$(shown "$LOCK") がある）。別の生成が動いていないことを確認して、$(shown "$LOCK") を削除してから再実行すること。" >&2
   exit 1
 fi
 # ロックを取ったあとの終了では、必ず後始末する（入れ替えの最中の中断は元に戻す）。INT / TERM / HUP も EXIT を通す
@@ -69,7 +69,7 @@ WORK="$(mktemp -d)"
 # 前回の入れ替えが途中で失敗していると（SIGKILL など）、旧データが OLD に残っている。黙って消さずに中止する。
 # keystore は再生成できるので、旧い鍵を保つ必要がなければ OLD を削除して再実行すればよい
 if ! old_is_clear "$OLD"; then
-  echo "$OLD がある。前回の入れ替えが途中で終わっている。keystore は再生成できるので、$OLD を削除して再実行すること（旧い鍵を保ちたいときは、中身を手で確認する）。" >&2
+  echo "$(shown "$OLD") がある。前回の入れ替えが途中で終わっている。keystore は再生成できるので、$(shown "$OLD") を削除して再実行すること（旧い鍵を保ちたいときは、中身を手で確認する）。" >&2
   exit 1
 fi
 cd "$WORK"
