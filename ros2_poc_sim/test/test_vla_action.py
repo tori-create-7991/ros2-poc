@@ -114,3 +114,12 @@ def test_gripper_target_and_angle():
 ])
 def test_peek_seq_reads_seq_even_when_the_message_is_invalid(raw, expected):
     assert A.peek_seq(raw) == expected
+
+
+def test_reject_ack_for_answers_invalid_messages_that_have_a_seq():
+    ack = A.reject_ack_for('{"seq": 7, "delta": "bad"}', ValueError('delta が不正'))
+    assert A.parse_ack(ack) == (7, 'rejected', '不正な指令: delta が不正')
+    long = A.reject_ack_for('{"seq": 1}', ValueError('x' * 1000))
+    assert len(A.parse_ack(long)[2]) <= 200
+    assert A.reject_ack_for('not json', ValueError('x')) is None      # seq が読めなければ返せない
+    assert A.reject_ack_for('{"seq": true}', ValueError('x')) is None

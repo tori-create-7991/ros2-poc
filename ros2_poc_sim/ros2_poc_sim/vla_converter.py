@@ -207,9 +207,9 @@ class VlaConverter(Node):
             action = A.parse_action(msg.data)
         except ValueError as e:
             self.get_logger().warning(f'不正な {A.ACTION_TOPIC} を破棄: {e}')
-            seq = A.peek_seq(msg.data)
-            if seq is not None:    # 待たせ続けない（読めない場合は ack を返せない）
-                self._ack(seq, 'rejected', f'不正な指令: {e}'[:200])
+            ack = A.reject_ack_for(msg.data, e)    # 待たせ続けない（seq が読めない場合は ack を返せない）
+            if ack is not None:
+                self.ack_pub.publish(String(data=ack))
             return
         if not self._busy.acquire(blocking=False):
             self._ack(action.seq, 'rejected', 'busy（前のステップを処理中）')

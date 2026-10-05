@@ -120,22 +120,36 @@ def test_http_missing_or_bad_content_length(server):
     conn.close()
 
 
+def _imported_modules(path):
+    """ソースが import するものを 'ros2_poc_sim.<名前>' / '標準ライブラリのモジュール名' のリストで返す。"""
+    import ast
+    out = []
+    for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+        if isinstance(node, ast.Import):
+            out += [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == 'ros2_poc_sim':
+                out += [f'ros2_poc_sim.{a.name}' for a in node.names]   # from ros2_poc_sim import X は X まで見る
+            else:
+                out.append(node.module or '')
+    return out
+
+
 def test_stub_imports_only_the_standard_library_and_the_codec():
     """Dockerfile.vla-server は vla_codec.py と vla_stub_server.py しか入れない。増えたら起動時に初めて落ちるので、ここで止める。"""
-    import ast
     import sys
     from pathlib import Path
     pkg = Path(S.__file__).parent
-    for name in ('vla_stub_server.py', 'vla_codec.py'):
-        for node in ast.walk(ast.parse((pkg / name).read_text(encoding='utf-8'))):
-            mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
-                    else [node.module] if isinstance(node, ast.ImportFrom) else [])
-            for m in mods:
-                top = m.split('.')[0]
-                assert top in sys.stdlib_module_names or m == 'ros2_poc_sim' or m.startswith('ros2_poc_sim.vla_codec'), \
-                    f'{name} が標準ライブラリ以外を import している: {m}'
-                if m.startswith('ros2_poc_sim') and name == 'vla_codec.py':
-                    raise AssertionError('vla_codec.py は他の ros2_poc_sim のモジュールに依存しない')
+    for name, allowed_local in (('vla_stub_server.py', {'ros2_poc_sim.vla_codec'}), ('vla_codec.py', set())):
+        for m in _imported_modules(pkg / name):
+            ok = m in allowed_local or (not m.startswith('ros2_poc_sim') and m.split('.')[0] in sys.stdlib_module_names)
+            assert ok, f'{name} が許可されていないモジュールを import している: {m}'
+
+
+def test_import_guard_catches_a_forbidden_local_import(tmp_path):
+    bad = tmp_path / 'bad.py'
+    bad.write_text('import json\nfrom ros2_poc_sim import vla_converter\nimport numpy\n', encoding='utf-8')
+    assert _imported_modules(bad) == ['json', 'ros2_poc_sim.vla_converter', 'numpy']
 
 
 def test_client_and_stub_agree_on_the_contract(server):

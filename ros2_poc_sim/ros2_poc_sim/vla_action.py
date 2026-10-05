@@ -81,6 +81,14 @@ def peek_seq(raw):
     return seq if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 0 else None
 
 
+def reject_ack_for(raw, error):
+    """不正な /vla/action に返す rejected の ack（JSON 文字列）。seq が読めなければ None（返せない）。"""
+    seq = peek_seq(raw)
+    if seq is None:
+        return None
+    return format_ack(seq, 'rejected', f'不正な指令: {error}'[:200])
+
+
 def action_from_vector(seq, vec):
     """VLA が返す 7 次元（dx, dy, dz, droll, dpitch, dyaw, gripper）から Action を作る。"""
     if not isinstance(vec, (list, tuple)) or len(vec) != 7:

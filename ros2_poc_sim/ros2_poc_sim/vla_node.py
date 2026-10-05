@@ -56,8 +56,11 @@ class VlaNode(Node):
         except ValueError as e:
             self.get_logger().warning(f'画像を捨てた: {e}', throttle_duration_sec=10.0)
             return
+        small = V.resize_nearest(img)
         with self._cond:
-            self._image = V.resize_nearest(img)
+            if not self._want_image:    # デコード中に fresh_image が時間切れで戻っていたら捨てる
+                return
+            self._image = small
             self._want_image = False
             self._cond.notify_all()
 
