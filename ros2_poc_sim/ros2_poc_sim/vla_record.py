@@ -125,7 +125,8 @@ def _command_text(rec):
 
 
 def prepare(path):
-    """vla_steps.jsonl → {'steps': steps.json, 'events': events.jsonl の行, 'narration': narration.json}。"""
+    """vla_steps.jsonl → {'steps': steps.json, 'events': events.jsonl の行, 'narration': narration.json,
+    'sent': 指令を送ったステップの番号（rejected / ik_failed は送っていない）}。"""
     recs = read_records(path)
     steps, events, now = [], [], []
     for rec in recs:
@@ -148,4 +149,5 @@ def prepare(path):
                  'steps': [{'now': now[i], 'next': now[i + 1] if i + 1 < len(now) else N.END_TEXT,
                             'command': N.clean(_command_text(rec), N.MAX_COMMAND)}
                            for i, rec in enumerate(recs)]}
-    return {'steps': steps, 'events': events, 'narration': narration}
+    sent = [e['index'] for e in events if e['rc'] == 0]
+    return {'steps': steps, 'events': events, 'narration': narration, 'sent': sent}

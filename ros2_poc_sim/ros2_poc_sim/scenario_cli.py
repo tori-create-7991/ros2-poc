@@ -7,7 +7,8 @@
   scenario_cli wait <run_dir> <index> ステップ index の送信後、腕が止まって判定できる時刻まで待つ
   scenario_cli judge <run_dir>        記録を判定して result.json を書く（全 PASS で 0、FAIL で 1）
   scenario_cli vla-prepare <run_dir>  vla_steps.jsonl（run-vla.sh --record）から steps.json / events.jsonl /
-                                      narration.json を作る。以降は wait / judge / compose をそのまま使う
+                                      narration.json を作り、最後に指令を送ったステップの番号を出す。
+                                      以降は wait / judge / compose をそのまま使う
   scenario_cli compose <run_dir>      desktop.mp4 / camera.mp4 と判定から scenario.mp4 を作る
                                       （下帯の日本語は narration.json、無ければシナリオの description）
 終了コード: 0 / 1（FAIL あり）/ 2（環境・記録の問題）/ 64（シナリオ・引数の誤り）
@@ -209,7 +210,9 @@ def cmd_vla_prepare(a):
     with (d / 'events.jsonl').open('w', encoding='utf-8') as f:
         for e in prepared['events']:
             f.write(json.dumps(e) + '\n')
-    print(f"VLA ステップ {len(prepared['steps'])} 個（最後のインデックス {len(prepared['steps']) - 1}）")
+    print(f"VLA ステップ {len(prepared['steps'])} 個、うち指令を送ったのは {len(prepared['sent'])} 個", file=sys.stderr)
+    # 標準出力は「最後に指令を送ったステップの番号」だけ（run-vla.sh が scenario_cli wait に渡す。送ったステップが無ければ空）
+    print(prepared['sent'][-1] if prepared['sent'] else '')
     return 0
 
 

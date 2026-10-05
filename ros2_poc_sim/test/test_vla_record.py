@@ -54,7 +54,7 @@ def test_failed_steps_are_not_sent_and_timeout_is_judged(tmp_path):
         _rec(0, 'timeout', _detail(ee_after=None, ee_error=None)),
         _rec(1, 'ik_failed', {'ee_before': [0.1, 0, 0.4], 'ee_cmd': [0.1, 0, 0.3], 'clamped': True},
              reason='IK の解がない')]))
-    assert [e['rc'] for e in out['events']] == [0, 1]
+    assert [e['rc'] for e in out['events']] == [0, 1] and out['sent'] == [0]
     assert out['events'][1]['t_sent'] == out['events'][1]['t_start']       # 送っていないので開始時刻で埋める
     s1 = out['steps'][1]
     assert s1['points'][0]['positions'] == R.FALLBACK_JOINTS and s1['ee_error'] is None
@@ -125,7 +125,8 @@ def test_vla_prepare_then_judge_flags_end_effector_error(tmp_path, capsys):
     d = tmp_path
     _write(d, [_rec(0, detail=_detail(ee_error=0.02))])
     assert CLI.main(['vla-prepare', str(d)]) == 0
-    assert 'VLA ステップ 1 個' in capsys.readouterr().out
+    cap = capsys.readouterr()
+    assert cap.out == '0\n' and 'VLA ステップ 1 個、うち指令を送ったのは 1 個' in cap.err
     steps = json.loads((d / 'steps.json').read_text(encoding='utf-8'))
     assert steps[0]['ee_error'] == 0.02
     assert len(M.read_jsonl(d / 'events.jsonl')) == 1
@@ -135,3 +136,9 @@ def test_vla_prepare_then_judge_flags_end_effector_error(tmp_path, capsys):
 def test_vla_prepare_returns_2_without_records(tmp_path, capsys):
     assert CLI.main(['vla-prepare', str(tmp_path)]) == 2
     assert 'vla_steps.jsonl' in capsys.readouterr().err
+
+
+def test_vla_prepare_prints_nothing_when_no_step_was_sent(tmp_path, capsys):
+    _write(tmp_path, [_rec(0, 'ik_failed', {'ee_before': [0.1, 0, 0.4], 'ee_cmd': [0.1, 0, 0.3]})])
+    assert CLI.main(['vla-prepare', str(tmp_path)]) == 0
+    assert capsys.readouterr().out == '\n'
