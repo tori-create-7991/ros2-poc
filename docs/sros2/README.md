@@ -144,7 +144,9 @@ python3 -c "import sys; sys.path.insert(0, 'scripts/sros2/lib'); import sim_poli
 # 3. sim_policy.py の先頭に書いた 2 つのコマンドで enclave を作り直し、sros2/policy/lab-c.xml の該当部分を置き換える
 # 4. 反映: bash scripts/sros2/gen-keystore.sh c && bash scripts/up-env.sh c --arm --vla（反映後に拒否が 0 になるまで繰り返す）
 ```
-- `run-vla.sh --record` の記録（`ros2arm` 内の `scenario_observer`）が購読する `/camera/color/image_raw` と `/camera/color/camera_info` は、稼働中のグラフ（ros2arm は発行側）に購読として載らないので `denials.txt` に静的に足した（`ros2arm` / `ros2server` の enclave を再生成。`ros2server` はもともと画像を購読）。**実コンテナでの確認は未実施**。拒否が出たらこの手順で足す。
+- `run-vla.sh --record` の記録（`ros2arm` 内の `scenario_observer`）が購読する `/camera/color/image_raw` と `/camera/color/camera_info` は、稼働中のグラフ（ros2arm は発行側）に購読として載らないので `denials.txt` に足した。
+  実測（2026-10-05）で、`camera_adapter` が起動時に購読する `/sim_camera/realsense_d435/raw/camera_info` も足りないと分かり（拒否ログ `not found in allow rule`、`camera_adapter` が再起動を繰り返し、`/camera/color/*` が出なかった）、足して再生成した。
+  再生成後は環境 c で `run-vla.sh --record` が 2 ステップとも PASS し、拒否ログは 0 だった（ros2arm・ros2server）。
 - `ros2lab-a/b` の権限（トピック 6 件、ワイルドカードなし、default DENY）は変わらない。`verify-env.sh c` の C10 はこちらを見る。
 - 環境 c の `ros2arm` に ROS CLI（`ros2 topic hz` など）で入っても、CLI の購読は許可されていない（`ros2server` からは許可済みの範囲で使える）。
 - **鍵の読み取り**: `ros2arm` の VNC デスクトップ・noVNC の端末・Gazebo / MoveIt など全プロセスが同じ `ubuntu`（uid 1000）で動き、

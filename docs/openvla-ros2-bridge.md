@@ -99,8 +99,8 @@ VLA が途中のステップで失敗（`ik_failed` など、終了コード 1�
 動画の下帯には、シナリオと同じ形で日本語の説明が出る: `ステップ 2/3  いま: VLA の出力で手先を動かす: 下へ 2.0cm`、`つぎ: …`、
 `判定: 合格 — 関節の誤差 … ・映像の変化 …%・手先の誤差 … mm`（不合格は日本語の理由）、命令（`VLA "move down" -> [VLA の 7 次元]`）。最初のステップの前は `VLA への指示: 「…」（N ステップ）`。
 
-注（SROS2 環境 b / c）: 記録は `ros2arm` 内の `scenario_observer`（ROS ノード）が購読する。環境 c の `ros2arm` の enclave には `/camera/color/image_raw` と `/camera/color/camera_info` の購読が無かったので、
-`sros2/policy/sim-inputs/denials.txt` に足して `sros2/policy/lab-c.xml` を再生成した（手順は [sros2/README.md](sros2/README.md)）。これはコードからの静的な追加で、**実コンテナの拒否ログでは確認していない**。
+注（SROS2 環境 b / c）: 記録は `ros2arm` 内の `scenario_observer`（ROS ノード）が購読する。環境 c の `ros2arm` の enclave に、`/camera/color/image_raw` と `/camera/color/camera_info` の購読を足した
+（`sros2/policy/sim-inputs/denials.txt` → `sros2/policy/lab-c.xml` を再生成。手順は [sros2/README.md](sros2/README.md)）。
 `ros2arm` の ROS CLI は環境 c で購読できないため、環境 b / c では `ros2 topic echo` によるシミュ確認を省く。動かないときは、拒否ログ（`not found in allow rule`）を見て `denials.txt` に足す。
 
 ## スタブ（`vla-server`）のキーワード
@@ -181,7 +181,8 @@ bash scripts/run-vla.sh --instruction "pick up the blue cube" --steps 5 \
 | 実時間の制御（5 Hz） | 対象外。シミュの RTF では届かない。GPU 実機への移行時に non-blocking 設計が要る |
 | 実機（`ros2real`） | 未検証。arm 層が同じインターフェース（`/compute_ik`、`gripper_cmd`、`joint_trajectory`、TF、`/joint_states`）を出せば変換ノードはそのまま使える想定 |
 | SROS2 環境 b | `ros2server` と `ros2arm` が同じ環境なら起動前のガードは通る。環境 b での疎通は未確認（誤設定を意図的に注入した環境） |
-| `--record` の SROS2 環境 b / c | **未検証**（共有のコンテナを作り直す必要があり、実測していない）。環境 c では `ros2arm` の `scenario_observer` がカメラ画像・`camera_info` を購読するので、ポリシーに購読を足した（下の「録画と判定（`--record`）」の注）。ROS CLI は使えないので、シミュのトピック確認は省き、記録の立ち上がり（フレーム 4 枚）で代える |
+| `--record` の SROS2 環境 b | **未検証**（環境 c だけ実測した） |
+| `--record` の SROS2 環境 c | 実コンテナで確認済み（2026-10-05。下の検証結果）。ROS CLI は使えないので、シミュのトピック確認は省き、記録の立ち上がり（フレーム 4 枚）で代える |
 | SROS2 環境 c | 実コンテナで確認済み（`run-vla.sh` が 2 ステップとも ok）。最小権限のポリシーは稼働中のグラフと拒否ログから生成したもので、グラフに現れないエンドポイントは拒否される（[sros2/README.md](sros2/README.md)） |
 
 ## 検証結果（2026-10-05、Colima 4 CPU、シミュ起動中）
@@ -196,6 +197,7 @@ bash scripts/run-vla.sh --instruction "pick up the blue cube" --steps 5 \
 | 大きすぎる差分（x 0.5 m） | 0.03 m にクランプされ、`reason` に記録される（変換ノード単体の実行で確認） |
 | `vla-server` 停止中 | 終了コード 2（起動していない旨） |
 | 接続できない `--endpoint` | 終了コード 2（`サーバーに繋がらない`） |
+| `--record --instruction "move down" --steps 2`（環境 c、2026-10-05） | 終了コード 0、2/2 PASS（動画 約 31 秒）。手先の誤差は 0.001 mm 以下。起動後の拒否ログは 0（ros2arm・ros2server）。1 回目はポリシーに `camera_adapter` の `/sim_camera/realsense_d435/raw/camera_info` の購読が無く、カメラが出ずに「カメラのフレームが記録されない」（終了コード 2）で止まった。`denials.txt` に足して再生成したあとは通った。起動時に `rviz2` が 1 つ異常終了したが、実行には影響しなかった（原因は未調査） |
 | `--record --instruction "move down" --steps 3`（環境 a、2026-10-05） | 終了コード 0、`result.json` は 3/3 PASS（約 34 秒の動画 `scenario.mp4`）。手先の指令位置との誤差は 3 ステップとも約 0.001〜0.002 mm（許容 10 mm）。z は 0.624 → 0.604 → 0.584 → 0.564 m。動画には `VLA への指示: 「move down」（3 ステップ）`、各ステップの `いま: VLA の出力で手先を動かす: 下へ 2.0cm`、`判定: 合格 — 関節の誤差 0.000 rad・映像の変化 …%・手先の誤差 0.0 mm`、命令 `VLA "move down" -> [0.0000 0.0000 -0.0200 …]` が日本語で途切れず出た（フレームを切り出して確認） |
 
 ROS 非依存の単体テストは `cd ros2_poc_sim && python -m pytest -q test/test_vla_*.py`（CI の pytest ジョブで実行）。ガードの分岐は `bash scripts/test-run-vla.sh`（docker スタブ）。
