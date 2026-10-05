@@ -1,0 +1,232 @@
+import copy
+import math
+
+import pytest
+import yaml
+
+from ros2_poc_sim import profile as P
+
+
+def test_both_profiles_load():
+    for name in ('realsense_d435', 'usb_cam'):
+        prof = P.load_profile(name)
+        assert prof['name'] == name
+
+
+def test_horizontal_fov_derived_from_fx():
+    d435 = P.load_profile('realsense_d435')
+    usb = P.load_profile('usb_cam')
+    assert P.horizontal_fov(d435) == pytest.approx(1.2111, abs=1e-3)
+    assert P.horizontal_fov(usb) == pytest.approx(1.2602, abs=1e-3)
+    assert P.horizontal_fov(d435) == pytest.approx(
+        2 * math.atan(320 / 462.14), abs=1e-9)
+
+
+def _base():
+    return copy.deepcopy(P.load_profile('realsense_d435'))
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda d: d['intrinsics'].update(fy=500.0),
+    lambda d: d['intrinsics'].update(cx=300.0),
+    lambda d: d['intrinsics'].update(cy=100.0),
+    lambda d: d['intrinsics'].update(d=[0.1, 0, 0, 0, 0]),
+])
+def test_non_renderable_intrinsics_rejected(mutate):
+    d = _base()
+    mutate(d)
+    with pytest.raises(P.ProfileError):
+        P.validate(d)
+
+
+def test_unknown_frame_rejected():
+    d = _base()
+    d['topics']['streams']['color_image']['frame'] = 'nope'
+    with pytest.raises(P.ProfileError):
+        P.validate(d)
+
+
+def test_disconnected_tf_rejected():
+    d = _base()
+    d['tf']['links'].append(
+        {'parent': 'ghost', 'child': 'orphan', 'xyz': [0, 0, 0], 'rpy': [0, 0, 0]})
+    with pytest.raises(P.ProfileError):
+        P.validate(d)
+
+
+def test_transform_encoding_mismatch_rejected():
+    d = _base()
+    d['topics']['streams']['aligned_depth']['encoding'] = '32FC1'
+    with pytest.raises(P.ProfileError):
+        P.validate(d)
+
+
+def test_unknown_transform_rejected():
+    d = _base()
+    d['topics']['streams']['color_image']['transform'] = 'magic'
+    with pytest.raises(P.ProfileError):
+        P.validate(d)
+
+
+def test_missing_key_rejected():
+    d = _base()
+    del d['sensor']
+    with pytest.raises(P.ProfileError):
+        P.validate(d)
+
+
+def test_topic_names_flat_and_nested():
+    d = _base()
+    assert P.topic_name(d, 'color_image') == '/camera/color/image_raw'
+    assert P.topic_name(d, 'aligned_depth') == '/camera/aligned_depth_to_color/image_raw'
+    assert P.topic_name(d, 'points') == '/camera/depth/color/points'
+    assert P.topic_name(d, 'color_image', ns_mode='nested') == '/camera/camera/color/image_raw'
+    usb = P.load_profile('usb_cam')
+    assert P.topic_name(usb, 'color_image') == '/image_raw'
+    assert P.topic_name(usb, 'color_info') == '/camera_info'
+
+
+def test_tagged_yaml_rejected(tmp_path):
+    f = tmp_path / 'evil.yaml'
+    f.write_text('a: !!python/object/apply:os.system ["echo hi"]\n')
+    with pytest.raises(yaml.YAMLError):
+        P.load_profile(str(f))
+
+
+def test_enabled_streams_respect_pointcloud_flag():
+    d = _base()
+    names = P.enabled_streams(d, pointcloud=False)
+    assert 'points' not in names and 'color_image' in names
+    assert 'points' in P.enabled_streams(d, pointcloud=True)
+
+
+def test_camera_info_fields():
+    f = P.camera_info_fields(P.load_profile('realsense_d435'))
+    assert f['width'] == 640 and f['height'] == 480
+    assert f['k'] == [462.14, 0.0, 320.0, 0.0, 462.14, 240.0, 0.0, 0.0, 1.0]
+    assert f['p'][0] == 462.14 and f['p'][2] == 320.0 and f['p'][5] == 462.14 and f['p'][6] == 240.0
+    assert len(f['p']) == 12 and len(f['d']) == 5 and f['distortion_model'] == 'plumb_bob'
+
+
+def test_profiles_do_not_share_mount_frame_names():
+    """複数のカメラを同時に置いても base_link→camera_link の静的 TF が衝突しないこと。"""
+    d435 = P.load_profile('realsense_d435')
+    usb = P.load_profile('usb_cam')
+    assert d435['frames']['camera_link'] != usb['frames']['camera_link']
+    d435_frames = set(d435['frames'].values())
+    usb_frames = set(usb['frames'].values())
+    assert not (d435_frames & usb_frames)
+
+
+def _detach_sensor_frame(d):
+    d['frames']['detached'] = 'detached_frame'
+    d['tf']['gz_sensor_frame'] = 'detached'
+
+
+@pytest.mark.parametrize('mutate,match', [
+    (lambda d: d.update(name='bad/name'), '英数字'),
+    (lambda d: d['sensor'].update(clip={'near': 1.0, 'far': 0.5}), 'near < far'),
+    (lambda d: d['sensor'].update(clip={'near': '0.2', 'far': 6.0}), 'clip.near'),
+    (lambda d: d['sensor'].update(fps=float('nan')), 'sensor.fps'),
+    (lambda d: d['sensor'].update(width=True), 'sensor.width'),
+    (lambda d: d['intrinsics'].pop('fx'), 'intrinsics.fx'),
+    (lambda d: d['intrinsics'].update(fx=float('inf')), 'intrinsics.fx'),
+    (lambda d: d['qos'].pop('points'), 'qos.points'),
+    (lambda d: d['topics']['streams']['color_info'].update(type='sensor_msgs/msg/Image'), 'type は'),
+    (lambda d: d['topics']['streams']['aligned_depth'].pop('encoding'), 'encoding'),
+    (lambda d: d['topics']['streams']['color_image'].update(encoding='bgr8'), '名乗ると嘘'),
+    (lambda d: d['topics']['streams']['points'].update(enabled_by='something.else'), 'enabled_by'),
+    (lambda d: d.update(compressed=['aligned_depth_info']), 'compressed'),
+    (lambda d: d.update(compressed=['nope']), 'compressed'),
+    (_detach_sensor_frame, '辿れない'),
+])
+def test_additional_validation_rejects(mutate, match):
+    d = _base()
+    mutate(d)
+    with pytest.raises(P.ProfileError, match=match):
+        P.validate(d)
+
+
+def test_stream_frame_must_have_tf():
+    d = _base()
+    d['frames']['floating'] = 'floating_frame'
+    d['topics']['streams']['color_image']['frame'] = 'floating'
+    with pytest.raises(P.ProfileError):
+        P.validate(d)
+
+
+def test_short_name_with_path_separator_rejected():
+    with pytest.raises(P.ProfileError):
+        P.load_profile('../profiles/usb_cam')
+    with pytest.raises(P.ProfileError):
+        P.load_placement('a/b')
+
+
+def test_ns_mode_argument_validation():
+    assert P.check_ns_mode('') == '' and P.check_ns_mode('nested') == 'nested'
+    with pytest.raises(P.ProfileError):
+        P.check_ns_mode('Nested')
+
+
+@pytest.mark.parametrize('patch,match', [
+    ({'mode': 'hand'}, 'mode'),
+    ({'look_at': {'eye': [0, 0], 'target': [0, 0, 0], 'up_hint': [1, 0, 0]}}, 'look_at'),
+    ({'object': {'name': 'x', 'xyz_in_base_link': [0, 0]}}, 'xyz_in_base_link'),
+])
+def test_placement_validation(tmp_path, patch, match):
+    import yaml
+    d = P.load_placement('fixed_near_top')
+    d.update(patch)
+    f = tmp_path / 'p.yaml'
+    f.write_text(yaml.safe_dump(d))
+    with pytest.raises(P.ProfileError, match=match):
+        P.load_placement(str(f))
+
+
+def test_placement_missing_key_and_empty(tmp_path):
+    f = tmp_path / 'empty.yaml'
+    f.write_text('')
+    with pytest.raises(P.ProfileError):
+        P.load_placement(str(f))
+    f.write_text('name: x\n')
+    with pytest.raises(P.ProfileError, match='必須キー'):
+        P.load_placement(str(f))
+
+
+@pytest.mark.parametrize('bad', ['abc\n', '', 'a b', 'a/b', '..', None, 7, 'あ'])
+def test_is_name_uses_fullmatch(bad):
+    assert P.is_name(bad) is False
+
+
+def test_is_name_accepts_plain_names():
+    assert P.is_name('usb_cam') and P.is_name('A1_b')
+
+
+def test_profile_name_with_trailing_newline_is_rejected():
+    d = _base()
+    d['name'] = 'realsense_d435\n'
+    with pytest.raises(P.ProfileError):
+        P.validate(d)
+
+
+def test_compressed_streams_normalizes_null_and_missing():
+    assert P.compressed_streams({'compressed': None}) == []
+    assert P.compressed_streams({}) == []
+    assert P.compressed_streams({'compressed': ['a']}) == ['a']
+
+
+@pytest.mark.parametrize('patch,match', [
+    ({'look_at': {'eye': [0, 0, float('nan')], 'target': [0, 0, 0], 'up_hint': [1, 0, 0]}}, '有限'),
+    ({'look_at': {'eye': 5, 'target': [0, 0, 0], 'up_hint': [1, 0, 0]}}, '有限'),
+    ({'look_at': [1, 2, 3]}, '辞書'),
+    ({'object': 'x'}, '辞書'),
+    ({'robot_base_in_world': {'xyz': [0, 0, True], 'rpy': [0, 0, 0]}}, '有限'),
+])
+def test_placement_numeric_and_type_validation(tmp_path, patch, match):
+    import yaml
+    d = P.load_placement('fixed_near_top')
+    d.update(patch)
+    f = tmp_path / 'p.yaml'
+    f.write_text(yaml.safe_dump(d))
+    with pytest.raises(P.ProfileError, match=match):
+        P.load_placement(str(f))
