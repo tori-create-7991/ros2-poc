@@ -142,3 +142,9 @@ def test_vla_prepare_prints_nothing_when_no_step_was_sent(tmp_path, capsys):
     _write(tmp_path, [_rec(0, 'ik_failed', {'ee_before': [0.1, 0, 0.4], 'ee_cmd': [0.1, 0, 0.3]})])
     assert CLI.main(['vla-prepare', str(tmp_path)]) == 0
     assert capsys.readouterr().out == '\n'
+
+
+def test_rejected_after_the_arm_command_went_out_is_still_counted_as_sent(tmp_path):
+    """グリッパの失敗で rejected でも腕は動いている。最後のステップなら wait が要る（judge が静止前に走らない）。"""
+    out = R.prepare(_write(tmp_path, [_rec(0, 'rejected', reason='gripper_cmd が失敗した（アームの指令は送信済み）')]))
+    assert out['events'][0]['rc'] == 0 and out['sent'] == [0]

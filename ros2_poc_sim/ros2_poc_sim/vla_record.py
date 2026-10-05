@@ -19,7 +19,6 @@ MAX_INSTRUCTION = 200
 EE_TOLERANCE = 0.01        # 手先の実測と指令位置の許容誤差 [m]（10 mm）
 JOINT_TOLERANCE = S.ARM_TOLERANCE
 MIN_SHOWN_M = 0.0005       # これ未満の手先の移動量は説明に出さない
-SENT_STATUSES = ('ok', 'timeout')   # 腕へ指令を送った（rejected / ik_failed は送っていない）
 PATH_RE = re.compile(r'^/[A-Za-z0-9_./-]{1,200}\.jsonl$')
 FALLBACK_JOINTS = [0.0] * len(S.ARM_JOINTS)
 
@@ -101,7 +100,7 @@ def move_text(before, cmd):
 
 def _now_text(rec):
     d = rec['detail']
-    ok = rec['status'] in SENT_STATUSES
+    ok = rec['status'] == 'ok'
     if 'ee_before' in d and 'ee_cmd' in d:
         move = move_text(d['ee_before'], d['ee_cmd'])
     else:
@@ -131,7 +130,8 @@ def prepare(path):
     steps, events, now = [], [], []
     for rec in recs:
         d = rec['detail']
-        sent = rec['status'] in SENT_STATUSES and 'target_joints' in d
+        # 腕へ指令を送ったか。送信時刻（t_sent）が残っていれば送っている（グリッパの失敗で rejected でも腕は動く）
+        sent = 't_sent' in d and 'target_joints' in d
         q = d['target_joints'] if 'target_joints' in d else FALLBACK_JOINTS
         duration = d.get('duration', 1.0)
         name = f'vla_{rec["index"] + 1:03d}'

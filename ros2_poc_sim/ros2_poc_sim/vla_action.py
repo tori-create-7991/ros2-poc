@@ -27,6 +27,7 @@ MAX_ANGULAR = 0.1            # 1 ステップの回転の上限 [rad]（ノル�
 # base_link 基準の作業空間 [m]。初期姿勢の手先は z ≈ 0.62。机や自分自身へ突っ込まない範囲に絞る
 WORKSPACE = {'x': (-0.5, 0.5), 'y': (-0.5, 0.5), 'z': (0.05, 0.7)}
 GRIPPER_THRESHOLD = 0.5
+MAX_DETAIL_DURATION = 60.0   # ack の detail の指令時間の上限 [s]（scenario.MAX_TIME_FROM_START と同じ）
 STATUSES = ('ok', 'rejected', 'ik_failed', 'timeout')
 # ack の detail（vla_step.StepRunner.last_detail）。どれも任意
 DETAIL_KEYS = ('target_joints', 'duration', 't_sent', 'ee_before', 'ee_cmd', 'ee_after', 'ee_error',
@@ -124,13 +125,19 @@ def check_detail(detail):
     for k, v in detail.items():
         if k == 'target_joints':
             out[k] = _finite_list(v, len(S.ARM_JOINTS), k)
+            if any(not S.ARM_LIMITS[j][0] <= x <= S.ARM_LIMITS[j][1] for j, x in zip(S.ARM_JOINTS, out[k])):
+                raise ValueError('target_joints が関節リミットの外')
         elif k in ('ee_before', 'ee_cmd'):
             out[k] = _finite_list(v, 3, k)
         elif k == 'ee_after':
             out[k] = None if v is None else _finite_list(v, 3, k)
-        elif k in ('duration', 't_sent'):
-            if not _is_number(v):
-                raise ValueError(f'{k} は有限の数値')
+        elif k == 'duration':
+            if not _is_number(v) or not 0 < v <= MAX_DETAIL_DURATION:
+                raise ValueError(f'duration は 0 より大きく {MAX_DETAIL_DURATION} 秒以下')
+            out[k] = float(v)
+        elif k == 't_sent':
+            if not _is_number(v) or v <= 0:
+                raise ValueError('t_sent は正の有限の数値（UNIX 時刻）')
             out[k] = float(v)
         elif k == 'ee_error':
             if v is not None and (not _is_number(v) or v < 0):
@@ -167,7 +174,12 @@ def parse_ack_full(raw):
     seq, status, reason = (d.get('seq'), d.get('status'), d.get('reason')) if isinstance(d, dict) else (None,) * 3
     if isinstance(seq, bool) or not isinstance(seq, int) or status not in STATUSES or not isinstance(reason, str):
         raise ValueError(f'ack の形が不正: {raw[:80]!r}')
-    detail = check_detail(d['detail']) if d.get('detail') is not None else None
+    detail = None
+    if d.get('detail') is not None:
+        try:
+            detail = check_detail(d['detail'])
+        except ValueError:
+            detail = None    # 版違いなどで detail だけ不正でも ack（seq・status）は受ける。判定は手先の誤差なしで続く
     return seq, status, reason, detail
 
 
