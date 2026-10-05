@@ -34,8 +34,8 @@ GRIPPER_CLOSE = 0.0
 ARM_TOLERANCE = 0.05
 GRIPPER_TOLERANCE = 0.1   # crane_x7_gripper_controller の goal_tolerance と同じ
 RANDOM_SCALE = 0.5        # random はリミット幅の中央 50% だけを使う（机や自分への衝突を避ける）
-SETTLE_SEC = 1.0          # 動作終了から判定までの待ち
-SETTLE_WINDOW_SEC = 0.5   # 静止判定に使う、判定時刻の後ろの区間
+SETTLE_SEC = 1.5          # 関節が静止してから判定するまでの待ち（カメラ映像は /joint_states より 1〜1.5s 遅れる。実測）
+SETTLE_WINDOW_SEC = 1.0   # 静止判定に使う、判定時刻の後ろの区間（カメラは 2〜3fps なので別のフレームになる長さ）
 NAME_RE = re.compile(r'^[A-Za-z0-9_\-]{1,40}$')
 MAX_STEPS = 200
 MAX_TIME_FROM_START = 60.0
@@ -234,5 +234,5 @@ def display_lines(step):
 
 
 def wait_after_send(step):
-    """送信完了からの待ち秒（動作 + 静止待ち + 静止判定区間 + 余裕）。"""
+    """送信完了からの最低の待ち秒（目安）。実際は scenario_cli wait が /joint_states の静止まで待つ。"""
     return step.duration + SETTLE_SEC + SETTLE_WINDOW_SEC + 0.5

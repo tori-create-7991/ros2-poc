@@ -118,7 +118,16 @@ trap stop_recorders EXIT
 SIZE="$(arm "xdpyinfo -display :1 | awk '/dimensions:/{print \$2}'" < /dev/null)"
 arm_bg "exec ros2 run ros2_poc_sim scenario_observer --out $RUN > $RUN/observer.log 2>&1"
 arm_bg "date +%s.%N > $RUN/desktop_t0.txt; exec ffmpeg -y -v error -f x11grab -framerate 10 -video_size $SIZE -i :1 -c:v libx264 -preset ultrafast -pix_fmt yuv420p $RUN/desktop.mp4 2> $RUN/desktop_ffmpeg.log"
-sleep 3   # 記録の立ち上がり待ち（送信前のフレームを確保する）
+# 記録の立ち上がり待ち: 送信前のフレームが要るので、カメラのフレームが記録され始めるまで待つ
+frames_recorded() { { wc -l < "$RUN_HOST/camera_frames.csv"; } 2>/dev/null || echo 0; }
+for _ in $(seq 1 60); do
+  [ "$(frames_recorded)" -ge 4 ] && break
+  sleep 1
+done
+if [ "$(frames_recorded)" -lt 4 ]; then
+  echo "カメラのフレームが記録されない（$RUN_HOST/observer.log を確認）" >&2
+  exit 2
+fi
 
 : > "$RUN_HOST/events.jsonl"
 : > "$RUN_HOST/commands.log"
@@ -147,7 +156,8 @@ while IFS=$'\t' read -r name target wait cmd <&3; do
   [ "$rc" = 0 ] || echo "  命令が失敗した（rc=$rc）" >&2
   printf '{"index": %d, "name": "%s", "target": "%s", "t_start": %s, "t_sent": %s, "rc": %d}\n' \
     "$((i - 1))" "$name" "$target" "$t_start" "$t_sent" "$rc" >> "$RUN_HOST/events.jsonl"
-  sleep "$wait"
+  # 静止するまで待つ（シミュは実時間より遅いので指令時間では足りない）。最低でも目安の秒数は待つ
+  arm "ros2 run ros2_poc_sim scenario_cli wait $RUN $((i - 1))" < /dev/null || sleep "$wait"
 done 3< "$RUN_HOST/commands.tsv"
 
 stop_recorders

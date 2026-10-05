@@ -22,7 +22,11 @@ MOTION_MIN = 0.005         # アーム: 動いたとみなす変化画素率
 GRIPPER_MOTION_MIN = 0.001  # グリッパは画面上で小さいので下げる
 SETTLE_MAX = 0.002         # 静止とみなす変化画素率の上限
 BBOX_MARGIN = 40           # 差分領域の外接矩形に足す余白 [px]
-MAX_GAP_SEC = 0.5          # 最近傍の記録がこれより離れていたら「記録なし」
+MAX_GAP_SEC = 1.5          # 最近傍の記録がこれより離れていたら「記録なし」（CPU 描画でカメラは 2〜3fps）
+STILL_EPS = 0.002          # 静止とみなす関節角の変化 [rad]（STILL_WINDOW の間の最大変化）
+STILL_WINDOW = 0.8         # 静止判定の区間 [s]（/joint_states は負荷時 2Hz 程度まで落ちる）
+SETTLE_TIMEOUT_FACTOR = 5  # 静止を待つ上限 = 指令時間 × これ + SETTLE_TIMEOUT_EXTRA（シミュは実時間より遅い）
+SETTLE_TIMEOUT_EXTRA = 10.0
 
 
 def diff_mask(a, b, thresh=DIFF_THRESH):
@@ -173,6 +177,41 @@ def read_frames_csv(path):
         return [{'n': int(r['n']), 't': float(r['t'])} for r in csv.DictReader(f)]
 
 
+def settle_time(records, joints, expected, tolerance, t_sent, duration):
+    """送信後に腕が止まった時刻（無ければ None）。
+
+    シミュは実時間より遅い（RTF < 1）ので、指令の time_from_start ではなく /joint_states の静止で決める。
+    「STILL_WINDOW の間の変化が STILL_EPS 以下」かつ「期待値に届いた、または指令時間が過ぎた」最初の時刻。
+    指令が届く前の静止（送信直後）を拾わないよう、期待値に届くか指令時間が過ぎるまでは待つ。
+    """
+    rs = [r for r in records if r['t'] >= t_sent]
+    for i, r in enumerate(rs):
+        pos = dict(zip(r['name'], r['position']))
+        if any(j not in pos for j in joints):
+            continue
+        reached = max(abs(pos[j] - e) for j, e in zip(joints, expected)) <= tolerance
+        if not reached and r['t'] < t_sent + duration:
+            continue
+        window = [x for x in rs[i:] if x['t'] <= r['t'] + STILL_WINDOW]
+        if window[-1]['t'] - r['t'] < STILL_WINDOW * 0.6:
+            if len(window) == len(rs) - i:
+                return None   # 記録の末尾: まだ区間ぶんの記録が無い
+            continue          # 記録の途中の欠け（負荷で /joint_states が途切れる）: この時刻は判定しない
+        still = True
+        for x in window[1:]:
+            p = dict(zip(x['name'], x['position']))
+            if any(abs(p.get(j, pos[j]) - pos[j]) > STILL_EPS for j in joints):
+                still = False
+                break
+        if still:
+            return r['t']
+    return None
+
+
+def settle_deadline(t_sent, duration):
+    return t_sent + duration * SETTLE_TIMEOUT_FACTOR + SETTLE_TIMEOUT_EXTRA
+
+
 def joints_at(series, t):
     r = series.nearest(t)
     return None if r is None else dict(zip(r['name'], r['position']))
@@ -219,7 +258,11 @@ def judge_run(run_dir, run=subprocess.run):
                             'codes': [f'send_failed rc={rc}'],
                             **({'t_start': ev['t_start'], 't_sent': ev['t_sent']} if ev else {})})
             continue
-        t_end = ev['t_sent'] + st['duration'] + S.SETTLE_SEC
+        t_still = settle_time(joints.records, st['joints'], st['expect'], st['tolerance'],
+                              ev['t_sent'], st['duration'])
+        settled = t_still is not None
+        # 止まらなかったときは待ちの上限時刻で判定する（静止条件が FAIL になる）
+        t_end = (t_still + S.SETTLE_SEC) if settled else settle_deadline(ev['t_sent'], st['duration'])
         t_settled = t_end + S.SETTLE_WINDOW_SEC
         ee_rec = ee.nearest(t_end)
         r = judge_step(
@@ -229,6 +272,10 @@ def judge_run(run_dir, run=subprocess.run):
             frame_settled=frame(frames.nearest(t_settled)),
             ee_xyz=None if ee_rec is None else ee_rec['xyz'], K=K,
             motion_min=GRIPPER_MOTION_MIN if st['kind'] == S.GRIPPER else MOTION_MIN)
+        if not settled:
+            r['verdict'] = 'FAIL'
+            r['reasons'].append('/joint_states が静止しなかった（待ちの上限まで動き続けた、または記録が無い）')
+            r['codes'].append('joints_not_still')
         results.append({**base, **r, 't_start': ev['t_start'], 't_sent': ev['t_sent'], 't_end': t_end})
     passed = sum(r['verdict'] == 'PASS' for r in results)
     return {'passed': passed, 'total': len(results),

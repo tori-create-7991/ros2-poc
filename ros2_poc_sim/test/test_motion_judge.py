@@ -102,7 +102,8 @@ def test_gripper_uses_lower_motion_threshold():
 def test_series_nearest_and_before_respect_gap():
     s = M.Series([{'t': 1.0}, {'t': 2.0}, {'t': 3.0}])
     assert s.nearest(2.2)['t'] == 2.0 and s.nearest(2.6)['t'] == 3.0
-    assert s.nearest(10.0) is None and s.before(2.4)['t'] == 2.0 and s.before(2.9) is None and s.before(0.5) is None
+    assert s.nearest(10.0) is None and s.before(2.4, max_gap=0.5)['t'] == 2.0
+    assert s.before(2.9, max_gap=0.5) is None and s.before(0.5) is None
     assert M.Series([]).nearest(1.0) is None
 
 
@@ -146,7 +147,7 @@ def test_judge_run_end_to_end_with_fake_video(tmp_path):
     # a: t_start=10, t_sent=11 → t_end=14。b は命令失敗（rc=1）
     events = [{'index': 0, 't_start': 10.0, 't_sent': 11.0, 'rc': 0},
               {'index': 1, 't_start': 20.0, 't_sent': 21.0, 'rc': 1}]
-    joints = [{'t': t, 'name': J, 'position': HOME if t < 12 else POSE_A} for t in np.arange(9, 16, 0.1)]
+    joints = _traj(11.0, 12.0, HOME, POSE_A, until=16.0, dt=0.1)
     frames = [(n, 9.0 + n * 0.2) for n in range(40)]
     ee = [{'t': t, 'xyz': [0.0, 0.0, 1.0]} for t in np.arange(9, 16, 0.1)]
     _write_run(tmp_path, steps, events, joints, frames, ee)
@@ -164,13 +165,63 @@ def test_judge_run_end_to_end_with_fake_video(tmp_path):
     assert res['total'] == 2 and res['passed'] == 1 and res['verdict'] == 'FAIL'
     a, b = res['steps']
     assert a['verdict'] == 'PASS', a['reasons']
-    assert a['t_end'] == pytest.approx(11.0 + 2 + S.SETTLE_SEC)
+    assert a['t_end'] == pytest.approx(12.0 + S.SETTLE_SEC)   # 期待値に届いて静止した時刻 + SETTLE
     assert b['verdict'] == 'FAIL' and 'rc=1' in b['reasons'][0]
 
 
 def test_judge_run_without_camera_info_fails_visual_conditions(tmp_path):
     steps = S.parse_scenario({'steps': [{'positions': POSE_A, 'time_from_start': 1}]})
     _write_run(tmp_path, steps, [{'index': 0, 't_start': 1.0, 't_sent': 1.5, 'rc': 0}],
-               [{'t': 3.5, 'name': J, 'position': POSE_A}], [], [], info=False)
+               _traj(1.5, 2.5, HOME, POSE_A, until=6.0), [], [], info=False)
     (r,) = M.judge_run(tmp_path, run=None)['steps']
     assert r['verdict'] == 'FAIL' and any('フレームが無い' in x for x in r['reasons'])
+
+
+def _traj(t0, t1, p0, p1, until, dt=0.25):
+    """t0〜t1 で p0 → p1 に線形に動き、until まで止まっている /joint_states 記録。"""
+    out, t = [], t0 - 1.0
+    while t <= until:
+        a = min(max((t - t0) / (t1 - t0), 0.0), 1.0)
+        out.append({'t': t, 'name': J, 'position': [x + (y - x) * a for x, y in zip(p0, p1)]})
+        t += dt
+    return out
+
+
+def test_settle_time_waits_for_slow_motion_to_stop():
+    # 3 秒の指令が RTF 0.4 で 7.5 秒かかる
+    recs = _traj(10.0, 17.5, HOME, POSE_A, until=25.0)
+    t = M.settle_time(recs, J, POSE_A, 0.05, t_sent=10.0, duration=3.0)
+    assert 17.0 <= t <= 17.75
+
+
+def test_settle_time_ignores_stillness_before_motion_starts():
+    recs = _traj(12.0, 15.0, HOME, POSE_A, until=20.0)   # 送信 10.0、動き出しが 2 秒遅れる
+    t = M.settle_time(recs, J, POSE_A, 0.05, t_sent=10.0, duration=3.0)
+    assert t >= 14.5
+
+
+def test_settle_time_none_while_moving_or_without_window():
+    recs = _traj(10.0, 30.0, HOME, POSE_A, until=20.0)
+    assert M.settle_time(recs, J, POSE_A, 0.05, t_sent=10.0, duration=3.0) is None
+
+
+def test_settle_time_for_wrong_target_after_duration():
+    recs = _traj(10.0, 13.0, HOME, POSE_A, until=20.0)   # 期待は HOME のまま（fail_demo）
+    t = M.settle_time(recs, J, HOME, 0.05, t_sent=10.0, duration=3.0)
+    assert 13.0 <= t <= 13.5
+
+
+def test_judge_run_fails_when_joints_never_settle(tmp_path):
+    steps = S.parse_scenario({'steps': [{'positions': POSE_A, 'time_from_start': 1}]})
+    joints = _traj(1.0, 100.0, HOME, POSE_A, until=30.0)
+    _write_run(tmp_path, steps, [{'index': 0, 't_start': 0.5, 't_sent': 1.0, 'rc': 0}],
+               joints, [], [], info=False)
+    (r,) = M.judge_run(tmp_path, run=None)['steps']
+    assert r['verdict'] == 'FAIL' and 'joints_not_still' in r['codes']
+    assert r['t_end'] == pytest.approx(M.settle_deadline(1.0, 1.0))
+
+
+def test_settle_time_skips_gaps_in_records():
+    recs = [r for r in _traj(10.0, 20.0, HOME, POSE_A, until=26.0) if not 14.0 < r['t'] < 15.2]
+    t = M.settle_time(recs, J, POSE_A, 0.05, t_sent=10.0, duration=3.0)
+    assert t is not None and 19.5 <= t <= 20.25

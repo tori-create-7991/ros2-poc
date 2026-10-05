@@ -37,10 +37,11 @@ class Observer(Node):
         self.n = 0
         self.frame_id = None
         self.last_joint_t = 0.0
-        self.frames_csv = (self.out / 'camera_frames.csv').open('w', encoding='utf-8')
+        # 行バッファ: 実行中に run-scenario.sh / scenario_cli wait が読むので、書いたらすぐ見えるようにする
+        self.frames_csv = (self.out / 'camera_frames.csv').open('w', encoding='utf-8', buffering=1)
         self.frames_csv.write('n,t\n')
-        self.joints = (self.out / 'joints.jsonl').open('w', encoding='utf-8')
-        self.ee = (self.out / 'ee.jsonl').open('w', encoding='utf-8')
+        self.joints = (self.out / 'joints.jsonl').open('w', encoding='utf-8', buffering=1)
+        self.ee = (self.out / 'ee.jsonl').open('w', encoding='utf-8', buffering=1)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.create_subscription(Image, image_topic, self.on_image, qos_profile_sensor_data)
