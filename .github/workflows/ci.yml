@@ -23,6 +23,7 @@ jobs:
           bash scripts/test-probe.sh
           bash scripts/test-swap.sh
           bash scripts/test-run-scenario.sh
+          bash scripts/test-run-vla.sh
       - name: SROS2 ledger check
         run: |
           python3 -c 'import yaml' || (sudo apt-get update && sudo apt-get install -y python3-yaml)
@@ -31,7 +32,7 @@ jobs:
       - name: python syntax
         run: python3 -m py_compile scripts/sros2/lib/ledger.py scripts/sros2/lib/test_ledger.py sros2/tools/lab_pub.py sros2/tools/lab_sub.py
 
-  # ROS 非依存のシナリオ実行まわりの単体テスト（test_scenario_cli の observer は rclpy が無いと skip される）
+  # ROS 非依存のシナリオ実行・VLA 連携まわりの単体テスト（test_scenario_cli の observer は rclpy が無いと skip される）
   pytest:
     runs-on: ubuntu-latest
     steps:
@@ -41,10 +42,10 @@ jobs:
           python-version: '3.12'
       - name: install test dependencies
         run: pip install pytest numpy pyyaml
-      - name: pytest (scenario / motion judge / compose video / scenario cli)
+      - name: pytest (scenario / motion judge / compose video / scenario cli / VLA)
         run: |
           cd ros2_poc_sim
-          python -m pytest -q test/test_scenario.py test/test_motion_judge.py test/test_compose_video.py test/test_scenario_cli.py
+          python -m pytest -q test/test_scenario.py test/test_motion_judge.py test/test_compose_video.py test/test_scenario_cli.py test/test_vla_*.py
 
   dockerfile:
     runs-on: ubuntu-latest
@@ -65,6 +66,14 @@ jobs:
       - uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: Dockerfile.diag
+          failure-threshold: error
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile.ros2server
+          failure-threshold: error
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile.vla-server
           failure-threshold: error
 
   compose:
