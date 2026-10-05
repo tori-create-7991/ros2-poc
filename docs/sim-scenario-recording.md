@@ -1,0 +1,116 @@
+# シナリオ実行・判定・録画（run-scenario.sh）
+
+Mac のターミナルから 1 コマンドで、Gazebo 上の CRANE-X7 に関節指令を順に送り、
+仮想カメラの映像で「指令どおり動いたか」をステップごとに PASS / FAIL 判定し、
+デスクトップ画面・カメラ映像・命令文・判定結果を 1 本の mp4 に残す。実機（ros2real）へ移る前の確認用。
+
+```bash
+bash scripts/up-arm.sh                                   # 未起動なら
+bash scripts/run-scenario.sh --start-sim                 # シミュも起動して既定シナリオを実行
+bash scripts/run-scenario.sh --scenario examples --repeat 2
+bash scripts/run-scenario.sh --scenario <path/to/my.yaml>
+```
+
+| 引数 | 既定 | 内容 |
+|---|---|---|
+| `--scenario` | `default` | `default` / `fail_demo` / `examples`（`ros2_poc_sim/config/scenarios/`）または YAML のパス |
+| `--repeat` | YAML の `repeat`（無ければ 1） | シナリオ全体の繰り返し回数（1〜20） |
+| `--start-sim` | なし | シミュ（公式 Gazebo + MoveIt + 仮想カメラ、視点 `fixed_front_wide`）が動いていなければ起動する |
+| `--timeout` | 120（`--start-sim` 時 900） | トピックが流れ始めるまで待つ秒数 |
+
+終了コード: `0` = 全ステップ PASS / `1` = FAIL あり / `2` = 環境・実行時の問題 / `64` = 引数・シナリオの誤り。
+`ros2real`（実機ドライバ）が起動中なら実行しない。
+
+## 出力（`workspace/runs/<日時>/`）
+
+| ファイル | 内容 |
+|---|---|
+| `scenario.mp4` | 合成動画。左: デスクトップ（x11grab）、右: 仮想カメラ（判定後は変化領域の枠と手先の投影点）、下帯: 命令と判定 |
+| `result.json` | ステップごとの判定・根拠の数値（関節誤差、変化画素率、手先の投影点、理由）。random の展開値は `expect` |
+| `commands.log` | 実際に送ったコマンドの全文と送信先 |
+| `camera.mp4` / `desktop.mp4` | 記録の元データ |
+| `camera_frames.csv` / `joints.jsonl` / `ee.jsonl` / `camera_info.json` / `events.jsonl` / `steps.json` | 判定の入力（`scenario_cli judge` で判定し直せる） |
+
+判定や合成だけをやり直す:
+
+```bash
+docker exec -u ubuntu ros2arm bash -c 'source /opt/ros/jazzy/setup.bash; source /opt/crane_ws/install/setup.bash; source /opt/ros2_poc_ws/install/setup.bash; ros2 run ros2_poc_sim scenario_cli judge /workspace/runs/<日時> && ros2 run ros2_poc_sim scenario_cli compose /workspace/runs/<日時>'
+```
+
+## 構成
+
+```
+Mac: scripts/run-scenario.sh
+  ├─ ros2lab-a: ros2 topic pub --once -w 1 /crane_x7_arm_controller/joint_trajectory ...（README と同じ経路）
+  ├─ ros2arm:   ros2 action send_goal /crane_x7_gripper_controller/gripper_cmd ...（ros2lab に control_msgs が無いため）
+  ├─ ros2arm:   scenario_observer（カメラ・/joint_states・手先 TF を記録）、ffmpeg x11grab（デスクトップ）
+  └─ ros2arm:   scenario_cli wait / judge / compose
+```
+
+記録してから判定する（録画中は判定しない）。CPU 描画で重い環境でも記録が詰まらず、判定は記録データから決定論的にやり直せる。
+送信前後の時刻はコンテナ内の `date` で取り、記録ノードの `time.time()` と同じ Colima VM の時計で揃える。
+
+## シナリオの書き方
+
+```yaml
+description: 任意
+repeat: 1                      # 全体の繰り返し（--repeat で上書き）。名前に #1, #2 が付く
+steps:
+  - name: pose_a               # 英数字・_・-（40 文字以内）
+    positions: [0.5, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0]   # 7 関節 [rad]。リミット外は実行前にエラー
+    time_from_start: 3         # 既定 3
+    tolerance: 0.05            # 任意（既定 0.05 rad）
+    expect: [...]              # 任意。判定の期待値だけ差し替える（fail_demo 用）
+  - name: wave                 # 経由点。判定は最後の点
+    waypoints:
+      - {positions: [...], time_from_start: 2}
+      - {positions: [...], time_from_start: 4}   # 単調増加
+  - name: grip
+    gripper: close             # open（60°）/ close（0）/ 角度 [rad]。許容は 0.1 rad
+  - name: random_pose          # 関節リミットの中央 50% の範囲でランダム。seed で再現
+    random: {n: 3, seed: 1, time_from_start: 3}
+```
+
+関節の順は `shoulder_fixed_part_pan`, `shoulder_revolute_part_tilt`, `upper_arm_revolute_part_twist`,
+`upper_arm_revolute_part_rotate`, `lower_arm_fixed_part`, `lower_arm_revolute_part`, `wrist`（すべて `crane_x7_` 始まり）。
+
+## 判定（各ステップ、全部満たせば PASS）
+
+| # | 条件 | 既定 |
+|---|---|---|
+| 1 | 関節: 判定時刻の `/joint_states` と期待値の差が全関節で許容内 | アーム 0.05 rad / グリッパ 0.1 rad |
+| 2 | 映像で動いた: 送信前と判定時刻のカメラフレームの変化画素率 | アーム ≥ 0.5% / グリッパ ≥ 0.1%（差 > 25/255 を変化とみなす） |
+| 3 | 映像と姿勢の一致: 手先（`crane_x7_gripper_base_link`）の TF を camera_info で投影した点が、変化領域の外接矩形（余白 40px）の中 | |
+| 4 | 静止: 判定時刻とその 1.0 秒後のフレームの変化画素率 | ≤ 0.2% |
+
+- 期待姿勢が送信前と同じ（動かない指令）なら、2 は「映像が変化しないこと」に反転し、3 は見ない。
+- **判定時刻は指令時間ではなく `/joint_states` の静止で決める**。CPU 描画ではシミュの実時間比（RTF）が 0.2〜0.4 まで落ち、
+  3 秒の指令が実際には 7〜15 秒かかる（実測）。静止（0.8 秒間の変化 ≤ 0.002 rad）を検出してから、
+  カメラ映像の遅れ（関節より 1〜1.5 秒遅れる。実測）ぶん 1.5 秒待って判定する。
+  `指令時間 × 5 + 10` 秒たっても止まらなければ、その時刻で判定し `joints_not_still` で FAIL にする。
+- 動画の下帯の理由は ASCII の短いコード（`joint_err`、`no_motion`、`ee_outside_change`、`not_settled` など）。
+  日本語の理由は `result.json` と端末に出る（ffmpeg 6.1 の drawtext はマルチバイト文字を含む行を途中で切るため）。
+
+## 視点 fixed_front_wide
+
+腕全体（真上に伸ばした home 姿勢の手先まで）と机上の物体が画角に入る三人称視点。
+既存の `fixed_front_oblique` は机に近く低いため、手先が縦の画角（±27°）の外に出て条件 3 が成り立たない。
+すでに別の視点でシミュが動いている場合は、そのまま使われる（`--start-sim` は動いていないときだけ起動する）。
+視点を変えるときは、公式 launch ごと止めてから `--start-sim` で起動し直す。
+
+## トラブルシュート
+
+| 症状 | 原因・対処 |
+|---|---|
+| `トピックが流れない` で終わる | シミュが起動していない。`--start-sim` を付ける。初回は Gazebo の起動に数分〜十数分かかる |
+| `カメラのフレームが記録されない` | 仮想カメラが出ていない。`workspace/runs/<日時>/observer.log` と `ros2 topic hz /camera/color/image_raw` を確認 |
+| 全ステップ `ee_outside_change` / `no_ee_projection` | 手先が画角外の視点で動いている。`fixed_front_wide` で起動し直す |
+| `joints_not_still` | シミュが極端に遅い、またはコントローラが目標に届かない。`gz topic -e -t /stats` で RTF を確認 |
+| 動画の左側が RViz で、Gazebo の GUI が見えない | デスクトップをそのまま録画しているため。Gazebo のシーンは右側の仮想カメラで見える。必要なら noVNC で Gazebo のウィンドウを前に出してから実行する |
+| `合成に失敗した` | `overlay/filtergraph.txt` と ffmpeg のメッセージを確認 |
+
+## 制約
+
+- シミュ専用。実機（ros2real）では使わない（スクリプトが拒否する）。
+- グリッパの命令は ros2arm から送る。実機でグリッパを動かすには、ros2lab に `control_msgs` を入れるか ros2real 側から送る必要がある（未対応）。
+- DDS は無認証（[sim-camera-profile.md](sim-camera-profile.md) の「隔離方針との関係」と同じ）。`ros2-lab-net` に信頼できないコンテナを繋いだまま実行すると、記録・判定の入力を偽装されうる。
