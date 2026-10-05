@@ -22,6 +22,11 @@ case "$1" in
   *) usage ;;
 esac
 
+# 同じ環境のコンテナが起動中なら、再生成すると古い鍵のまま動き続ける（作り直すまで検証も通らない）
+if command -v docker >/dev/null 2>&1 && [ -n "$(docker ps --filter "label=ros2poc.env=$1" --format '{{.Names}}' 2>/dev/null)" ]; then
+  echo "警告: 環境 $1 のコンテナが起動中。再生成した鍵を使うには 'bash scripts/up-env.sh $1' で作り直すこと。" >&2
+fi
+
 if command -v ros2 >/dev/null 2>&1 && command -v openssl >/dev/null 2>&1; then
   exec bash scripts/sros2/lib/gen-keystore-inner.sh "$1" "$PWD/sros2" "$PWD/workspace"
 fi

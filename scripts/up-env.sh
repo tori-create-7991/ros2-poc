@@ -50,11 +50,29 @@ esac
 export SROS2_ENV="$ENV_NAME"
 export SROS2_KEYSTORE_ROOT="$KS_ROOT"
 
+# 診断コンテナが mount する場所。無いと docker が root 所有の空ディレクトリを作ってしまう
+mkdir -p sros2/rogue
+
+# 環境 b の不備（B-AU-07）として ./workspace に置いた鍵のコピーは、環境 a / c では不要で、
+# c では全コンテナから読めてしまい「鍵は自分の enclave だけ」を壊す。a / c に切り替えるときに削除する。
+# 目印ファイル（gen-keystore.sh が置く）があるときだけ消す。同じ名前の別のディレクトリは触らない。
+# compose が成功してから消す（失敗したときは環境 b が残るので、コピーも残す）。
+WS_DIR="${SROS2_WORKSPACE_DIR:-workspace}"
+cleanup_leaked_keys() {
+  if [ -f "$WS_DIR/sros2-keystore/.sros2-generated" ]; then
+    echo "環境 b の不備として $WS_DIR に置いた鍵のコピー（sros2-keystore）を削除する。" >&2
+    rm -rf "$WS_DIR/sros2-keystore"
+  fi
+}
+
 if [ "$ENV_NAME" = "a" ]; then
   if [ "$ARM" -eq 1 ]; then
-    exec docker compose --profile arm up -d --build --force-recreate
+    docker compose --profile arm up -d --build --force-recreate
+  else
+    docker compose up -d --build --force-recreate
   fi
-  exec docker compose up -d --build --force-recreate
+  cleanup_leaked_keys
+  exit 0
 fi
 
 # --- b / c ---
@@ -74,14 +92,6 @@ if [ -n "$(docker ps --filter 'name=^ros2arm$' --filter 'status=running' -q)" ];
   echo "警告: ros2arm が起動中。ros2arm は SROS2 化していない（環境 A のまま）ため、ros2lab とは通信できない。" >&2
 fi
 
-# 環境 b の不備（B-AU-07）として ./workspace に置いた鍵のコピーは、環境 c では全コンテナから読めてしまい
-# 「鍵は自分の enclave だけ」を壊すため、c に切り替えるときに削除する（このリポジトリが生成したものだけ）。
-WS_DIR="${SROS2_WORKSPACE_DIR:-workspace}"
-if [ "$ENV_NAME" = "c" ] && [ -d "$WS_DIR/sros2-keystore" ]; then
-  echo "環境 b の不備として $WS_DIR に置いた鍵のコピー（sros2-keystore）を削除する。" >&2
-  rm -rf "$WS_DIR/sros2-keystore"
-fi
-
 # gen-keystore.sh が書く、コンテナごとの enclave 名の対応（SROS2_ENCLAVE_*）を読む
 if [ -f "$KS_ROOT/$ENV_NAME/env.sh" ]; then
   # shellcheck source=/dev/null
@@ -93,4 +103,7 @@ case "$ENV_NAME" in
   c) export SROS2_STRATEGY=Enforce ;;
 esac
 
-exec docker compose -f docker-compose.yml -f docker-compose.sros2.yml up -d --build --force-recreate
+docker compose -f docker-compose.yml -f docker-compose.sros2.yml up -d --build --force-recreate
+if [ "$ENV_NAME" = "c" ]; then
+  cleanup_leaked_keys
+fi

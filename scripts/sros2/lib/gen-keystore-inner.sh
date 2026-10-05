@@ -9,6 +9,8 @@ ENV_NAME="${1:?usage: gen-keystore-inner.sh <b|c> <sros2-dir> [<workspace-dir>]}
 BASE="${2:?usage: gen-keystore-inner.sh <b|c> <sros2-dir> [<workspace-dir>]}"
 WORKSPACE_DIR="${3:-}"   # 環境 B の B-AU-07（共有領域に鍵を置く）で使う
 
+case "$ENV_NAME" in b | c) ;; *) echo "環境は b か c: $ENV_NAME" >&2; exit 2 ;; esac
+
 # shellcheck source=scripts/sros2/lib/common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 need_ros2
@@ -58,7 +60,7 @@ setup_c() {
     -days 365 -out ks/public/identity_ca.cert.pem
 
   # RTPS を暗号化まで引き上げる（sros2 既定は SIGN）
-  sed -i 's#<rtps_protection_kind>SIGN</rtps_protection_kind>#<rtps_protection_kind>ENCRYPT</rtps_protection_kind>#' \
+  sed_inplace 's#<rtps_protection_kind>SIGN</rtps_protection_kind>#<rtps_protection_kind>ENCRYPT</rtps_protection_kind>#' \
     ks/enclaves/governance.xml
   grep -q '<rtps_protection_kind>ENCRYPT<' ks/enclaves/governance.xml
   sign_governance
@@ -141,7 +143,7 @@ GOV
 
   # B-AC-02: permissions の default を ALLOW に書き換えて署名し直す
   for e in $ENCLAVES; do
-    sed -i 's#<default>DENY</default>#<default>ALLOW</default>#' "ks/enclaves$e/permissions.xml"
+    sed_inplace 's#<default>DENY</default>#<default>ALLOW</default>#' "ks/enclaves$e/permissions.xml"
     openssl smime -sign -text -in "ks/enclaves$e/permissions.xml" -out "ks/enclaves$e/permissions.p7s" \
       -signer ks/public/permissions_ca.cert.pem -inkey ks/private/permissions_ca.key.pem
   done
@@ -175,7 +177,15 @@ if [ "$ENV_NAME" = "c" ]; then
 fi
 
 # --- 出力 ---
-rm -rf "$KS_OUT" "$CA_OUT" "$ROGUE_OUT"
+# 途中で失敗しても、既存の keystore を壊さないように、同じファイルシステム上の一時ディレクトリへ作ってから入れ替える。
+FINAL_KS="$KS_OUT"
+FINAL_CA="$CA_OUT"
+FINAL_ROGUE="$ROGUE_OUT"
+STAGE="$BASE/.stage-$ENV_NAME"
+rm -rf "$STAGE"
+KS_OUT="$STAGE/keystores"
+CA_OUT="$STAGE/ca-private"
+ROGUE_OUT="$STAGE/rogue"
 mkdir -p "$KS_OUT/containers" "$CA_OUT" "$ROGUE_OUT"
 chmod 0700 "$CA_OUT"
 
@@ -195,7 +205,7 @@ for c in $CONTAINERS; do
 done
 
 # 環境 c を作るときは、環境 b が ./workspace に置いた鍵のコピーを消す（c では全コンテナから読めてしまうため）
-if [ "$ENV_NAME" = "c" ] && [ -n "$WORKSPACE_DIR" ]; then
+if [ "$ENV_NAME" = "c" ] && [ -n "$WORKSPACE_DIR" ] && [ -f "$WORKSPACE_DIR/sros2-keystore/.sros2-generated" ]; then
   rm -rf "$WORKSPACE_DIR/sros2-keystore"
 fi
 
@@ -203,17 +213,23 @@ fi
 if [ "$ENV_NAME" = "b" ]; then
   # B-AU-02: ros2lab-b の enclave 名を 1 文字間違え（shared → shred）、Permissive のままセキュリティなしに
   # フォールバックさせる（Enforce なら起動に失敗する）。ファイルは正しい場所（/lab/shared）に置かれる。
-  sed -i 's#^export SROS2_ENCLAVE_ROS2LAB_B=.*#export SROS2_ENCLAVE_ROS2LAB_B=/lab/shred#' "$KS_OUT/env.sh"
+  sed_inplace 's#^export SROS2_ENCLAVE_ROS2LAB_B=.*#export SROS2_ENCLAVE_ROS2LAB_B=/lab/shred#' "$KS_OUT/env.sh"
   inject B-AU-02
   # B-AU-07: 共有領域（./workspace。全コンテナから書き込み可）に、秘密鍵ごと keystore のコピーを置く。
   # 鍵ファイルは誰でも読める 0644（sros2 の既定の権限のまま）。
   if [ -n "$WORKSPACE_DIR" ]; then
     ws="$WORKSPACE_DIR/sros2-keystore"
+    # 目印ファイルがあるディレクトリ（このスクリプトが作ったもの）だけ作り直す。同名の別のディレクトリは触らない
+    if [ -e "$ws" ] && [ ! -f "$ws/.sros2-generated" ]; then
+      echo "$ws は既にあり、このスクリプトが作ったものではない。B-AU-07 の注入を中止する。" >&2
+      exit 1
+    fi
     rm -rf "$ws"
     mkdir -p "$ws"
     cp -r "$KS_OUT/containers/ros2lab-a/." "$ws/"
     chmod 0755 "$ws"
     chmod 0644 "$ws"/*
+    : > "$ws/.sros2-generated"
     inject B-AU-07
   fi
 fi
@@ -228,4 +244,12 @@ chmod -R go-rwx "$CA_OUT"
 # 失効済みの不正証明書（診断コンテナだけに渡す）
 cp -r "$WORK/rogue-revoked" "$ROGUE_OUT/revoked"
 
-echo "生成した: $KS_OUT（コンテナ用）、$CA_OUT（CA の秘密鍵。コンテナには渡さない）、$ROGUE_OUT/revoked（失効済みの不正証明書）"
+# 入れ替え（ここまで来たら全部できている）
+rm -rf "$FINAL_KS" "$FINAL_CA" "$FINAL_ROGUE"
+mkdir -p "$(dirname "$FINAL_KS")" "$(dirname "$FINAL_CA")" "$(dirname "$FINAL_ROGUE")"
+mv "$KS_OUT" "$FINAL_KS"
+mv "$CA_OUT" "$FINAL_CA"
+mv "$ROGUE_OUT" "$FINAL_ROGUE"
+rm -rf "$STAGE"
+
+echo "生成した: $FINAL_KS（コンテナ用）、$FINAL_CA（CA の秘密鍵。コンテナには渡さない）、$FINAL_ROGUE/revoked（失効済みの不正証明書）"

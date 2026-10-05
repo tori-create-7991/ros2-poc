@@ -39,11 +39,44 @@ env_of() { docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1" | 
 label_of() { docker inspect -f '{{index .Config.Labels "ros2poc.env"}}' "$1"; }
 
 # publisher をバックグラウンドで起動する。  pub_bg <コンテナ> <topic> <秒> [docker exec の引数...]
+# 出力は LAST_PUB_LOG に残る。publisher が起動できたか（PUB_UP）は rejected / pub_started で確認する。
+# 「0 件受信 = 拒否された」と判定するときに、publisher が起動すらしていなかった場合を除くため。
+LAST_PUB_LOG=""
 pub_bg() {
   local c="$1" topic="$2" secs="$3"
   shift 3
+  LAST_PUB_LOG="$OUT/pub-$RANDOM-$RANDOM.log"
   docker exec -i "$@" "$c" bash -lc "python3 - $topic $secs pub_$RANDOM" \
-    < "$TOOLS/lab_pub.py" >> "$OUT/pub.log" 2>&1 &
+    < "$TOOLS/lab_pub.py" > "$LAST_PUB_LOG" 2>&1 &
+}
+
+# 最後に起動した publisher が起動できたか
+pub_started() { grep -q PUB_UP "${1:-$LAST_PUB_LOG}"; }
+
+# 拒否された: 受信が 0 件で、publisher は起動できていた（起動していないための 0 件を除く）。 rejected <受信数> <publisher のログ>
+rejected() { [ "$1" = "0" ] && pub_started "$2"; }
+# 鍵なしの参加者用: 「受信 0 件・見えた publisher 0」で、publisher は起動できていた。 rejected_pair "<受信数> <見えた数>" <ログ>
+rejected_pair() { [ "$1" = "0 0" ] && pub_started "$2"; }
+
+# 不正証明書の生成。失敗したら握りつぶさず FAIL にする（古い rogue が残っていて通ったり、無くて偽の拒否になるのを防ぐ）
+must_gen_rogue() {
+  if ! bash scripts/sros2/gen-rogue.sh "$@" >> "$OUT/gen-rogue.log" 2>&1; then
+    fail GEN-ROGUE "不正証明書の生成に失敗した（$*）。$OUT/gen-rogue.log を見ること"
+    return 1
+  fi
+}
+
+# パケット取得のサイドカーが残っていたら消す（中断されたとき用）
+cleanup_caps() {
+  local ids
+  ids="$(docker ps -aq --filter 'name=^cap-')"
+  # shellcheck disable=SC2086
+  [ -z "$ids" ] || docker rm -f $ids >/dev/null 2>&1 || true
+}
+
+# WIPE_ROGUE=1 のとき、終了時に不正証明書を削除する（診断コンテナに残さない）
+wipe_if_requested() {
+  if [ "${WIPE_ROGUE:-0}" = "1" ]; then bash scripts/sros2/wipe-rogue.sh >/dev/null 2>&1 || true; fi
 }
 
 # subscriber を実行して「受信数 見えた publisher 数」を返す。  sub_run <コンテナ> <topic> <秒> [docker exec の引数...]

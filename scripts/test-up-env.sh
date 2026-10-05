@@ -13,7 +13,9 @@ cat > "$TMP/docker" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$STUB_LOG"
 if [ "${1:-}" = "compose" ]; then
-  echo "ENV SROS2_ENV=${SROS2_ENV:-} SROS2_STRATEGY=${SROS2_STRATEGY:-}" >> "$STUB_LOG"
+  echo "ENV SROS2_ENV=${SROS2_ENV:-} SROS2_STRATEGY=${SROS2_STRATEGY:-} KS_ROOT=${SROS2_KEYSTORE_ROOT:-}" >> "$STUB_LOG"
+  # STUB_FAIL_COMPOSE=1 のとき compose だけ失敗させる
+  if [ "${STUB_FAIL_COMPOSE:-0}" = "1" ]; then exit 1; fi
 fi
 if [ "${1:-}" = "ps" ]; then
   for arg in "$@"; do
@@ -43,7 +45,7 @@ run_case() {
   : > "$STUB_LOG"
   export STUB_LOG
   set +e
-  ERR="$(PATH="$TMP:$PATH" STUB_RUNNING="$running" SROS2_KEYSTORE_ROOT="$ks_root" SROS2_WORKSPACE_DIR="${WS_DIR:-$TMP/ws-none}" \
+  ERR="$(PATH="$TMP:$PATH" STUB_RUNNING="$running" STUB_FAIL_COMPOSE="${STUB_FAIL_COMPOSE:-0}" SROS2_KEYSTORE_ROOT="$ks_root" SROS2_WORKSPACE_DIR="${WS_DIR:-$TMP/ws-none}" \
     bash "$ROOT/scripts/up-env.sh" "$@" 2>&1 >/dev/null)"
   RC=$?
   set -e
@@ -65,10 +67,13 @@ run_case "" "$TMP/keystores" b
 [ "$RC" -eq 0 ] || fail "b: exit 0 のはずが $RC: $ERR"
 grep -q -- "-f docker-compose.yml -f docker-compose.sros2.yml" <<<"$LOG" || fail "b: override が付かない: $LOG"
 grep -q "ENV SROS2_ENV=b SROS2_STRATEGY=Permissive" <<<"$LOG" || fail "b: SROS2_ENV/STRATEGY が違う: $LOG"
+grep -q "docker-compose.sros2.yml up -d --build --force-recreate" <<<"$LOG" || fail "b: up -d --build --force-recreate の形でない: $LOG"
+grep -q "KS_ROOT=$TMP/keystores" <<<"$LOG" || fail "b: SROS2_KEYSTORE_ROOT が compose に渡らない: $LOG"
 
 run_case "" "$TMP/keystores" c
 [ "$RC" -eq 0 ] || fail "c: exit 0 のはずが $RC: $ERR"
 grep -q "ENV SROS2_ENV=c SROS2_STRATEGY=Enforce" <<<"$LOG" || fail "c: SROS2_ENV/STRATEGY が違う: $LOG"
+grep -q "docker-compose.sros2.yml up -d --build --force-recreate" <<<"$LOG" || fail "c: up -d --build --force-recreate の形でない: $LOG"
 
 # (c) a --arm → arm profile が付く
 run_case "" "$TMP/keystores" a --arm
@@ -100,6 +105,10 @@ run_case "" "$TMP/none" b
 [ "$RC" -eq 1 ] || fail "b(keystore なし): exit 1 のはずが $RC"
 grep -q "gen-keystore.sh b" <<<"$ERR" || fail "b(keystore なし): 生成コマンドの案内が無い: $ERR"
 no_compose "b(keystore なし)"
+run_case "" "$TMP/none" c
+[ "$RC" -eq 1 ] || fail "c(keystore なし): exit 1 のはずが $RC"
+grep -q "gen-keystore.sh c" <<<"$ERR" || fail "c(keystore なし): 生成コマンドの案内が無い: $ERR"
+no_compose "c(keystore なし)"
 
 # (g) b|c と --arm の同時指定 → exit 2（ros2arm は環境 A のまま混在するため）
 for e in b c; do
@@ -114,15 +123,38 @@ run_case "ros2arm" "$TMP/keystores" c
 [ "$RC" -eq 0 ] || fail "c(ros2arm 起動中): exit 0 のはずが $RC: $ERR"
 grep -q "ros2arm" <<<"$ERR" || fail "c(ros2arm 起動中): 警告が出ない: $ERR"
 
-# (i) c に切り替えるとき、環境 b が ./workspace に置いた鍵のコピーを削除する（b では残す）
-mkdir -p "$TMP/ws/sros2-keystore"
-touch "$TMP/ws/sros2-keystore/key.pem"
+# (i) 環境 b が ./workspace に置いた鍵のコピー（目印ファイルつき）の扱い
+mk_leak() { rm -rf "$TMP/ws"; mkdir -p "$TMP/ws/sros2-keystore"; touch "$TMP/ws/sros2-keystore/key.pem" "$TMP/ws/sros2-keystore/.sros2-generated"; }
+# b では残す
+mk_leak
 WS_DIR="$TMP/ws" run_case "" "$TMP/keystores" b
 [ "$RC" -eq 0 ] || fail "b(workspace の鍵): exit 0 のはずが $RC: $ERR"
 [ -f "$TMP/ws/sros2-keystore/key.pem" ] || fail "b: workspace の鍵のコピーが消えた"
+# c では compose の成功後に消す
+mk_leak
 WS_DIR="$TMP/ws" run_case "" "$TMP/keystores" c
 [ "$RC" -eq 0 ] || fail "c(workspace の鍵): exit 0 のはずが $RC: $ERR"
 [ ! -e "$TMP/ws/sros2-keystore" ] || fail "c: workspace の鍵のコピーが残っている"
 grep -q "削除" <<<"$ERR" || fail "c: 削除したことが stderr に出ない: $ERR"
+# a でも消す
+mk_leak
+WS_DIR="$TMP/ws" run_case "" "$TMP/keystores" a
+[ ! -e "$TMP/ws/sros2-keystore" ] || fail "a: workspace の鍵のコピーが残っている"
+# 目印がない同名のディレクトリ（ユーザーのもの）は消さない
+mk_leak
+rm "$TMP/ws/sros2-keystore/.sros2-generated"
+WS_DIR="$TMP/ws" run_case "" "$TMP/keystores" c
+[ -f "$TMP/ws/sros2-keystore/key.pem" ] || fail "c: 目印のない同名ディレクトリを消した"
+# compose が失敗したときは消さない（環境 b が残っているため）
+mk_leak
+STUB_FAIL_COMPOSE=1 WS_DIR="$TMP/ws" run_case "" "$TMP/keystores" c
+[ "$RC" -ne 0 ] || fail "c(compose 失敗): 失敗のはずが exit 0"
+[ -f "$TMP/ws/sros2-keystore/key.pem" ] || fail "c(compose 失敗): 鍵のコピーを消した"
+# 拒否された（ros2real 起動中・keystore なし）ときも消さない
+mk_leak
+WS_DIR="$TMP/ws" run_case "ros2real" "$TMP/keystores" c
+[ -f "$TMP/ws/sros2-keystore/key.pem" ] || fail "c(ros2real): 鍵のコピーを消した"
+WS_DIR="$TMP/ws" run_case "" "$TMP/none" c
+[ -f "$TMP/ws/sros2-keystore/key.pem" ] || fail "c(keystore なし): 鍵のコピーを消した"
 
 echo "OK: up-env guard script tests passed"

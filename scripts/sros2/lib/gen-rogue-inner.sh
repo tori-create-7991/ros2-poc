@@ -15,6 +15,8 @@ ENV_NAME="${1:?usage: gen-rogue-inner.sh <b|c> <case> <sros2-dir> [seconds]}"
 CASE="${2:?usage: gen-rogue-inner.sh <b|c> <case> <sros2-dir> [seconds]}"
 BASE="${3:?usage: gen-rogue-inner.sh <b|c> <case> <sros2-dir> [seconds]}"
 VALID_SECONDS="${4:-45}"
+case "$VALID_SECONDS" in *[!0-9]* | "") echo "秒数は数字だけ: $VALID_SECONDS" >&2; exit 2 ;; esac
+case "$ENV_NAME" in b | c) ;; *) echo "環境は b か c: $ENV_NAME" >&2; exit 2 ;; esac
 
 # shellcheck source=scripts/sros2/lib/common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -38,7 +40,7 @@ REAL_CA="$CA_DIR/ks/public/identity_ca.cert.pem"
 
 gen_valid() {
   new_key "$WORK/valid.key"
-  ( cd "$CA_DIR" && issue_cert "$WORK/valid.key" "$ENCLAVE" "$WORK/valid.pem" -days 30 )
+  ( cd "$CA_DIR" && issue_cert "$WORK/valid.key" "$ENCLAVE" "$WORK/valid.pem" -days 2 )
   make_rogue_dir "$ROGUE_DIR/valid" "$ENCLAVE" "$TMPL" "$WORK/valid.pem" "$WORK/valid.key" "$REAL_CA"
 }
 
@@ -65,6 +67,8 @@ gen_expired() {
   end="$(python3 -c "import datetime as d; print((d.datetime.now(d.timezone.utc)+d.timedelta(seconds=$VALID_SECONDS)).strftime('%Y%m%d%H%M%SZ'))")"
   ( cd "$CA_DIR" && issue_cert "$WORK/expired.key" "$ENCLAVE" "$WORK/expired.pem" -startdate "$start" -enddate "$end" )
   make_rogue_dir "$ROGUE_DIR/expired" "$ENCLAVE" "$TMPL" "$WORK/expired.pem" "$WORK/expired.key" "$REAL_CA"
+  # 期限の時刻（UNIX 秒）。試験側はこの時刻を過ぎるまで待つ（固定の sleep に頼らない）
+  echo "EXPIRES_EPOCH=$(python3 -c "import time; print(int(time.time()) + $VALID_SECONDS)")" >> "$ROGUE_DIR/expired/meta.env"
   echo "expired: ${VALID_SECONDS} 秒後（$end）に期限が切れる。それまでに提示側を起動し、期限後に検証側を起動すること。"
 }
 

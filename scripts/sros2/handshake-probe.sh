@@ -16,11 +16,12 @@ mkdir -p "$OUT"
 
 # shellcheck source=scripts/sros2/lib/probe.sh
 . scripts/sros2/lib/probe.sh
+trap 'cleanup_caps; wipe_if_requested' EXIT
 
 for c in "$LAB_A" "$LAB_B" "$DIAG"; do
   running "$c" || { echo "$c が起動していない" >&2; exit 1; }
 done
-bash scripts/sros2/gen-rogue.sh c all >/dev/null 2>&1 || true
+must_gen_rogue c all || exit 1
 
 # ros2lab-a の証明書に固有の行（PEM の 5 行目の base64。公開鍵の一部で、他の証明書とは一致しない。
 # 1 行目は DER の定型の先頭で、同じ形式の別の証明書にも一致してしまう）。

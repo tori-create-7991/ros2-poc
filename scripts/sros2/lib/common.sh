@@ -13,6 +13,15 @@ need_ros2() {
   command -v ros2 >/dev/null 2>&1 || { echo "ros2 CLI が見つからない" >&2; exit 1; }
 }
 
+# sed -i は GNU と BSD で書式が違うため、一時ファイルを経由して置き換える。  sed_inplace <式> <ファイル>
+sed_inplace() {
+  local expr="$1" file="$2" tmp
+  tmp="$(mktemp)"
+  sed "$expr" "$file" > "$tmp"
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
 # 発行台帳つきの CA 設定（カレントディレクトリ相対）を作る。
 #   $1: identity CA の秘密鍵  $2: identity CA の証明書  $3: CRL の有効日数
 # カレントに ca/ と openssl.cnf を作る。パスを相対にするのは、台帳ごと別の場所へ移しても使えるようにするため。

@@ -2,6 +2,7 @@
 
   python3 ledger.py check <リポジトリのルート>     検査（失敗なら終了コード 1）
   python3 ledger.py render <リポジトリのルート>    docs/sros2/defect-ledger.md の内容を標準出力へ
+  python3 ledger.py list <リポジトリのルート>      台帳の「ID<TAB>probe 名<TAB>題名」を 1 行ずつ標準出力へ（verify-env.sh が読む）
 
 検査する内容:
   - 必須欄、ID の形式と重複、列挙値、根拠が 1 件以上あること
@@ -39,6 +40,8 @@ BANNED = [
 def banned_patterns(root: Path) -> list:
     path = Path(os.environ.get("LEDGER_BANNED_FILE", root / ".plans/sros2-env-abc/banned-terms.txt"))
     extra = []
+    if not path.exists():
+        print("注: 追加の禁止語ファイルが無いため、一般的なパターンだけで検査する（手元の検査は局所ファイルで強くなる）", file=sys.stderr)
     if path.exists():
         extra = [l.strip() for l in path.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")]
     return BANNED + extra
@@ -92,6 +95,13 @@ def check(root: Path) -> list:
         for env in ("a", "b", "c"):
             if name not in expected["environments"][env]["results"]:
                 errors.append(f"expected-results: 環境 {env} に {name} が無い")
+    for name in checks:
+        c_res = expected["environments"]["c"]["results"].get(name)
+        if c_res != "PASS":
+            errors.append(f"expected-results: 環境 c の {name} は PASS でなければならない")
+        a_res = expected["environments"]["a"]["results"].get(name)
+        if a_res not in ("FAIL", "N/A"):
+            errors.append(f"expected-results: 環境 a の {name} は FAIL か N/A でなければならない")
     for d in defects:
         r = b.get(d["check"])
         verdict = r.get("verdict") if isinstance(r, dict) else r
@@ -165,13 +175,21 @@ def render(root: Path) -> str:
     return "\n".join(out)
 
 
+def list_probes(root: Path) -> str:
+    ledger, _ = load(root)
+    return "".join(f"{d['id']}\t{d['ground_truth_probe']}\t{d['title']}\n" for d in ledger["defects"])
+
+
 def main() -> int:
-    if len(sys.argv) != 3 or sys.argv[1] not in ("check", "render"):
+    if len(sys.argv) != 3 or sys.argv[1] not in ("check", "render", "list"):
         print(__doc__)
         return 2
     root = Path(sys.argv[2])
     if sys.argv[1] == "render":
         sys.stdout.write(render(root))
+        return 0
+    if sys.argv[1] == "list":
+        sys.stdout.write(list_probes(root))
         return 0
     errors = check(root)
     for e in errors:

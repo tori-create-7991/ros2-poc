@@ -19,10 +19,14 @@ jobs:
         run: |
           bash scripts/test-up-real.sh
           bash scripts/test-up-env.sh
+          bash scripts/test-entrypoint.sh
       - name: SROS2 ledger check
         run: |
           python3 -c 'import yaml' || python3 -m pip install pyyaml
           bash scripts/sros2/check-ledger.sh
+          bash scripts/sros2/check-ledger.sh --selftest
+      - name: python syntax
+        run: python3 -m py_compile scripts/sros2/lib/ledger.py scripts/sros2/lib/test_ledger.py sros2/tools/lab_pub.py sros2/tools/lab_sub.py
 
   dockerfile:
     runs-on: ubuntu-latest

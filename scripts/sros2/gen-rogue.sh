@@ -16,6 +16,10 @@ usage() {
 [ "$#" -ge 2 ] && [ "$#" -le 3 ] || usage
 case "$1" in b | c) ;; *) usage ;; esac
 case "$2" in valid | wrongca | selfsigned | expired | all) ;; *) usage ;; esac
+# 秒数は数字だけ（python のコード文字列へ展開されるため）
+if [ "$#" -eq 3 ]; then
+  case "$3" in *[!0-9]* | "") usage ;; esac
+fi
 
 # ros2 CLI があるホスト（= OpenSSL 3 系の ROS 環境）ならそのまま、無ければ使い捨てコンテナで実行する。
 # macOS の openssl は LibreSSL で挙動が違うため、ホストの openssl だけを理由に直接実行しない。

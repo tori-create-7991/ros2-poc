@@ -378,7 +378,7 @@ ros2lab は止まらない。シミュに戻すときは `bash scripts/up-arm.sh
 ```bash
 bash scripts/sros2/gen-keystore.sh c      # b / c は先に keystore を生成する（鍵は git に入れない）
 bash scripts/up-env.sh c                  # 環境 a|b|c に切り替えて ros2lab-a/b を起動し直す
-docker compose --profile diag up -d --build ros2diag   # 診断コンテナ（閉域のネットワークだけ）
+docker compose build ros2lab-a && docker compose --profile diag up -d --build ros2diag   # 診断コンテナ（閉域のネットワークだけ）
 bash scripts/verify-env.sh c              # その環境になっていることを確認する
 bash scripts/env-status.sh                # 起動中のコンテナの環境を表示
 ```
@@ -392,7 +392,7 @@ bash scripts/env-status.sh                # 起動中のコンテナの環境を
 ## 片付け
 
 ```bash
-docker compose --profile arm down  # ros2lab と ros2arm を停止・削除
+docker compose --profile arm --profile diag down  # ros2lab・ros2arm・診断コンテナ（ros2diag）を停止・削除
 bash scripts/down-real.sh            # 実機ドライバ ros2real を安全に停止・削除（ros2lab は残る）
 ```
 
