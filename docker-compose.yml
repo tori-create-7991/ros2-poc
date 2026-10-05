@@ -105,6 +105,27 @@ services:
     volumes:
       - ./workspace:/workspace
 
+  ros2diag:
+    # SROS2 の診断コンテナ。鍵なし・不正証明書の参加者を作って、各環境の挙動を確認する。
+    # scripts/verify-env.sh が使う。ros2-lab-net（internal）だけに接続し、ポートは公開しない。
+    # 不正証明書（sros2/rogue、gitignore 済み）はここにだけ read-only で渡し、./workspace は渡さない。
+    #   docker compose --profile diag up -d --build ros2diag
+    profiles: [diag]
+    build:
+      context: .
+      dockerfile: Dockerfile.diag
+    image: ros2diag:jazzy
+    container_name: ros2diag
+    hostname: ros2diag
+    tty: true
+    stdin_open: true
+    environment:
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    networks:
+      - lab
+    volumes:
+      - ./sros2/rogue:/sros2/rogue:ro
+
 networks:
   lab:
     # 他の compose プロジェクトから `docker network connect` で参照できるよう固定名にする

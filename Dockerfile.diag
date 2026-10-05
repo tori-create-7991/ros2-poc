@@ -1,0 +1,9 @@
+# 診断コンテナ（ros2diag）: ros2lab と同じ ROS 環境に、パケット取得と時刻操作を足したもの。
+# ros2lab:jazzy をベースにするため、先に `docker compose build ros2lab-a` でイメージを作っておくこと。
+FROM ros2lab:jazzy
+
+# tcpdump: 平文露出と認証ハンドシェイクの確認 / faketime: 期限切れ証明書の再現（代替手段）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tcpdump faketime \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*

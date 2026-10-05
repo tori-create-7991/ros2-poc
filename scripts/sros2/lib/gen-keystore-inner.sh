@@ -1,20 +1,16 @@
 #!/usr/bin/env bash
 # SROS2 keystore の生成本体。ros2 CLI と openssl だけに依存する（Docker に依存しない）。
 #   gen-keystore-inner.sh <b|c> <sros2 ディレクトリ>
-# 環境 C: identity CA と permissions CA を分離、証明書 90 日、CRL あり、RTPS ENCRYPT。
-# 環境 B: （誤設定の注入は Task 10 で追加）
+# 環境 C: identity CA と permissions CA を分離、証明書 90 日、失効エントリ入りの CRL、RTPS ENCRYPT。
+# 環境 B: （誤設定の注入は別 Task で追加）
 set -euo pipefail
 
 ENV_NAME="${1:?usage: gen-keystore-inner.sh <b|c> <sros2-dir>}"
 BASE="${2:?usage: gen-keystore-inner.sh <b|c> <sros2-dir>}"
 
-if ! command -v ros2 >/dev/null 2>&1 && [ -f /opt/ros/jazzy/setup.bash ]; then
-  set +u
-  # shellcheck disable=SC1091
-  . /opt/ros/jazzy/setup.bash
-  set -u
-fi
-command -v ros2 >/dev/null 2>&1 || { echo "ros2 CLI が見つからない" >&2; exit 1; }
+# shellcheck source=scripts/sros2/lib/common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+need_ros2
 
 # governance に Domain ID が焼き込まれる。ros2-poc は Domain 42 固定なので 42 で生成する。
 export ROS_DOMAIN_ID=42
@@ -25,6 +21,7 @@ CRL_DAYS=180      # CRL の nextUpdate。証明書より長くする（過ぎる
 POLICY="$BASE/policy/lab-$ENV_NAME.xml"
 KS_OUT="$BASE/keystores/$ENV_NAME"
 CA_OUT="$BASE/ca-private/$ENV_NAME"
+ROGUE_OUT="$BASE/rogue/$ENV_NAME"
 [ -f "$POLICY" ] || { echo "policy が無い: $POLICY" >&2; exit 1; }
 
 WORK="$(mktemp -d)"
@@ -32,7 +29,7 @@ trap 'rm -rf "$WORK"' EXIT
 cd "$WORK"
 
 # コンテナ名の一覧。enclave 名はコンテナ名の - を _ にしたもの（sros2 の enclave 名に - は使えない）。
-# policy の enclave path と一致させる
+# policy の enclave path と一致させる。
 CONTAINERS="ros2lab-a ros2lab-b"
 enclave_of() { echo "/lab/${1//-/_}"; }
 
@@ -47,7 +44,7 @@ sign_governance() {
 setup_c() {
   # identity CA を permissions CA から分離する（sros2 既定は同一の CA）
   rm ks/public/identity_ca.cert.pem ks/private/identity_ca.key.pem
-  openssl ecparam -name prime256v1 -genkey -noout -out ks/private/identity_ca.key.pem
+  new_key ks/private/identity_ca.key.pem
   openssl req -x509 -new -key ks/private/identity_ca.key.pem -subj "/CN=ros2-poc-identity-ca" \
     -days 365 -out ks/public/identity_ca.cert.pem
 
@@ -59,48 +56,17 @@ setup_c() {
 
   for c in $CONTAINERS; do ros2 security create_enclave ks "$(enclave_of "$c")" >/dev/null; done
 
-  # 証明書を CERT_DAYS 日で再発行する（sros2 は 3650 日固定）。openssl ca で台帳を持たせ、CRL を出せるようにする
-  mkdir ca
-  : > ca/index.txt
-  echo 1000 > ca/serial
-  echo 01 > ca/crlnumber
-  cat > ca/openssl.cnf <<CNF
-[ca]
-default_ca=CA_default
-[CA_default]
-database=$WORK/ca/index.txt
-new_certs_dir=$WORK/ca
-serial=$WORK/ca/serial
-crlnumber=$WORK/ca/crlnumber
-default_md=sha256
-policy=pol
-unique_subject=no
-default_crl_days=$CRL_DAYS
-private_key=$WORK/ks/private/identity_ca.key.pem
-certificate=$WORK/ks/public/identity_ca.cert.pem
-[pol]
-commonName=supplied
-[v3]
-basicConstraints=CA:FALSE
-keyUsage=digitalSignature
-CNF
+  # 証明書を CERT_DAYS 日で再発行する（sros2 は 3650 日固定）
+  init_ca_db ./ks/private/identity_ca.key.pem ./ks/public/identity_ca.cert.pem "$CRL_DAYS"
   for c in $CONTAINERS; do
     e="$(enclave_of "$c")"
-    d="ks/enclaves$e"
-    cn="${e//\//\\/}"
-    openssl req -new -key "$d/key.pem" -subj "/CN=$cn" -out "$c.csr"
-    openssl ca -config ca/openssl.cnf -extensions v3 -batch -in "$c.csr" -out "$d/cert.pem" \
-      -days "$CERT_DAYS" >/dev/null 2>&1
-    chmod 0600 "$d/key.pem"
+    issue_cert "ks/enclaves$e/key.pem" "$e" "ks/enclaves$e/cert.pem" -days "$CERT_DAYS"
+    chmod 0600 "ks/enclaves$e/key.pem"
   done
   chmod 0600 ks/private/*.pem
 
   # permissions を作り直す（証明書の有効期間を継承する）
   for c in $CONTAINERS; do ros2 security create_permission ks "$(enclave_of "$c")" "$POLICY" >/dev/null; done
-
-  # 空の CRL を発行し、全 enclave に crl.pem として置く（rmw_fastrtps は enclave の crl.pem を読む）
-  openssl ca -config ca/openssl.cnf -gencrl -out crl.pem >/dev/null 2>&1
-  for c in $CONTAINERS; do cp crl.pem "ks/enclaves$(enclave_of "$c")/crl.pem"; done
 }
 
 case "$ENV_NAME" in
@@ -108,18 +74,35 @@ case "$ENV_NAME" in
   b) echo "環境 b の生成は未実装" >&2; exit 1 ;;
 esac
 
+# --- 失効済み証明書（不正証明書の一種）: 正規 CA で発行してから失効させる ---
+# 雛形はコンテナ ros2lab-a の enclave。subject と permissions を合わせる。
+FIRST="$(echo "$CONTAINERS" | cut -d' ' -f1)"
+FIRST_E="$(enclave_of "$FIRST")"
+new_key revoked.key
+issue_cert revoked.key "$FIRST_E" revoked.pem -days "$CERT_DAYS"
+openssl ca -config openssl.cnf -revoke revoked.pem >/dev/null 2>&1
+make_rogue_dir "$WORK/rogue-revoked" "$FIRST_E" "ks/enclaves$FIRST_E" revoked.pem revoked.key ks/public/identity_ca.cert.pem
+
+# --- CRL ---
+# 環境 C: 失効エントリ入りの CRL を全 enclave に crl.pem として置く（rmw_fastrtps は enclave の crl.pem を読む）。
+openssl ca -config openssl.cnf -gencrl -out crl.pem >/dev/null 2>&1
+if [ "$ENV_NAME" = "c" ]; then
+  for c in $CONTAINERS; do cp crl.pem "ks/enclaves$(enclave_of "$c")/crl.pem"; done
+fi
+
 # --- 出力 ---
-rm -rf "$KS_OUT" "$CA_OUT"
-mkdir -p "$KS_OUT/containers" "$CA_OUT"
+rm -rf "$KS_OUT" "$CA_OUT" "$ROGUE_OUT"
+mkdir -p "$KS_OUT/containers" "$CA_OUT" "$ROGUE_OUT"
 chmod 0700 "$CA_OUT"
 
 # コンテナごとに、自分の enclave だけをシンボリックリンクを実体にして置く（-L）
 : > "$KS_OUT/env.sh"
 for c in $CONTAINERS; do
   dst="$KS_OUT/containers/$c"
+  src="ks/enclaves$(enclave_of "$c")"
   mkdir -p "$dst"
   for f in cert.pem key.pem identity_ca.cert.pem permissions_ca.cert.pem governance.p7s permissions.p7s crl.pem; do
-    [ -f "ks/enclaves$(enclave_of "$c")/$f" ] && cp -L "ks/enclaves$(enclave_of "$c")/$f" "$dst/$f"
+    [ -f "$src/$f" ] && cp -L "$src/$f" "$dst/$f"
   done
   chmod 0600 "$dst/key.pem"
   echo "PLACE_AT=$(enclave_of "$c")" > "$dst/enclave.env"
@@ -127,10 +110,13 @@ for c in $CONTAINERS; do
   echo "export $var=$(enclave_of "$c")" >> "$KS_OUT/env.sh"
 done
 
-# CA の秘密鍵と台帳は、コンテナに渡さない場所へ
-cp -r ks/private "$CA_OUT/private"
-[ -d ca ] && cp -r ca "$CA_OUT/ca"
-[ -f crl.pem ] && cp crl.pem "$CA_OUT/crl.pem"
+# CA の秘密鍵と発行台帳は、コンテナに渡さない場所へ（後から不正証明書を作るため相対パスのまま保存する）
+mkdir -p "$CA_OUT/ks"
+cp -r ks/private ks/public "$CA_OUT/ks/"
+cp -r ca openssl.cnf crl.pem "$CA_OUT/"
 chmod -R go-rwx "$CA_OUT"
 
-echo "生成した: $KS_OUT（コンテナ用）と $CA_OUT（CA の秘密鍵。コンテナには渡さない）"
+# 失効済みの不正証明書（診断コンテナだけに渡す）
+cp -r "$WORK/rogue-revoked" "$ROGUE_OUT/revoked"
+
+echo "生成した: $KS_OUT（コンテナ用）、$CA_OUT（CA の秘密鍵。コンテナには渡さない）、$ROGUE_OUT/revoked（失効済みの不正証明書）"
