@@ -172,7 +172,7 @@ fi
 [ "$rc" = 0 ] || fail_env "シナリオを展開できない（rc=$rc）"
 # 送るコマンドは scenario.py が作る 2 種類の形に限る（YAML の値は数値に変換済み。生成側の検証が漏れても
 # ここで止める）。bash -c の文字列に入るので、シェルの特殊文字が混ざったら実行しない
-CMD_RE='^ros2 (topic pub|action send_goal) [-A-Za-z0-9_ /.:{},"#]+$'
+CMD_RE='^ros2 (topic pub|action send_goal) [][A-Za-z0-9_ /.:{},"#-]+$'
 while IFS=$'\t' read -r _ _ _ cmd; do
   [[ "$cmd" =~ $CMD_RE ]] || fail_env "想定外の形のコマンドなので実行しない: $cmd"
 done < "$RUN_HOST/commands.tsv"

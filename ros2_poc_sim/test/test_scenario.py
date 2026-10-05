@@ -148,3 +148,14 @@ def test_display_lines_show_values_without_joint_names():
     assert lines[0].startswith('$ ros2 topic pub -w 1 --times 3 -r 2 /crane_x7_arm_controller/joint_trajectory')
     assert lines[1] == '    positions: [0, 0, 0, 0, 0, 0, 0] @1.5s  [0.5, 0.3, 0, -1.2, 0, -0.5, 0] @3s'
     assert S.display_lines(grip)[1] == '    crane_x7_gripper_finger_a_joint -> 0 rad'
+
+
+def test_generated_commands_pass_run_scenario_check():
+    """run-scenario.sh の送信前検査（CMD_RE）を、同梱シナリオの全コマンドが通ること。"""
+    import re
+    sh = (Path(__file__).resolve().parents[2] / 'scripts' / 'run-scenario.sh').read_text(encoding='utf-8')
+    pattern = re.search(r"^CMD_RE='(.*)'$", sh, re.M).group(1)
+    for name in ('default', 'fail_demo', 'examples'):
+        for s in S.load_scenario(SCENARIOS / f'{name}.yaml', repeat=2):
+            cmd = S.to_command(s)[1]
+            assert re.fullmatch(pattern, cmd), cmd

@@ -87,4 +87,17 @@ STUB_EXEC_FAIL='mkdir /tmp/run-scenario.lock' run_case "$ALL"
 grep -q "別の run-scenario が実行中" <<<"$ERR" || fail "ロック: 案内が無い: $ERR"
 if grep -qE "scenario_observer|x11grab -t|ros2 launch" <<<"$LOG"; then fail "ロック失敗で記録・シミュが動いた: $LOG"; fi
 
+# 送信前のコマンド検査: scenario.py が作る形は通し、シェルの特殊文字が混ざったものは止める
+CMD_RE="$(sed -n "s/^CMD_RE='\(.*\)'$/\1/p" "$ROOT/scripts/run-scenario.sh")"
+[ -n "$CMD_RE" ] || fail "run-scenario.sh から CMD_RE を取り出せない"
+ok_cmds=(
+  'ros2 topic pub -w 1 --times 3 -r 2 /crane_x7_arm_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory "{joint_names: [crane_x7_shoulder_fixed_part_pan_joint, crane_x7_wrist_joint], points: [{positions: [0.5, -1.2], time_from_start: {sec: 1, nanosec: 500000000}}]}"'
+  'ros2 action send_goal /crane_x7_gripper_controller/gripper_cmd control_msgs/action/ParallelGripperCommand "{command: {name: [crane_x7_gripper_finger_a_joint], position: [1.047198]}}"'
+)
+for c in "${ok_cmds[@]}"; do [[ "$c" =~ $CMD_RE ]] || fail "正しいコマンドが検査で止まる: $c"; done
+# shellcheck disable=SC2016  # 展開させない文字列そのものを検査する
+bad_cmds=('ros2 topic pub /x std_msgs/msg/String "{data: a}"; rm -rf /' 'ros2 topic pub /x "$(id)"' 'ros2 topic pub /x `id`'
+          'ros2 run demo_nodes_cpp talker' "ros2 topic pub /x 'a'" 'ros2 topic pub /x a | sh' 'ros2 topic pub /x a > /tmp/x')
+for c in "${bad_cmds[@]}"; do if [[ "$c" =~ $CMD_RE ]]; then fail "危険なコマンドが検査を通る: $c"; fi; done
+
 echo "OK: run-scenario guard tests passed"
