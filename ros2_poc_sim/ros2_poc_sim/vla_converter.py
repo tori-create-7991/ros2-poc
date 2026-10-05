@@ -41,6 +41,7 @@ IK_SERVICE = '/compute_ik'
 IK_TIMEOUT_SEC = 3.0
 GRIPPER_TIMEOUT_SEC = 15.0
 SUBSCRIBER_WAIT_SEC = 10.0
+POSE_WAIT_SEC = 15.0
 RECORD_LIMIT = 2000
 
 
@@ -81,16 +82,28 @@ class RosIO:
             return list(self._records)
 
     def current_joints(self):
-        with self._lock:
-            return dict(self._joints) if self._joints else None
+        # 起動直後は最初の /joint_states がまだ届いていない。POSE_WAIT_SEC まで待つ
+        deadline = time.time() + POSE_WAIT_SEC
+        while True:
+            with self._lock:
+                if self._joints:
+                    return dict(self._joints)
+            if time.time() >= deadline:
+                return None
+            time.sleep(0.1)
 
     def current_pose(self):
-        try:
-            t = self.tf_buffer.lookup_transform(self.base_frame, self.ee_frame, Time(),
-                                                timeout=RclDuration(seconds=1.0))
-        except Exception as e:   # tf2 の例外は多種。取れなければ rejected にする
-            self.node.get_logger().warning(f'TF {self.base_frame}→{self.ee_frame} が取れない: {e}')
-            return None
+        # 起動直後は /tf の Discovery が終わっておらず、すぐには取れない。POSE_WAIT_SEC まで 1 秒ずつ待って再試行する
+        deadline = time.time() + POSE_WAIT_SEC
+        while True:
+            try:
+                t = self.tf_buffer.lookup_transform(self.base_frame, self.ee_frame, Time(),
+                                                    timeout=RclDuration(seconds=1.0))
+                break
+            except Exception as e:   # tf2 の例外は多種。取れなければ rejected にする
+                if time.time() >= deadline:
+                    self.node.get_logger().warning(f'TF {self.base_frame}→{self.ee_frame} が取れない: {e}')
+                    return None
         p, q = t.transform.translation, t.transform.rotation
         return (p.x, p.y, p.z), (q.x, q.y, q.z, q.w)
 

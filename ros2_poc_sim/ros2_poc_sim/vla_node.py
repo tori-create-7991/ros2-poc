@@ -17,6 +17,7 @@ import threading
 import time
 
 import rclpy
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from rclpy.utilities import remove_ros_args
@@ -85,6 +86,13 @@ class VlaNode(Node):
             return self._acks.get(seq)
 
 
+def _spin(executor):
+    try:
+        executor.spin()
+    except ExternalShutdownException:
+        pass     # 終了処理の rclpy.try_shutdown() による正常な停止
+
+
 def parse_args(argv):
     ap = argparse.ArgumentParser(description='VLA ノード: 画像 + 指示 → /act → /vla/action → /vla/ack')
     ap.add_argument('--instruction', required=True, help='VLA への指示文（例: "move up"）')
@@ -111,7 +119,9 @@ def main(argv=None):
         return 64
     rclpy.init()
     node = VlaNode(a.image_topic)
-    spinner = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    spinner = threading.Thread(target=_spin, args=(executor,), daemon=True)
     spinner.start()
     try:
         if not node.wait_converter(DISCOVERY_WAIT_SEC):
@@ -134,8 +144,11 @@ def main(argv=None):
     except KeyboardInterrupt:
         return 130
     finally:
-        node.destroy_node()
+        # 順序が大事: 先に shutdown して spin を終わらせ、スレッドを待ってからノードを破棄する
+        # （spin 中に破棄すると "terminate called without an active exception" で異常終了する）
         rclpy.try_shutdown()
+        spinner.join(timeout=5.0)
+        node.destroy_node()
 
 
 if __name__ == '__main__':
