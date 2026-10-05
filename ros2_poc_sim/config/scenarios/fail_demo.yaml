@@ -1,0 +1,13 @@
+# 判定が FAIL を出せることの確認用: pose_a を送るが、期待値は home のままにする
+description: 意図的に FAIL させるデモ
+steps:
+  - name: home
+    positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    time_from_start: 3
+  - name: wrong_expect
+    positions: [0.5, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0]
+    time_from_start: 3
+    expect: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  - name: home_again
+    positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    time_from_start: 3

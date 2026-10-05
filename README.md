@@ -15,6 +15,8 @@ noVNC と通常の VNC の比較、GPU 直結（X11 共有 + `--gpus all`）の�
 VLA（OpenVLA）で動かす場合の調査メモは [docs/research/](docs/research/README.md) に置いている。
 Gazebo の仮想カメラを実カメラ（usb_cam / RealSense D435）と同じトピック名・型・フレームで出す
 カメラプロファイルは [docs/sim-camera-profile.md](docs/sim-camera-profile.md) にまとめている。
+ターミナルから関節指令を順に送り、仮想カメラの映像で指令どおり動いたかを判定して録画する
+`scripts/run-scenario.sh` は [docs/sim-scenario-recording.md](docs/sim-scenario-recording.md) にまとめている。
 
 ## 前提
 
@@ -206,6 +208,9 @@ docker compose exec ros2lab-a bash -lc 'ros2 topic echo --once /joint_states'
 ```
 
 `trajectory_msgs` は ros-base に含まれるので、`ros2lab` 側に追加インストールは不要。
+
+複数の指令を順に送って判定・録画まで 1 コマンドで行うには、デモ 2 を止めてから `bash scripts/run-scenario.sh --start-sim`
+（仮想カメラ付きで起動し直す。[docs/sim-scenario-recording.md](docs/sim-scenario-recording.md)）。
 
 ### 注意
 
