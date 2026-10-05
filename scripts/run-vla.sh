@@ -45,8 +45,10 @@ re_key='^[A-Za-z0-9_.-]{1,100}$'
 match() { (export LC_ALL=C; [[ "$1" =~ $2 ]]); }
 { match "$INSTRUCTION" "$re_instruction" && [[ "$INSTRUCTION" =~ [^\ ] ]]; } \
   || { echo "--instruction は英数字・空白・.,_!?- の 1〜200 文字" >&2; exit 64; }
-[[ "$STEPS" =~ ^[0-9]+$ ]] && [ "$STEPS" -ge 1 ] && [ "$STEPS" -le 100 ] \
-  || { echo "--steps は 1〜100" >&2; exit 64; }
+if ! { [[ "$STEPS" =~ ^[0-9]+$ ]] && [ "$STEPS" -ge 1 ] && [ "$STEPS" -le 100 ]; }; then
+  echo "--steps は 1〜100" >&2
+  exit 64
+fi
 [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || { echo "--timeout は秒数（整数）" >&2; exit 64; }
 if [ -n "$ENDPOINT" ]; then
   match "$ENDPOINT" "$re_endpoint" \
@@ -93,7 +95,7 @@ if ! srv "mkdir $LOCK" < /dev/null > /dev/null 2>&1; then
 fi
 CONVERTER='[v]la_converter'
 NODE='[v]la_node'
-# shellcheck disable=SC2329  # trap から呼ぶ
+# shellcheck disable=SC2317,SC2329  # trap から呼ぶ（shellcheck の版によって指摘の番号が違う）
 cleanup() {
   # docker exec は（TTY なしでは）シグナルを転送しないので、Ctrl-C のあとコンテナ内に残らないよう VLA ノードも止める
   srv "pkill -INT -f '$NODE'; pkill -INT -f '$CONVERTER'; rm -r $LOCK" < /dev/null > /dev/null 2>&1 || true
