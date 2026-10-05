@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+      - name: guard tests (docker stub)
+        run: bash scripts/test-up-real.sh
+
+  dockerfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: error
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile.arm
+          failure-threshold: error
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile.real
+          failure-threshold: error
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: compose config (all profiles)
+        run: docker compose --profile "*" config -q
+
+  public-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: no personal paths / private addresses
+        run: |
+          # コンテナ既定ユーザー /home/ubuntu は公開して問題ないため除外する
+          hits=$(git grep -nIE '/Users/[A-Za-z0-9._-]+|/home/[a-z][A-Za-z0-9._-]*/|\b192\.168\.[0-9]+\.[0-9]+|\b10\.[0-9]+\.[0-9]+\.[0-9]+' -- . ':!.github/workflows/ci.yml' ':!AGENTS.md' | grep -v '/home/ubuntu/' || true)
+          if [ -n "$hits" ]; then
+            echo "$hits"
+            echo "::error::personal path or private address found (repo is PUBLIC)"; exit 1
+          fi
+      - name: LICENSE and AGENTS.md exist
+        run: test -f LICENSE && test -f AGENTS.md
