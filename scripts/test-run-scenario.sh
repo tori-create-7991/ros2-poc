@@ -11,6 +11,7 @@ trap 'rm -rf "$TMP"' EXIT
 #   docker exec ...              STUB_EXEC_FAIL（正規表現）に一致すれば STUB_EXEC_RC（既定 2）で失敗。
 #                                pgrep は既定で「プロセス無し」。STUB_LEFTOVER=1 なら起動前から有り、
 #                                STUB_STUCK=1 なら記録の起動後ずっと有り（止まらない）
+#   test -d /tmp/run-vla.lock    STUB_VLA_LOCK=1 のとき「ある」（ros2server が起動中のときだけ見に行く）
 #   docker inspect（ros2poc.env）  ros2lab-a は STUB_LAB_ENV、ros2arm は STUB_ARM_ENV を返す（未設定なら a、空文字なら空 = ラベル導入前）
 #   /workspace/runs/<ts>         $STUB_WS/runs/<ts> に対応させ、記録・判定の成果物を置く
 cat > "$TMP/docker" <<'STUB'
@@ -48,6 +49,7 @@ case "$args" in
   *"pgrep -f '[a]rm_with_camera"*) [ "${STUB_SIM_RUNNING:-0}" = camera ] && exit 0; exit 1 ;;
   *"pgrep -f '[r]os2 launch"*) [ "${STUB_SIM_RUNNING:-0}" = other ] && exit 0; exit 1 ;;
   *"grep -c 'Node name"*) echo "${STUB_CONTROLLERS:-1}" ;;
+  *"test -d /tmp/run-vla.lock"*) [ "${STUB_VLA_LOCK:-0}" = 1 ] && exit 0; exit 1 ;;
   *"cat /tmp/run-scenario.lock/owner"*) echo "${STUB_OWNER:-}" ;;
   *pgrep*)
     if [ "${STUB_LEFTOVER:-0}" = 1 ]; then exit 0; fi
@@ -146,6 +148,19 @@ STUB_EXEC_FAIL='scenario_cli doctor' run_case "$ALL"
 [ "$RC" -eq 2 ] || fail "doctor 失敗は exit 2 のはずが $RC: $ERR"
 grep -q "前提が揃っていない" <<<"$ERR" || fail "doctor: 案内が無い: $ERR"
 if grep -q "mkdir -p /workspace/runs" <<<"$LOG"; then fail "doctor 失敗で出力先が作られた: $LOG"; fi
+
+# run-vla が動いている（ros2server の /tmp/run-vla.lock あり）→ 同じアームに指令が混ざるので断る（排他は双方向）。
+# ロックは取らない・記録も始めない。ros2server が起動していなければ見に行かない
+STUB_VLA_LOCK=1 run_case "$ALL ros2server"
+[ "$RC" -eq 2 ] || fail "run-vla 実行中は exit 2 のはずが $RC: $ERR"
+grep -q "run-vla が実行中" <<<"$ERR" || fail "run-vla 実行中: 案内が無い: $ERR"
+grep -q "^exec ros2server test -d /tmp/run-vla.lock" <<<"$LOG" || fail "run-vla 実行中: ロックを見に行っていない: $LOG"
+if grep -qE "mkdir /tmp/run-scenario.lock|scenario_observer --out|x11grab" <<<"$LOG"; then fail "run-vla 実行中なのにロック・記録が動いた: $LOG"; fi
+STUB_VLA_LOCK=1 run_case "$ALL"
+if grep -q "run-vla.lock" <<<"$LOG"; then fail "ros2server が無いのに run-vla のロックを見に行った: $LOG"; fi
+STUB_VLA_LOCK=0 run_case "$ALL ros2server"
+[ "$RC" -eq 0 ] || fail "run-vla が動いていなければ実行できるはずが $RC: $ERR"
+sent || fail "run-vla が動いていないのに指令が送られない"
 
 # ロックが取れない・記録プロセスが動いている → 実行中として exit 2。他人のロックは外さない
 STUB_EXEC_FAIL='mkdir /tmp/run-scenario.lock' STUB_LEFTOVER=1 run_case "$ALL"
