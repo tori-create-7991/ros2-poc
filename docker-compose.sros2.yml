@@ -62,7 +62,8 @@ services:
 
   # ros2arm（アームシミュ）: ノードは ubuntu（uid 1000）で動き、ベースイメージの /entrypoint.sh（supervisord でデスクトップを
   # 起動）を持つので、ros2lab と違う点が 3 つある。profile arm のサービス。環境 b / c では scripts/up-env.sh の --arm を付ける。
-  #  - SROS2_NEXT=/entrypoint.sh: 鍵を置いたあと、ベースイメージの entrypoint に引き継ぐ（command は元の CMD のまま）。
+  #  - SROS2_NEXT=/entrypoint.sh: 鍵を置いたあと、ベースイメージの entrypoint に引き継ぐ。ベースイメージ（tiryoh/ros2-desktop-vnc）は
+  #    ENTRYPOINT が `/bin/bash -c /entrypoint.sh` で CMD は無い（docker inspect で確認）ので、command は何も渡さなくてよい。
   #  - SROS2_CHOWN=1000:1000 と tmpfs の uid/gid: 鍵を ubuntu だけが読めるようにする（root のままだとノードが鍵を読めない）。
   #  - SROS2_ENV_FILE=/run/sros2-env.sh: デスクトップの端末はコンテナの ENV を継承しないので、~/.bashrc が読む環境ファイルを書く。
   ros2arm:

@@ -165,6 +165,13 @@ run_case "ros2arm ros2server" "$TMP/keystores" c --arm --vla
 [ "$RC" -eq 0 ] || fail "c(両方起動中 + 両方指定): exit 0 のはずが $RC: $ERR"
 if grep -q "混在" <<<"$ERR"; then fail "c(指定済み): 警告が出た: $ERR"; fi
 
+# 環境 a に戻すときも警告する（ros2arm / ros2server は前の環境のまま残り、ros2lab と通信できなくなる）
+run_case "ros2arm" "$TMP/keystores" a
+[ "$RC" -eq 0 ] || fail "a(ros2arm 起動中): exit 0 のはずが $RC: $ERR"
+grep -q "ros2arm.*--arm" <<<"$ERR" || fail "a(ros2arm 起動中): --arm の警告が出ない: $ERR"
+run_case "ros2arm ros2server" "$TMP/keystores" a --arm --vla
+if grep -q "混在" <<<"$ERR"; then fail "a(指定済み): 警告が出た: $ERR"; fi
+
 # (i) 環境 b が ./workspace に置いた鍵のコピー（目印ファイルつき）の扱い
 mk_leak() { rm -rf "$TMP/ws"; mkdir -p "$TMP/ws/sros2-keystore"; touch "$TMP/ws/sros2-keystore/key.pem" "$TMP/ws/sros2-keystore/.sros2-generated"; }
 # b では残す

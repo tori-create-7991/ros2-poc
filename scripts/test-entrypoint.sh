@@ -156,11 +156,13 @@ run "$TMP/full" ROS_SECURITY_ENABLE=true SROS2_CHOWN="$me"
 for bad in 'root;id' '$(id)' 'a b' '-R' '..'; do
   run "$TMP/full" ROS_SECURITY_ENABLE=true SROS2_CHOWN="$bad"
   [ "$RC" -eq 1 ] || fail "SROS2_CHOWN='$bad': exit 1 のはずが $RC"
-  grep -q "SROS2_CHOWN" <<<"$ERR" || fail "SROS2_CHOWN='$bad': 説明が無い: $ERR"
+  # 値の検査で止まっていること（chown に渡る前）。検査を外しても chown の失敗で exit 1 になるので、メッセージで区別する
+  grep -q "SROS2_CHOWN の値が不正" <<<"$ERR" || fail "SROS2_CHOWN='$bad': 値の検査で止まっていない: $ERR"
 done
 # 存在しないユーザーなら chown が失敗して起動しない（鍵が読めないまま「健全」に見えるのを防ぐ）
 run "$TMP/full" ROS_SECURITY_ENABLE=true SROS2_CHOWN="no-such-user-xyz"
 [ "$RC" -eq 1 ] || fail "存在しないユーザー: exit 1 のはずが $RC"
+grep -q "所有者を変えられない" <<<"$ERR" || fail "存在しないユーザー: chown 失敗の説明が無い: $ERR"
 
 # 5) SROS2 無効 → 鍵が無くても素通し
 run "$TMP/none"

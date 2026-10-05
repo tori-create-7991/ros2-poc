@@ -12,17 +12,20 @@ ROS_SECURITY_ENCLAVE_OVERRIDE で 1 つの enclave を共有する。permissions
   標準以外のサービスを持つ匿名ノードがあれば、黙って落とさずエラーにする。
 
 使い方（ros2arm でシミュを起動したまま、同じ DDS ドメインで）:
-  ros2 security generate_policy live.xml
-  python3 scripts/sros2/lib/sim_policy.py live.xml --enclave /lab/ros2arm --exclude '^(vla_|_ros2cli_)' \
-      --self-clients --denials sim-denials.log > arm-enclave.xml    # --denials: 下の「反復」を参照
-  python3 scripts/sros2/lib/sim_policy.py live.xml --enclave /lab/ros2server --include '^(vla_|transform_listener_impl)' \
-      --extra subscribe:/camera/color/image_raw --extra publish:/vla/action --extra subscribe:/vla/ack \
-      --std-node vla_node --anon-std > server-enclave.xml
+  ros2 security generate_policy live-graph.xml
+  # sros2/policy/lab-c.xml の ros2arm / ros2server は、コミット済みの入力（sros2/policy/sim-inputs/）から次のコマンドで作ってある。
+  # ros2_poc_sim/test/test_sim_policy.py がこの再生成の結果とコミット済みの lab-c.xml の一致を検査する。
+  D=sros2/policy/sim-inputs
+  python3 scripts/sros2/lib/sim_policy.py $D/live-graph.xml --enclave /lab/ros2arm --exclude '^(vla_|_ros2cli_)' \\
+      --self-clients --extra-file $D/denials.txt
+  python3 scripts/sros2/lib/sim_policy.py $D/live-graph.xml --enclave /lab/ros2server --include '^(vla_|transform_listener_impl)' \\
+      --extra subscribe:/camera/color/image_raw --extra publish:/vla/action --extra subscribe:/vla/ack \\
+      --std-node vla_node --anon-std --extra-file $D/denials.txt
 出力の <enclave> を sros2/policy/lab-c.xml に入れる。
 
 反復: 稼働中のグラフには短命のプロセス（controller の spawner）や起動時だけ作られるクライアントが載らない。
 そのポリシーで環境 c を起動し、Fast DDS の拒否ログ（"topic not found in allow rule"）を --denials に渡して
-足りない分を足し、拒否が無くなるまで繰り返す。
+足りない分を足し、拒否が無くなるまで繰り返す。足した分は sim-inputs/denials.txt に残す（--extra-file）。
 """
 import argparse
 import re
@@ -142,6 +145,7 @@ def main(argv=None):
     ap.add_argument('--include', help='含めるノード名の正規表現')
     ap.add_argument('--exclude', help='除くノード名の正規表現')
     ap.add_argument('--extra', action='append', default=[], help='live に無いものを足す（publish|subscribe:<トピック名> / reply|request:<サービス名>）')
+    ap.add_argument('--extra-file', action='append', default=[], help='--extra を 1 行 1 件で書いたファイル（# 以降はコメント）。拒否ログから集めた不足分を残すのに使う')
     ap.add_argument('--denials', action='append', default=[], help='拒否ログ（Fast DDS の "topic not found in allow rule"）から不足分を足す')
     ap.add_argument('--self-clients', action='store_true', help='このコンテナが提供するサービスを、このコンテナも呼べるようにする（短命のクライアントはグラフに載らないため）')
     ap.add_argument('--anon-std', action='store_true', help='匿名ノード（ros2 CLI など）の標準サービスを */<名前> のパターンで足す')
@@ -153,6 +157,9 @@ def main(argv=None):
     if anon:
         sys.exit('標準のサービス以外（独自のサービス・トピック）を持つ匿名ノードがある（名前が変わるので列挙できない）: ' + ', '.join(f'{n}:{s}' for n, s in anon))
     extras = list(a.extra) + [f'{v}:{n}' for path in a.denials for v, n in denials(path)]
+    for path in a.extra_file:
+        with open(path, encoding='utf-8') as f:
+            extras += [ln.strip() for ln in f if ln.strip() and not ln.lstrip().startswith('#')]
     print(render(a.enclave, topics, services, extras, a.std_node, a.anon_std, a.self_clients))
     print(f'対象ノード {len(seen)} 個: {", ".join(sorted(seen))}', file=sys.stderr)
     return 0

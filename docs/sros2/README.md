@@ -101,6 +101,8 @@ bash scripts/sros2/wipe-rogue.sh          # 不正証明書を削除する
 ```bash
 bash scripts/sros2/gen-keystore.sh c
 bash scripts/up-env.sh c --arm --vla     # ros2lab-a/b と ros2arm・ros2server・vla-server を環境 c で起動し直す
+# 注意: SROS2 の環境（b / c）では scripts/up-arm.sh を使わない（素の docker compose で ros2arm が環境 a で作り直され、混在する。
+#       ros2lab-a が b / c のときは up-arm.sh が案内して止まる）。環境 a に戻すときも --arm --vla を付ける
 # ros2arm のデスクトップ（noVNC）の端末、または docker exec -u ubuntu ros2arm で、シミュを起動する（環境変数は自動で入る）
 bash scripts/run-vla.sh --instruction "move down" --steps 2
 ```
@@ -126,9 +128,28 @@ permissions はノードの和集合になる。`sros2/policy/lab-c.xml` の `/l
   パラメータ・ログ系サービス（`describe_parameters` など）だけ `*/<サービス名>` のパターン。ノード名ごとの列挙は次の起動で外れるため。
 - 稼働中のグラフには、短命のプロセス（controller の `spawner`）や起動時だけ作られるクライアントが載らない。拒否ログを
   `sim_policy.py` の `--denials` に渡して足りない分を足し、拒否が無くなるまで繰り返した（実測は下）。
-- グラフに現れない（オンデマンドで作られる）エンドポイントは拒否され、そのノードが落ちる。見つかったら生成し直す。
+- 生成の入力は `sros2/policy/sim-inputs/`（稼働中のグラフ `live-graph.xml` と、拒否ログから足した分 `denials.txt`）にコミットしてある。
+  `ros2_poc_sim/test/test_sim_policy.py` が、この入力から再生成した結果と `lab-c.xml` の一致を検査する（手で編集して食い違うと CI が落ちる）。
+- グラフに現れない（オンデマンドで作られる）エンドポイントは拒否され、そのノードが落ちる。見つかったら次の手順で生成し直す。
+
+**ポリシーが足りないとき（症状 → 確認 → 再生成）**
+
+```bash
+# 1. 症状: 環境 c で ros2arm のノードが "process has died" で落ちる、または新しい機能が動かない。
+#    シミュを起動した端末の出力（ファイルに残すなら `ros2 launch ... > sim.log 2>&1`）に Fast DDS の拒否が出ている:
+grep -E "not found in allow rule" sim.log | head                      # 例: rr/controller_manager/load_controllerReply topic not found in allow rule
+# 2. 拒否を足す。sim_policy.denials() が読める形（<publish|subscribe|reply|request>:<名前>）にして、
+#    sros2/policy/sim-inputs/denials.txt に足す（ros2arm / ros2server どちらのログも同じ形式）:
+python3 -c "import sys; sys.path.insert(0, 'scripts/sros2/lib'); import sim_policy as S; print(*[f'{v}:{n}' for v, n in S.denials('sim.log')], sep='\n')"
+# 3. sim_policy.py の先頭に書いた 2 つのコマンドで enclave を作り直し、sros2/policy/lab-c.xml の該当部分を置き換える
+# 4. 反映: bash scripts/sros2/gen-keystore.sh c && bash scripts/up-env.sh c --arm --vla（反映後に拒否が 0 になるまで繰り返す）
+```
 - `ros2lab-a/b` の権限（トピック 6 件、ワイルドカードなし、default DENY）は変わらない。`verify-env.sh c` の C10 はこちらを見る。
 - 環境 c の `ros2arm` に ROS CLI（`ros2 topic hz` など）で入っても、CLI の購読は許可されていない（`ros2server` からは許可済みの範囲で使える）。
+- **鍵の読み取り**: `ros2arm` の VNC デスクトップ・noVNC の端末・Gazebo / MoveIt など全プロセスが同じ `ubuntu`（uid 1000）で動き、
+  enclave は 1 つを共有するので、端末からも自分の enclave の鍵は読める（ノード単位の分離は無い）。CA の秘密鍵と他コンテナの鍵は見えない。
+  `verify-env.sh` の C12 / C13 は `ros2lab-a` だけを検査し、`ros2arm` / `ros2server` の鍵の所有者・モードは検査対象に入れていない。
+- `*/set_parameters` と `*/set_parameters_atomically`（書き込み系）も、名前が変わるノードのためにパターンで許可している。読み取り系だけに絞れるかは未検討。
 
 実測（Colima 4 CPU、`ros2arm` は CPU 2 つに制限、Fast DDS 2.14.6）:
 
@@ -145,9 +166,11 @@ permissions はノードの和集合になる。`sros2/policy/lab-c.xml` の `/l
   （`--spin-time 15` で見える）。`run-vla.sh` は環境 a 以外で自動的に延ばす。
 - **画像の購読は RELIABLE**: 約 900KB の画像を暗号化して別コンテナへ送るとき、BEST_EFFORT では落ちた断片が再送されず、
   フレームが 1 枚も完成しないことがあった。`vla_node` は既定で RELIABLE（仮想カメラの QoS が reliable）。
-- **短命の ROS プロセスを大量に作ると詰まることがある**: 検証中に、使い捨ての ROS プロセスを何十個も作って落としたあと、
-  アーム側のカメラ配信が詰まって新しい購読者が画像を受け取れなくなった。シミュを起動し直すと直った（原因は未確認）。
-  環境 c では、手で ROS CLI を連打せず、詰まったらシミュを起動し直す。
+- **短命の ROS プロセスを大量に作ると詰まることがある**（原因は未確認。仮説は、購読者が増えるたびに認証のやり取りが走る負荷）。
+  再現条件の記録: 環境 c、`ros2arm` は CPU 2 つに制限、シミュを約 40 分動かす間に、`ros2 topic info` / `hz` や使い捨ての Python 購読を
+  合計で 50 回ほど起動・終了した後。症状は、`ros2server` で新しく起動した購読が `/camera/color/image_raw`（RELIABLE、約 0.9 Hz）を 0 枚しか受け取れず、
+  何も購読しない参加者を 1 つ足すだけでも同じ（先に起動していた購読も止まり、足した参加者が終わると再開した）。
+  シミュを起動し直すと、同じ操作で正常に戻った（A 126 枚・B 54 枚）。環境 c では、手で ROS CLI を連打せず、詰まったらシミュを起動し直す。
 
 ## 制約
 

@@ -12,6 +12,10 @@ trap 'rm -rf "$TMP"' EXIT
 cat > "$TMP/docker" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$STUB_LOG"
+if [ "${1:-}" = "inspect" ] && [[ "$*" == *ros2poc.env* ]]; then
+  echo "${STUB_LAB_ENV-a}"
+  exit 0
+fi
 if [ "${1:-}" = "exec" ] && [[ "$*" == *pgrep* ]] && [ "${STUB_DRIVER_STUCK:-0}" = "1" ]; then
   echo "4242"
 fi
@@ -92,6 +96,19 @@ run_case up-arm.sh "" "" ""
 [ "$RC" -eq 0 ] || fail "up-arm: 正常系は exit 0 のはずが $RC: $ERR"
 grep -qF 'name=^ros2real$' <<<"$LOG" || fail "up-arm: docker ps の name filter が無い: $LOG"
 grep -q "compose --profile arm up -d --build" <<<"$LOG" || fail "up-arm: compose up が呼ばれない: $LOG"
+
+# ros2lab-a が SROS2 環境 b / c → 素の docker compose だと ros2arm が環境 a で作り直され、混在するので、up-env.sh を案内して止める
+for env in b c; do
+  STUB_LAB_ENV="$env" run_case up-arm.sh "" "" ""
+  [ "$RC" -eq 1 ] || fail "up-arm: ros2lab-a 環境 $env は exit 1 のはずが $RC: $ERR"
+  grep -q "up-env.sh $env --arm" <<<"$ERR" || fail "up-arm: 環境 $env で up-env.sh の案内が無い: $ERR"
+  no_compose "up-arm(環境 $env)"
+done
+# ラベル無し（空 / <no value>）は a 扱いで従来どおり進む
+for env in "" "<no value>"; do
+  STUB_LAB_ENV="$env" run_case up-arm.sh "" "" ""
+  [ "$RC" -eq 0 ] || fail "up-arm: ラベル [$env] は a 扱いのはずが $RC: $ERR"
+done
 
 # --- down-real.sh ---
 

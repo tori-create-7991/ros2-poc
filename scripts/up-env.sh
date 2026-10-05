@@ -72,6 +72,17 @@ cleanup_leaked_keys() {
   fi
 }
 
+# 指定しなかった ros2arm / ros2server が動いていると、前の環境のまま混在して ros2lab・ros2arm・ros2server が通信できない
+for pair in "ros2arm:--arm:$ARM" "ros2server:--vla:$VLA"; do
+  c="${pair%%:*}"
+  rest="${pair#*:}"
+  flag="${rest%%:*}"
+  want="${rest##*:}"
+  if [ "$want" -eq 0 ] && [ -n "$(docker ps --filter "name=^$c\$" --filter 'status=running' -q)" ]; then
+    echo "警告: $c が起動中。$flag を付けていないので環境 $ENV_NAME に切り替わらず、前の環境のまま混在して ros2lab と通信できない。" >&2
+  fi
+done
+
 if [ "$ENV_NAME" = "a" ]; then
   docker compose ${PROFILES[@]+"${PROFILES[@]}"} up -d --build --force-recreate
   cleanup_leaked_keys
@@ -90,17 +101,6 @@ if [ ! -d "$KS_ROOT/$ENV_NAME" ]; then
   echo "環境 $ENV_NAME の keystore が無い。先に 'bash scripts/sros2/gen-keystore.sh $ENV_NAME' を実行すること。" >&2
   exit 1
 fi
-
-# 指定しなかった ros2arm / ros2server が動いていると、前の環境のまま混在して ros2lab・ros2arm・ros2server が通信できない
-for pair in "ros2arm:--arm:$ARM" "ros2server:--vla:$VLA"; do
-  c="${pair%%:*}"
-  rest="${pair#*:}"
-  flag="${rest%%:*}"
-  want="${rest##*:}"
-  if [ "$want" -eq 0 ] && [ -n "$(docker ps --filter "name=^$c\$" --filter 'status=running' -q)" ]; then
-    echo "警告: $c が起動中。$flag を付けていないので環境 $ENV_NAME に切り替わらず、前の環境のまま混在して ros2lab と通信できない。" >&2
-  fi
-done
 
 # gen-keystore.sh が書く、コンテナごとの enclave 名の対応（SROS2_ENCLAVE_*）を読む。
 # 無いと既定の enclave 名で起動してしまい、環境 b の意図（enclave 名の不一致）を壊すので、無ければ中断する。

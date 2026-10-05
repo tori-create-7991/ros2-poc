@@ -137,6 +137,10 @@ for env in b c; do
 done
 STUB_SRV_ENV=b STUB_ARM_ENV=c run_case "$ALL" --instruction "move up"
 [ "$RC" = 2 ] || fail "b と c の混在は止まるはず: $RC"
+# ラベル導入前（空）のコンテナは a 扱い。環境 c のコンテナと混在したら止まる
+STUB_SRV_ENV="" STUB_ARM_ENV=c run_case "$ALL" --instruction "move up"
+[ "$RC" = 2 ] || fail "空ラベル（a 扱い）と c の混在は止まるはず: $RC"
+grep -q "ros2server が SROS2 環境 a、ros2arm が環境 c" <<<"$ERR" || fail "空ラベルは a と表示されるはず: $ERR"
 for env in "" "<no value>"; do
   STUB_SRV_ENV="$env" run_case "$ALL" --instruction "move up"
   [ "$RC" = 0 ] || fail "環境ラベル [$env] は a 扱いのはず: $RC $ERR"

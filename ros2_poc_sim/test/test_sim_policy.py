@@ -134,3 +134,64 @@ def test_the_committed_policy_is_valid_and_only_wildcards_the_standard_services(
             if '*' in name:
                 assert path in ('/lab/ros2arm', '/lab/ros2server') and name.startswith('*/') and name[2:] in P.STD_SERVICES, \
                     f'{path}: 許可していないワイルドカード: {name}'
+
+
+def _entries(enclave):
+    return {(g.tag, tuple(sorted(g.attrib.items())), i.text.strip()) for g in enclave.iter() if g.tag in ('topics', 'services') for i in g}
+
+
+@pytest.mark.parametrize('path', ['/lab/ros2arm', '/lab/ros2server'])
+def test_committed_enclave_survives_a_round_trip_through_the_generator(path, tmp_path, capsys):
+    """コミット済みの enclave を生成スクリプトの入力として読み直して出力し、同じ内容になる（手で編集して壊す・形式が食い違うのを防ぐ）。"""
+    root = ET.parse(ROOT / 'sros2' / 'policy' / 'lab-c.xml').getroot()
+    committed = next(e for e in root.iter('enclave') if e.get('path') == path)
+    live = tmp_path / 'live.xml'
+    live.write_text(f'<policy><enclaves>{ET.tostring(committed, encoding="unicode")}</enclaves></policy>', encoding='utf-8')
+    P.main([str(live), '--enclave', path])
+    regenerated = ET.fromstring(capsys.readouterr().out)
+    assert _entries(regenerated) == _entries(committed)
+    assert len(_entries(committed)) > 30   # 空の enclave でも一致してしまわないように
+
+
+INPUTS = ROOT / 'sros2' / 'policy' / 'sim-inputs'
+
+
+def _regenerate(capsys, args):
+    P.main(args)
+    return ET.fromstring(capsys.readouterr().out)
+
+
+def test_committed_policy_matches_what_the_generator_makes_from_the_committed_inputs(capsys):
+    """lab-c.xml の ros2arm / ros2server が、コミット済みの入力（稼働中のグラフ + 拒否ログから足した分）の再生成と一致する。
+
+    手で編集して入力と食い違う・入力だけ更新して lab-c.xml を忘れる、を CI で止める。コマンドは sim_policy.py の先頭と同じ。
+    """
+    root = ET.parse(ROOT / 'sros2' / 'policy' / 'lab-c.xml').getroot()
+    enclaves = {e.get('path'): e for e in root.iter('enclave')}
+    live, denials = str(INPUTS / 'live-graph.xml'), str(INPUTS / 'denials.txt')
+    arm = _regenerate(capsys, [live, '--enclave', '/lab/ros2arm', '--exclude', r'^(vla_|_ros2cli_)', '--self-clients',
+                               '--extra-file', denials])
+    server = _regenerate(capsys, [live, '--enclave', '/lab/ros2server', '--include', r'^(vla_|transform_listener_impl)',
+                                  '--extra', 'subscribe:/camera/color/image_raw', '--extra', 'publish:/vla/action',
+                                  '--extra', 'subscribe:/vla/ack', '--std-node', 'vla_node', '--anon-std', '--extra-file', denials])
+    assert _entries(arm) == _entries(enclaves['/lab/ros2arm'])
+    assert _entries(server) == _entries(enclaves['/lab/ros2server'])
+
+
+def test_dropping_an_input_changes_the_result(capsys):
+    """入力が空振りしていない（denials.txt を外すと結果が変わる）ことの確認。"""
+    live = str(INPUTS / 'live-graph.xml')
+    with_denials = _regenerate(capsys, [live, '--enclave', '/lab/ros2arm', '--exclude', r'^(vla_|_ros2cli_)', '--self-clients',
+                                        '--extra-file', str(INPUTS / 'denials.txt')])
+    without = _regenerate(capsys, [live, '--enclave', '/lab/ros2arm', '--exclude', r'^(vla_|_ros2cli_)', '--self-clients'])
+    assert ('topics', (('subscribe', 'ALLOW'),), '/sim_camera/realsense_d435/raw/image') in _entries(with_denials) - _entries(without)
+
+
+def test_extra_file_ignores_comments_and_blank_lines(tmp_path, capsys):
+    f = tmp_path / 'extra.txt'
+    f.write_text('# コメント\n\nsubscribe:/foo/bar\n  # 字下げしたコメント\nrequest:/svc/x\n', encoding='utf-8')
+    live = tmp_path / 'live.xml'
+    live.write_text(LIVE, encoding='utf-8')
+    xml = _regenerate(capsys, [str(live), '--enclave', '/lab/x', '--exclude', r'^(vla_|_ros2cli_)', '--extra-file', str(f)])
+    assert ('topics', (('subscribe', 'ALLOW'),), '/foo/bar') in _entries(xml)
+    assert ('services', (('request', 'ALLOW'),), '/svc/x') in _entries(xml)
