@@ -31,6 +31,9 @@ setup(
             'gz_setup = ros2_poc_sim.gz_setup:main',
             'scenario_observer = ros2_poc_sim.scenario_observer:main',
             'scenario_cli = ros2_poc_sim.scenario_cli:main',
+            'vla_node = ros2_poc_sim.vla_node:main',
+            'vla_converter = ros2_poc_sim.vla_converter:main',
+            'vla_stub_server = ros2_poc_sim.vla_stub_server:main',
         ],
     },
 )

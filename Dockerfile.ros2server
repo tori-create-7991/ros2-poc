@@ -1,0 +1,48 @@
+# ros2server: VLA ノード（画像 → /act → /vla/action）と変換ノード（手先差分 → IK → アーム指令）を動かす ROS 2 側のコンテナ。
+# ros2lab と同じ使い勝手の対話サンドボックス（ROS CLI・./workspace）に、arm 層（ros2arm → 将来 ros2real）を
+# DDS 越しに呼ぶのに要る moveit_msgs / control_msgs / tf2 を足したもの。arm 層には手を入れない。
+# 使い方は docs/openvla-ros2-bridge.md。
+# ベースは digest で固定する（multi-arch の manifest list。Dockerfile.real と同じ）。更新するときは digest を差し替える。
+FROM ros:jazzy-ros-base@sha256:c3706ef0a0aa45413c07803cf433602f543b22e45b4855f6fca955c2d8ecc4e8
+
+SHELL ["/bin/bash", "-c"]
+
+# sros2: SROS2（DDS-Security）の環境 b / c 用（ros2lab と同じ）。
+# moveit-msgs: /compute_ik（GetPositionIK）、control-msgs: gripper_cmd（ParallelGripperCommand）、
+# tf2-ros-py: 現在の手先姿勢（TF）。numpy / yaml: ros2_poc_sim の純粋関数（画像のリサイズ・シナリオの定数）が使う。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ros-jazzy-sros2 \
+        ros-jazzy-moveit-msgs \
+        ros-jazzy-control-msgs \
+        ros-jazzy-tf2-ros-py \
+        ros-jazzy-tf2-geometry-msgs \
+        python3-numpy \
+        python3-yaml \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 隔離設定は ros2lab / ros2arm と同じ。同じ DDS ドメインの ros2arm とだけ Discovery する
+ENV ROS_DOMAIN_ID=42
+ENV ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
+
+# VLA ノード・変換ノードは ros2_poc_sim の一部。arm 層向けの重い依存（Gazebo など）は要らないので、
+# rosdep は使わず、このパッケージだけをビルドする（exec_depend は上の apt で足りている）。
+COPY ros2_poc_sim /opt/ros2_poc_ws/src/ros2_poc_sim
+RUN source /opt/ros/jazzy/setup.bash \
+    && cd /opt/ros2_poc_ws \
+    && colcon build --packages-select ros2_poc_sim \
+    && rm -rf /opt/ros2_poc_ws/build /opt/ros2_poc_ws/log
+
+# login / 対話どちらのシェルでも source されるよう profile.d に置く（Dockerfile と同じ流儀）
+RUN printf '%s\n' \
+    '# --- ros2-poc: ros2server env ---' \
+    'source /opt/ros/jazzy/setup.bash' \
+    'source /opt/ros2_poc_ws/install/setup.bash' \
+    'echo "[ros2server] DOMAIN=$ROS_DOMAIN_ID discovery=$ROS_AUTOMATIC_DISCOVERY_RANGE"' \
+    > /etc/profile.d/ros2server.sh \
+    && echo '[ -f /etc/profile.d/ros2server.sh ] && source /etc/profile.d/ros2server.sh' >> /root/.bashrc
+
+WORKDIR /workspace
+
+CMD ["sleep", "infinity"]
