@@ -15,6 +15,12 @@ x-ros2lab: &ros2lab
     - lab
   volumes:
     - ./workspace:/workspace
+  # DDS 実装は Fast DDS（ROS 2 の既定）。SROS2 の挙動は実装ごとに違うため明示しておく。
+  environment:
+    - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+  # SROS2 の環境（a: 未適用 / b: 誤設定 / c: 適正）。scripts/up-env.sh が SROS2_ENV を渡す。
+  labels:
+    ros2poc.env: ${SROS2_ENV:-a}
 
 services:
   ros2lab-a:
@@ -34,6 +40,9 @@ services:
       context: .
       dockerfile: Dockerfile.arm
     container_name: ros2arm
+    # SROS2 化していない（常に環境 A）。環境ラベルだけ付ける。
+    labels:
+      ros2poc.env: a
     # noVNC (6080) とネイティブ VNC (5901)。どちらも LAN には出さずホストのローカルからのみ接続させる。
     # VNC はコンテナ側 5900（Dockerfile.arm の socat ブリッジ）。ホスト側を 5901 にしているのは、
     # macOS の画面共有サーバー（既定 5900）と衝突させないため。
@@ -64,6 +73,9 @@ services:
     image: ros2real:jazzy
     container_name: ros2real
     hostname: ros2real
+    # SROS2 化していない（常に環境 A）。
+    labels:
+      ros2poc.env: a
     tty: true
     stdin_open: true
     init: true
