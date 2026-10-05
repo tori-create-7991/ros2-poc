@@ -27,6 +27,7 @@ camera.mp4 を書き終えられない・記録プロセスを止められない
 実行前に次を確かめ、満たさなければ `2` で止まる。
 
 - `ros2real`（実機ドライバ）が起動していない
+- ros2lab-a が SROS2 環境 a で起動している（ラベル `ros2poc.env`。ラベル無しは a 扱い）。ros2arm は SROS2 化しておらず環境 a でしか通信できないため、b / c なら `bash scripts/up-env.sh a` で戻す
 - ros2arm に ffmpeg（libx264・drawtext 等）・xdpyinfo・フォントがある（`scenario_cli doctor`）
 - 別の run-scenario が実行中でない（ros2arm 内の `/tmp/run-scenario.lock`）、前回の記録プロセスが残っていない
 - ros2lab-a からアームのコントローラ（`crane_x7_arm_controller`）がちょうど 1 つ見える（Discovery 待ち。2 つ以上ならシミュの二重起動か実機と混在として止める）
