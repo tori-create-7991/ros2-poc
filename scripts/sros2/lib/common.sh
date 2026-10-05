@@ -60,7 +60,7 @@ issue_cert() {
   local csr
   csr="$(mktemp)"
   openssl req -new -key "$key" -subj "$(subj_for "$enclave")" -out "$csr"
-  openssl ca -config openssl.cnf -extensions v3 -batch -in "$csr" -out "$out" "$@" >/dev/null 2>&1
+  openssl ca -config openssl.cnf -extensions v3 -batch -notext -in "$csr" -out "$out" "$@" >/dev/null 2>&1
   rm -f "$csr"
 }
 

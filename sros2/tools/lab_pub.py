@@ -20,5 +20,5 @@ pub = node.create_publisher(String, topic, 10)
 print("PUB_UP", flush=True)
 end = time.time() + seconds
 while time.time() < end:
-    pub.publish(String(data="hello"))
+    pub.publish(String(data="LABPAYLOAD-7F3A"))
     rclpy.spin_once(node, timeout_sec=0.2)
