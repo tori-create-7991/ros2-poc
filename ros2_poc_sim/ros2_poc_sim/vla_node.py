@@ -12,6 +12,7 @@ SETTLE_SEC 待ってから新しいフレームを取る。実行中の ROS 2 �
 """
 import argparse
 import os
+import random
 import sys
 import threading
 import time
@@ -41,12 +42,15 @@ class VlaNode(Node):
         self.pub = self.create_publisher(String, A.ACTION_TOPIC, 10)
         self._cond = threading.Condition()
         self._image = None
+        self._want_image = False    # fresh_image が待っている間だけ画像を処理する（CPU 描画のシミュへの負荷を避ける）
         self._acks = {}
         self.create_subscription(Image, image_topic, self._on_image,
                                  QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.create_subscription(String, A.ACK_TOPIC, self._on_ack, 10)
 
     def _on_image(self, msg):
+        if not self._want_image:
+            return
         try:
             img = V.image_from_ros(msg.encoding, msg.height, msg.width, bytes(msg.data))
         except ValueError as e:
@@ -54,6 +58,7 @@ class VlaNode(Node):
             return
         with self._cond:
             self._image = V.resize_nearest(img)
+            self._want_image = False
             self._cond.notify_all()
 
     def _on_ack(self, msg):
@@ -68,16 +73,22 @@ class VlaNode(Node):
 
     def wait_converter(self, timeout):
         deadline = time.time() + timeout
-        while self.pub.get_subscription_count() == 0 and time.time() < deadline:
+
+        def ready():    # 指令の購読者（変換ノード）と、ack の発行者（同じ変換ノード）の両方が見えるまで待つ
+            return self.pub.get_subscription_count() > 0 and self.count_publishers(A.ACK_TOPIC) > 0
+
+        while not ready() and time.time() < deadline:
             time.sleep(0.2)
-        return self.pub.get_subscription_count() > 0
+        return ready()
 
     def fresh_image(self, delay=0.0, timeout=IMAGE_WAIT_SEC):
         """delay 秒待ってから、そのあとに届いた最初のフレーム（リサイズ済み）を返す。来なければ None。"""
         time.sleep(delay)
         with self._cond:
             self._image = None
+            self._want_image = True
             self._cond.wait_for(lambda: self._image is not None, timeout)
+            self._want_image = False
             return self._image
 
     def wait_ack(self, seq, timeout):
@@ -139,7 +150,8 @@ def main(argv=None):
             lambda img: V.post_act(a.endpoint, V.build_payload(img, a.instruction, a.unnorm_key), a.request_timeout),
             lambda action: node.pub.publish(String(data=A.format_action(action))),
             lambda seq: node.wait_ack(seq, a.ack_timeout),
-            log=lambda m: print(m, flush=True))
+            log=lambda m: print(m, flush=True),
+            start_seq=random.randint(1, 10 ** 9))    # 実行ごとに変える（前回の遅い ack と取り違えない）
         return code
     except KeyboardInterrupt:
         return 130

@@ -104,3 +104,13 @@ def test_gripper_target_and_angle():
     assert A.gripper_angle('open') == S.GRIPPER_OPEN and A.gripper_angle('close') == S.GRIPPER_CLOSE
     with pytest.raises(ValueError):
         A.gripper_angle('half')
+
+
+@pytest.mark.parametrize('raw, expected', [
+    ('{"seq": 7, "delta": "bad"}', 7),
+    ('{"seq": 0}', 0),
+    ('{"seq": true}', None), ('{"seq": -1}', None), ('{"seq": "1"}', None), ('{"delta": []}', None),
+    ('not json', None), ('[]', None), (None, None), ('x' * 2000, None),
+])
+def test_peek_seq_reads_seq_even_when_the_message_is_invalid(raw, expected):
+    assert A.peek_seq(raw) == expected

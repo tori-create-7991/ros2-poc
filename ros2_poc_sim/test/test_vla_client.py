@@ -157,3 +157,19 @@ def test_validate_request_checks_arguments_without_an_image():
         V.validate_request('')
     with pytest.raises(ValueError):
         V.validate_request('go', '../x')
+
+
+def test_post_act_does_not_follow_redirects(server):
+    srv, url = server
+
+    class Redirect(_Handler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get('Content-Length', 0)))
+            self.send_response(302)
+            self.send_header('Location', 'http://127.0.0.1:1/elsewhere')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+
+    srv.RequestHandlerClass = Redirect
+    with pytest.raises(V.VlaError, match='302'):
+        V.post_act(url, V.build_payload(np.zeros((256, 256, 3), np.uint8), 'go'), timeout=5)

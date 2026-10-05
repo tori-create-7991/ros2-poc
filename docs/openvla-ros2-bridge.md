@@ -88,7 +88,7 @@ bash scripts/run-vla.sh --instruction "move up" --steps 3
 
 OpenVLA の `deploy.py` の原文（2026-10-05 確認）に合わせている。
 
-- リクエスト: `{"image": <ndarray>, "instruction": str, "unnorm_key": 省略可}`。ndarray は json_numpy 形式 `{"__numpy__": <base64>, "dtype": "|u1", "shape": [256, 256, 3]}`。`{"encoded": <JSON 文字列>}` の二重エンコードも受ける。
+- リクエスト: `{"image": <ndarray>, "instruction": str, "unnorm_key": 省略可}`。ndarray は json_numpy 形式 `{"__numpy__": <base64>, "dtype": "|u1", "shape": [256, 256, 3]}`（json-numpy **2.1.1** のソースで確認。他の版で形式が違う可能性があり、本物のサーバーとの結合は未検証）。`{"encoded": <JSON 文字列>}` の二重エンコードも受ける。
 - レスポンス: ndarray（json_numpy 形式）**そのもの**。`deploy.py` の docstring は `{"action": ndarray}` と書くが、実装は `JSONResponse(action)` で配列を直接返す。クライアントは両方を受ける。
 - **エラー時も HTTP 200 で文字列 `"error"` を返す**。クライアントは型と 7 次元・有限値を検査して弾く（`vla_client.parse_response`）。
 - サーバーの既定の待ち受けは `0.0.0.0:8000`（認証なし）。
@@ -100,7 +100,7 @@ OpenVLA の `deploy.py` の原文（2026-10-05 確認）に合わせている。
 - `/vla/action`: `{"seq": int>=0, "delta": [dx, dy, dz, droll, dpitch, dyaw], "gripper": 0..1}`。`delta` は `base_link` 基準、並進 [m]・回転 [rad]（ベース基準の増分）。gripper は 0（閉）〜1（開）。
 - `/vla/ack`: `{"seq": int, "status": "ok|rejected|ik_failed|timeout", "reason": str}`。
 
-変換ノードは同時に 1 ステップだけ処理する（処理中の指令は `rejected`「busy」）。
+変換ノードは同時に 1 ステップだけ処理する（処理中の指令は `rejected`「busy」）。不正な指令でも `seq` が読めれば `rejected` の ack を返す（読めなければ ack を返せず、VLA ノードは待ち続けて終了コード 2 になる）。VLA ノードの `seq` は実行ごとにランダムな値から始め、前回の遅い ack と取り違えない。1 ステップの最悪待ちは約 90 秒（TF・`/joint_states` 各 15、IK 8、購読者待ち 10、グリッパ 25、静止待ち約 19）で、VLA ノードの `--ack-timeout`（既定 240 秒）より短い。
 
 ## 安全（入力を信頼しない）
 
@@ -113,9 +113,9 @@ DDS は無認証（環境 A）。`/vla/action` には誰でも書けるので、
 | 作業空間 | `base_link` 基準で x, y ∈ [-0.5, 0.5] m、z ∈ [0.05, 0.7] m の箱に収める |
 | IK の解 | 関節数・有限値・関節リミットを検査。現在から 0.8 rad を超えて飛ぶ解は拒否（IK が別の解へ反転した可能性） |
 | 同時実行 | 1 ステップのみ。`run-vla.sh` のロックで同時実行も拒否 |
-| VLA の応答 | 7 次元・有限値・サイズ上限 1MB。`"error"` は拒否 |
+| VLA の応答 | 7 次元・有限値・サイズ上限 1MB。`"error"` は拒否。リダイレクトには追従しない（検証した URL 以外へ画像を送らない） |
 
-`lab` ネットワーク（`ros2-lab-net`）に `kali-vnc` などを繋ぐと、そこから `/vla/action` や `joint_trajectory` を偽装でき、シミュ上のアームを動かせる（`ros2arm` の既存のリスクと同じ。[sim-camera-profile.md](sim-camera-profile.md) の「隔離方針との関係」）。クランプは被害を小さくするだけで、認証の代わりにはならない。**判定や動作が意味を持つのは信頼できるネットワーク内だけ**。
+`lab` ネットワーク（`ros2-lab-net`）に `kali-vnc` などを繋ぐと、そこから `/vla/action` や `joint_trajectory` を偽装でき、シミュ上のアームを動かせる（`ros2arm` の既存のリスクと同じ。[sim-camera-profile.md](sim-camera-profile.md) の「隔離方針との関係」）。クランプは被害を小さくするだけで、認証の代わりにはならない。受理レートの上限や `/vla/ack` の偽装対策は無い（連打すれば作業空間の端まで動かせる）。`--endpoint` は平文 HTTP なので、信頼できる閉じたネットワークの GPU サーバー宛だけに使う（画像が平文で流れる）。**判定や動作が意味を持つのは信頼できるネットワーク内だけ**。
 
 ## 本物の OpenVLA サーバーを使う（手順のみ。この環境では検証していない）
 
@@ -169,7 +169,11 @@ ROS 非依存の単体テストは `cd ros2_poc_sim && python -m pytest -q test/
 - **最初のステップは遅い**。変換ノードを起動した直後は `/tf` と `/joint_states` の Discovery が終わっておらず、最大 15 秒待つ。
 - **カメラ映像は `/joint_states` より約 1〜1.5 秒遅れる**ので、2 ステップ目以降は 1.5 秒待ってから新しいフレームを取る（[sim-scenario-recording.md](sim-scenario-recording.md) と同じ実測）。
 - 変換ノードは前のステップの `gripper` を覚えていて、変化したときだけ `gripper_cmd` を送る。起動直後の最初のステップは必ず送る（現在のグリッパ状態を読まないため）。
-- シミュ（CPU 描画）は遅く、`ros2arm` のシナリオ実行（`run-scenario.sh`）と同時には動かせない。
+- シミュ（CPU 描画）は遅く、`ros2arm` のシナリオ実行（`run-scenario.sh`）と同時には動かせない。排他は**片方向**で、`run-vla.sh` は `run-scenario.sh` のロックを見るが、`run-scenario.sh` は `run-vla` のロックを見ない（確認してから実行までの隙間も残る）。同時に実行しない。
+- 前のステップの `joint_trajectory` が届いてからグリッパが失敗すると、アームは動いたのに `rejected`（reason に「アームの指令は送信済み」）になる。
+- `ros2server` は `ros2lab` と同じ使い勝手のため root・権限制限なしで動く（`vla-server` は読み取り専用・権限なし）。
+- ROS 依存部（`vla_converter.py` / `vla_node.py`）に単体テストは無く、実コンテナでの検証のみ（CI は構文チェックだけ）。手順は ROS 非依存の `vla_step` / `vla_loop` に寄せてテストしている。
+- 実機（`ros2real`）へ移す前に: 作業空間・上限・関節の変化量をパラメータ化し、arm 定数を `scenario`（シミュ用）から切り出す。変換ノードを実機で単独起動できないようにするガードも要る（現状の実機拒否は `run-vla.sh` のみ）。
 
 ## トラブルシュート
 

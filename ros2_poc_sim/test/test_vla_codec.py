@@ -61,3 +61,9 @@ def test_decode_floats_accepts_f4():
 
 def test_json_serializable():
     assert json.loads(json.dumps(C.encode_floats([1.0])))['__numpy__']
+
+
+@pytest.mark.parametrize('dtype', [[1], {'a': 1}, None, 5, ['<f8']])
+def test_decode_rejects_non_string_dtype_without_type_error(dtype):
+    with pytest.raises(ValueError, match='dtype'):
+        C.decode({'__numpy__': 'AAAA', 'dtype': dtype, 'shape': [1]})

@@ -69,6 +69,18 @@ def parse_action(raw):
     return Action(seq, _check_delta(d.get('delta')), _check_gripper(d.get('gripper')))
 
 
+def peek_seq(raw):
+    """不正な /vla/action からでも読める seq があれば返す（rejected の ack を返すため）。無ければ None。"""
+    if not isinstance(raw, str) or len(raw) > MAX_MESSAGE_CHARS:
+        return None
+    try:
+        d = json.loads(raw)
+    except ValueError:
+        return None
+    seq = d.get('seq') if isinstance(d, dict) else None
+    return seq if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 0 else None
+
+
 def action_from_vector(seq, vec):
     """VLA が返す 7 次元（dx, dy, dz, droll, dpitch, dyaw, gripper）から Action を作る。"""
     if not isinstance(vec, (list, tuple)) or len(vec) != 7:

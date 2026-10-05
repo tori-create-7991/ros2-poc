@@ -67,7 +67,7 @@ class StepRunner:
         target = A.gripper_target(action.gripper, self.gripper_threshold, self.open_when_high)
         if target != self._last_gripper:
             if not self.io.send_gripper(A.gripper_angle(target)):
-                return 'rejected', 'gripper_cmd が失敗した'
+                return 'rejected', 'gripper_cmd が失敗した（アームの指令は送信済み）'
             self._last_gripper = target
         if not self.io.wait_settled(q, duration, t_sent):
             return 'timeout', '目標に届いて静止するまでに時間切れ'
@@ -91,7 +91,7 @@ def wait_settled(get_records, expected, duration, t_sent, tolerance=S.ARM_TOLERA
             at = next((r for r in records if r['t'] == settled), None)
             if at is not None:
                 pos = dict(zip(at['name'], at['position']))
-                return all(abs(pos[j] - e) <= tolerance for j, e in zip(S.ARM_JOINTS, expected) if j in pos)
+                return all(j in pos and abs(pos[j] - e) <= tolerance for j, e in zip(S.ARM_JOINTS, expected))
         if t >= end:
             return False
         sleep(poll_sec)

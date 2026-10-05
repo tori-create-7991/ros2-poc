@@ -24,6 +24,14 @@ UNNORM_KEY_RE = re.compile(r'^[A-Za-z0-9_.\-]{1,100}$')
 VECTOR_LEN = 7
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None    # 3xx は追従せず HTTPError にする（検証した endpoint 以外へ画像を送らない）
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 class VlaError(Exception):
     """サーバーに繋がらない・応答が契約に合わない。"""
 
@@ -120,7 +128,7 @@ def post_act(endpoint, payload, timeout=30.0):
     req = urllib.request.Request(endpoint, data=json.dumps(payload).encode('utf-8'),
                                  headers={'Content-Type': 'application/json'}, method='POST')
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             body = resp.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as e:
         raise VlaError(f'サーバーが HTTP {e.code} を返した') from e

@@ -180,3 +180,17 @@ def test_wait_settled_times_out_when_never_reaches_target():
     assert not T.wait_settled(lambda: recs, [0.5] * 7, 1.0, 100.0, now=lambda: clock['now'], sleep=sleep,
                               poll_sec=0.5)
     assert clock['now'] <= M.settle_deadline(100.0, 1.0) + M.STILL_WINDOW + 1.0
+
+
+def test_gripper_failure_reason_says_the_arm_was_already_sent():
+    io = FakeIO()
+    io.gripper_ok = False
+    _, (status, reason) = _run(io)
+    assert status == 'rejected' and 'アーム' in reason and any(c[0] == 'arm' for c in io.calls)
+
+
+def test_wait_settled_is_false_when_a_joint_is_missing_from_the_record():
+    partial = [{'t': 100.0 + i * 0.25, 'name': list(S.ARM_JOINTS[:3]), 'position': [0.1] * 3} for i in range(40)]
+    clock = {'now': 100.0}
+    assert not T.wait_settled(lambda: partial, [0.1] * 7, 1.0, 100.0, now=lambda: clock['now'],
+                              sleep=lambda dt: clock.__setitem__('now', clock['now'] + dt))

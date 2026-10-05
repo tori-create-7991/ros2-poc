@@ -120,6 +120,24 @@ def test_http_missing_or_bad_content_length(server):
     conn.close()
 
 
+def test_stub_imports_only_the_standard_library_and_the_codec():
+    """Dockerfile.vla-server は vla_codec.py と vla_stub_server.py しか入れない。増えたら起動時に初めて落ちるので、ここで止める。"""
+    import ast
+    import sys
+    from pathlib import Path
+    pkg = Path(S.__file__).parent
+    for name in ('vla_stub_server.py', 'vla_codec.py'):
+        for node in ast.walk(ast.parse((pkg / name).read_text(encoding='utf-8'))):
+            mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                    else [node.module] if isinstance(node, ast.ImportFrom) else [])
+            for m in mods:
+                top = m.split('.')[0]
+                assert top in sys.stdlib_module_names or m == 'ros2_poc_sim' or m.startswith('ros2_poc_sim.vla_codec'), \
+                    f'{name} が標準ライブラリ以外を import している: {m}'
+                if m.startswith('ros2_poc_sim') and name == 'vla_codec.py':
+                    raise AssertionError('vla_codec.py は他の ros2_poc_sim のモジュールに依存しない')
+
+
 def test_client_and_stub_agree_on_the_contract(server):
     """vla_client が作るリクエストを vla_stub_server が受け、返った 7 次元をクライアントが読める。"""
     import numpy as np
@@ -128,3 +146,10 @@ def test_client_and_stub_agree_on_the_contract(server):
     img = V.resize_nearest(np.zeros((480, 640, 3), np.uint8))
     vec = V.post_act(f'http://127.0.0.1:{server}/act', V.build_payload(img, 'move up', unnorm_key='bridge_orig'), timeout=5)
     assert vec == pytest.approx([0, 0, S.STEP, 0, 0, 0, 1.0])
+
+
+def test_handle_act_never_raises_on_hostile_payloads():
+    for image in ({'__numpy__': 'AAAA', 'dtype': [1], 'shape': [1]}, {'__numpy__': 5, 'dtype': '|u1', 'shape': [1]},
+                  {'__numpy__': 'AAAA', 'dtype': {}, 'shape': {}}, 'x', 5, None):
+        status, body = S.handle_act(json.dumps({'image': image, 'instruction': 'up'}).encode())
+        assert status == 200 and json.loads(body) == 'error'

@@ -74,7 +74,7 @@ def handle_act(body):
             if not isinstance(payload, dict):
                 return error
         instruction = _parse(payload)
-    except (ValueError, RecursionError):
+    except Exception:   # deploy.py の裸の except と同じ。どんな不正入力でも HTTP 200 + "error" にする
         return error
     encoded = json.dumps(C.encode_floats(action_for(instruction)))
     return 200, json.dumps(encoded) if double else encoded

@@ -33,7 +33,7 @@ def decode(obj, max_bytes=DEFAULT_MAX_BYTES):
     if not isinstance(obj, dict):
         raise ValueError(f'json_numpy の辞書ではない（{type(obj).__name__}）')
     descr = obj.get('dtype')
-    if descr not in ITEMSIZE:
+    if not isinstance(descr, str) or descr not in ITEMSIZE:
         raise ValueError(f'未対応の dtype: {descr!r}（対応: {sorted(ITEMSIZE)}）')
     shape = obj.get('shape')
     if (not isinstance(shape, (list, tuple)) or not 1 <= len(shape) <= MAX_DIMS

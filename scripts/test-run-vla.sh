@@ -153,18 +153,19 @@ lock_released || fail "コントローラ 2: ロックが残る"
 run_case "$ALL" --instruction "move up" --timeout 0
 [ "$RC" = 0 ] || fail "正常: $RC $ERR"
 started || fail "変換ノードか VLA ノードが起動していない: $LOG"
-grep -q "vla_node --instruction 'move up' --steps 3" <<<"$LOG" || fail "既定の引数が渡っていない: $LOG"
+grep -q "vla_node --instruction='move up' --steps 3" <<<"$LOG" || fail "既定の引数が渡っていない: $LOG"
 grep -q -- "--endpoint" <<<"$LOG" && fail "--endpoint を指定していないのに渡った: $LOG"
 conv_line="$(grep -n "exec -d ros2server" <<<"$LOG" | head -n 1 | cut -d: -f1)"
 node_line="$(grep -n "vla_node" <<<"$LOG" | head -n 1 | cut -d: -f1)"
 [ -n "$conv_line" ] && [ "$conv_line" -lt "$node_line" ] || fail "変換ノードが VLA ノードより先に起動していない: $LOG"
 grep -q "pkill -INT -f '\[v\]la_converter'" <<<"$LOG" || fail "変換ノードを止めていない: $LOG"
+grep -q "pkill -INT -f '\[v\]la_node'" <<<"$LOG" || fail "VLA ノードを止めていない（Ctrl-C で残る）: $LOG"
 lock_released || fail "正常: ロックが残る"
 
 # --- 引数が VLA ノードに渡る
 run_case "$ALL" --instruction "close the gripper" --steps 5 --endpoint http://gpu-host:8000/act --unnorm-key bridge_orig --timeout 0
 [ "$RC" = 0 ] || fail "引数付き: $RC $ERR"
-grep -q "vla_node --instruction 'close the gripper' --steps 5 --endpoint 'http://gpu-host:8000/act' --unnorm-key 'bridge_orig'" <<<"$LOG" \
+grep -q "vla_node --instruction='close the gripper' --steps 5 --endpoint='http://gpu-host:8000/act' --unnorm-key='bridge_orig'" <<<"$LOG" \
   || fail "引数が渡っていない: $LOG"
 
 # --- VLA ノードの終了コードをそのまま返す（1 = 失敗ステップ、2 = 環境の問題）。後始末はする

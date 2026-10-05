@@ -42,7 +42,8 @@ IK_TIMEOUT_SEC = 3.0
 GRIPPER_TIMEOUT_SEC = 15.0
 SUBSCRIBER_WAIT_SEC = 10.0
 POSE_WAIT_SEC = 15.0
-RECORD_LIMIT = 2000
+RECORD_LIMIT = 20000        # 安全弁。実際は RECORD_WINDOW_SEC で捨てる
+RECORD_WINDOW_SEC = 300.0   # 静止待ちの最長（settle_deadline）より長く残す
 
 
 def _duration(sec):
@@ -75,7 +76,10 @@ class RosIO:
             return
         with self._lock:
             self._joints = dict(zip(msg.name, msg.position))
-            self._records.append({'t': time.time(), 'name': list(msg.name), 'position': list(msg.position)})
+            now = time.time()
+            self._records.append({'t': now, 'name': list(msg.name), 'position': list(msg.position)})
+            while self._records and self._records[0]['t'] < now - RECORD_WINDOW_SEC:
+                self._records.popleft()
 
     def records(self):
         with self._lock:
@@ -203,6 +207,9 @@ class VlaConverter(Node):
             action = A.parse_action(msg.data)
         except ValueError as e:
             self.get_logger().warning(f'不正な {A.ACTION_TOPIC} を破棄: {e}')
+            seq = A.peek_seq(msg.data)
+            if seq is not None:    # 待たせ続けない（読めない場合は ack を返せない）
+                self._ack(seq, 'rejected', f'不正な指令: {e}'[:200])
             return
         if not self._busy.acquire(blocking=False):
             self._ack(action.seq, 'rejected', 'busy（前のステップを処理中）')

@@ -42,6 +42,8 @@ jobs:
           python-version: '3.12'
       - name: install test dependencies
         run: pip install pytest numpy pyyaml
+      - name: syntax check (ROS 依存の VLA ノードは rclpy が無い CI では import できないので構文だけ)
+        run: python -m py_compile ros2_poc_sim/ros2_poc_sim/vla_node.py ros2_poc_sim/ros2_poc_sim/vla_converter.py
       - name: pytest (scenario / motion judge / compose video / scenario cli / VLA)
         run: |
           cd ros2_poc_sim

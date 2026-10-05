@@ -92,15 +92,17 @@ if ! srv "mkdir $LOCK" < /dev/null > /dev/null 2>&1; then
   fail_env "別の run-vla が実行中（ロック $LOCK あり）。前回を強制終了したなら、実行中でないと確かめて外す: docker exec ros2server rm -r $LOCK"
 fi
 CONVERTER='[v]la_converter'
+NODE='[v]la_node'
 # shellcheck disable=SC2329  # trap から呼ぶ
 cleanup() {
-  srv "pkill -INT -f '$CONVERTER'; rm -r $LOCK" < /dev/null > /dev/null 2>&1 || true
+  # docker exec は（TTY なしでは）シグナルを転送しないので、Ctrl-C のあとコンテナ内に残らないよう VLA ノードも止める
+  srv "pkill -INT -f '$NODE'; pkill -INT -f '$CONVERTER'; rm -r $LOCK" < /dev/null > /dev/null 2>&1 || true
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
-# 前回の変換ノードが残っていると ack が二重になる。残りがあれば止めてから起動する
-srv "pkill -INT -f '$CONVERTER'; true" < /dev/null > /dev/null 2>&1 || true
+# 前回の変換ノード・VLA ノードが残っていると ack が二重になる。残りがあれば止めてから起動する
+srv "pkill -INT -f '$NODE'; pkill -INT -f '$CONVERTER'; true" < /dev/null > /dev/null 2>&1 || true
 
 # ros2server からアームのコントローラがちょうど 1 つ見えるまで待つ（Discovery 待ち。2 つ以上ならシミュの二重起動か
 # 実機ドライバと混在として止める）
@@ -128,9 +130,10 @@ echo "変換ノード（vla_converter）を起動"
 srv_bg "$ROS_ENV; exec ros2 run ros2_poc_sim vla_converter > /tmp/vla_converter.log 2>&1" < /dev/null \
   || fail_env "ros2server で変換ノードを起動できない"
 
-NODE_ARGS="--instruction '$INSTRUCTION' --steps $STEPS"
-[ -n "$ENDPOINT" ] && NODE_ARGS="$NODE_ARGS --endpoint '$ENDPOINT'"
-[ -n "$UNNORM_KEY" ] && NODE_ARGS="$NODE_ARGS --unnorm-key '$UNNORM_KEY'"
+# 値が - で始まっても別のオプションと解釈されないよう --name=値 の形で渡す
+NODE_ARGS="--instruction='$INSTRUCTION' --steps $STEPS"
+[ -n "$ENDPOINT" ] && NODE_ARGS="$NODE_ARGS --endpoint='$ENDPOINT'"
+[ -n "$UNNORM_KEY" ] && NODE_ARGS="$NODE_ARGS --unnorm-key='$UNNORM_KEY'"
 rc=0
 srv "$ROS_ENV; ros2 run ros2_poc_sim vla_node $NODE_ARGS" < /dev/null || rc=$?
 if [ "$rc" != 0 ] && [ "$rc" != 1 ]; then
