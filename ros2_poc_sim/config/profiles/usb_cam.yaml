@@ -1,0 +1,53 @@
+schema: 1
+name: usb_cam
+description: ros-drivers/usb_cam 0.8.1 互換（params_1.yaml 相当、pixel_format=mjpeg2rgb）。
+based_on:
+  driver: usb_cam
+  version: "0.8.1"
+  source: .research/sim-camera-profile_20261002/01a#1
+  verified: source-read
+
+sensor:
+  gz_type: camera
+  width: 640
+  height: 480
+  fps: 10
+  clip: {near: 0.05, far: 10.0}
+  noise: null
+
+intrinsics:                    # usb_cam 同梱 camera_info.yaml の fx(≈438.78)。cx,cy は理想
+  provisional: true
+  fx: 438.78
+  fy: 438.78
+  cx: 320.0
+  cy: 240.0
+  distortion_model: plumb_bob
+  d: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+frames:
+  camera_link: usb_cam_link    # 他のカメラ（camera_link）と同時に置いても TF が衝突しないよう別名にする
+  optical: camera              # usb_cam の frame_id は camera（TF はドライバが出さない）
+
+tf:
+  publish: true                # 実機では利用者が付ける TF。シミュでは光学フレームとして接続する
+  links:
+    - {parent: usb_cam_link, child: camera, xyz: [0, 0, 0], rpy: [-1.5707963267948966, 0, -1.5707963267948966]}
+  gz_sensor_frame: camera_link   # frames のキー名（= usb_cam_link の位置）
+
+topics:
+  root: ""                     # ros2 run usb_cam usb_cam_node_exe の直接起動形（/image_raw）
+  ns_mode: flat
+  streams:
+    color_image: {source: color,      name: image_raw,   type: sensor_msgs/msg/Image,      encoding: rgb8, frame: optical, transform: passthrough}
+    color_info:  {source: info_color, name: camera_info, type: sensor_msgs/msg/CameraInfo,                 frame: optical}
+
+qos:
+  image: {reliability: reliable, depth: 100}
+  info:  {reliability: reliable, depth: 100}
+
+compressed: [color_image]
+
+not_reproduced:
+  - 露出・フォーカス・ホワイトバランス等の V4L2 制御
+  - pixel_format 違い（yuyv 時の yuv422_yuy2）、MJPEG のブロックノイズ
+  - USB 切断・再接続

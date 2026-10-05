@@ -10,6 +10,11 @@ workspace/*
 .logs
 mise.toml
 
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+
 # secrets / local env (public repo)
 .env
 .env.*

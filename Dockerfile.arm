@@ -54,3 +54,25 @@ RUN printf '%s\n' \
     'source /opt/ros/jazzy/setup.bash' \
     'source /opt/crane_ws/install/setup.bash' \
     >> /home/ubuntu/.bashrc
+
+# カメラプロファイル層（ros2_poc_sim）: Gazebo の仮想カメラを実カメラ（usb_cam / RealSense D435）と
+# 同じトピック名・型・フレームで出す。/opt/crane_ws の上に overlay ワークスペースとして重ねる
+# （公式コミットは書き換えない）。使い方は docs/sim-camera-profile.md。
+# 依存解決（package.xml だけで足りる層）。ソース編集では再実行されないよう COPY を分ける。
+# 追加される apt パッケージは固定していない（ベースは digest 固定、ここは rosdep が解決する）。
+# `rosdep update` も GitHub の最新の rosdistro を取りに行くので、ここは再現性が一段落ちる（PoC として許容）。
+COPY ros2_poc_sim/package.xml /opt/ros2_poc_ws/src/ros2_poc_sim/package.xml
+RUN source /opt/ros/jazzy/setup.bash \
+    && source /opt/crane_ws/install/setup.bash \
+    && echo 'APT::Install-Recommends "false";' > /etc/apt/apt.conf.d/99ros2-poc-norecommends \
+    && apt-get update \
+    && rosdep update --rosdistro jazzy \
+    && rosdep install -y -i --from-paths /opt/ros2_poc_ws/src --rosdistro jazzy --skip-keys crane_x7_gazebo \
+    && rm -f /etc/apt/apt.conf.d/99ros2-poc-norecommends \
+    && rm -rf /var/lib/apt/lists/*
+COPY ros2_poc_sim /opt/ros2_poc_ws/src/ros2_poc_sim
+RUN source /opt/ros/jazzy/setup.bash \
+    && source /opt/crane_ws/install/setup.bash \
+    && cd /opt/ros2_poc_ws && colcon build \
+    && rm -rf /opt/ros2_poc_ws/build /opt/ros2_poc_ws/log \
+    && printf '%s\n' 'source /opt/ros2_poc_ws/install/setup.bash' >> /home/ubuntu/.bashrc

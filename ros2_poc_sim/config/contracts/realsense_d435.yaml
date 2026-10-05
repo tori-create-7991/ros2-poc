@@ -1,0 +1,20 @@
+# 受け手が前提にする「実機 RealSense D435（realsense-ros、公式例と同じ camera_namespace:='' 形）」の出力契約。
+# プロファイル YAML とは別に手書きし、プロファイルのドリフトを検出する。実機にも同じ契約を流す。
+profile: realsense_d435
+source: .research/sim-camera-profile_20261002/01a#3, 03
+topics:
+  - {name: /camera/color/image_raw,                     type: sensor_msgs/msg/Image,      encoding: rgb8,  frame_id: camera_color_optical_frame, min_hz: 0.5}
+  - {name: /camera/color/camera_info,                   type: sensor_msgs/msg/CameraInfo,                  frame_id: camera_color_optical_frame, min_hz: 0.5}
+  - {name: /camera/aligned_depth_to_color/image_raw,    type: sensor_msgs/msg/Image,      encoding: 16UC1, frame_id: camera_color_optical_frame, min_hz: 0.5}
+  - {name: /camera/aligned_depth_to_color/camera_info,  type: sensor_msgs/msg/CameraInfo,                  frame_id: camera_color_optical_frame, min_hz: 0.5}
+same_stamp:        # 公式 color_detection の ExactTime 同期の前提
+  - [/camera/color/image_raw, /camera/aligned_depth_to_color/image_raw, /camera/color/camera_info]
+same_stamp_min_ratio: 0.5
+camera_info:       # CameraInfo の内容。fx はプロファイルの暫定値（実機入手後に実測へ。実機に流すときは外すか値を差し替える）
+  /camera/color/camera_info: {width: 640, height: 480, fx: 462.14, fy: 462.14, cx: 320.0, cy: 240.0, fx_tol: 1.0, image: /camera/color/image_raw}
+  /camera/aligned_depth_to_color/camera_info: {width: 640, height: 480, fx: 462.14, fy: 462.14, cx: 320.0, cy: 240.0, fx_tol: 1.0, image: /camera/aligned_depth_to_color/image_raw}
+tf:                # base_link からこれらのフレームへ TF が解決すること
+  parent: base_link
+  frames: [camera_link, camera_color_optical_frame, camera_depth_optical_frame]
+optional_topics:   # 有効にしたときだけ検査（--with-optional）
+  - {name: /camera/depth/color/points, type: sensor_msgs/msg/PointCloud2, frame_id: camera_color_optical_frame, min_hz: 0.5}
