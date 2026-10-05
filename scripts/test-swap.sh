@@ -112,13 +112,13 @@ old_is_clear "$OLD" || fail "OLD が無いのに clear でないと判定した"
 
 # 10) 入れ替えが確定したあと、旧の削除中に中断されても、成功済みの入れ替えを巻き戻さない
 setup existing
-# shellcheck disable=SC2329  # swap_all の中から呼ばれる（シェル関数が組み込みコマンドを上書きする）
-rm() {   # OLD の削除の直前に中断された状態を作る（trap から cleanup_swap が呼ばれる）
-  if [ "${1:-}" = "-rf" ] && [ "${2:-}" = "$OLD" ]; then cleanup_swap 2>/dev/null; fi
-  command rm "$@"
+# shellcheck disable=SC2317,SC2329  # swap_all の中から呼ばれる（remove_old を差し替える）
+remove_old() {   # OLD の削除の直前に中断された状態を作る（trap から cleanup_swap が呼ばれる）
+  cleanup_swap 2>/dev/null
+  rm -rf "$OLD"
 }
 quiet swap_all || fail "確定後の中断: 成功するはずが失敗"
-unset -f rm
+remove_old() { rm -rf "$OLD"; }   # 元に戻す
 for d in "$FINAL_KS" "$FINAL_CA" "$FINAL_ROGUE"; do [ "$(val "$d")" = new ] || fail "確定後の中断: $d が巻き戻された（$(val "$d")）"; done
 
 # 11) 記録だけあって退避できていない名前（mv の直前・直後の中断）は、復元で飛ばす。戻し先に入れ子で移さない
