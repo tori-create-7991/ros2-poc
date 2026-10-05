@@ -126,18 +126,44 @@ for e in b c; do
   no_compose "$e(env.sh なし)"
 done
 
-# (g) b|c と --arm の同時指定 → exit 2（ros2arm は環境 A のまま混在するため）
+# (g) b|c と --arm / --vla: override と profile が付き、指定した分だけ起動し直す（ros2arm・ros2server も同じ環境に揃える）
 for e in b c; do
   run_case "" "$TMP/keystores" "$e" --arm
-  [ "$RC" -eq 2 ] || fail "$e --arm: exit 2 のはずが $RC"
-  grep -q "ros2arm" <<<"$ERR" || fail "$e --arm: stderr に ros2arm の説明が無い: $ERR"
-  no_compose "$e --arm"
+  [ "$RC" -eq 0 ] || fail "$e --arm: exit 0 のはずが $RC: $ERR"
+  grep -q -- "-f docker-compose.yml -f docker-compose.sros2.yml --profile arm up -d --build --force-recreate" <<<"$LOG" \
+    || fail "$e --arm: override と --profile arm が付かない: $LOG"
+  if grep -q -- "--profile vla" <<<"$LOG"; then fail "$e --arm: 指定していない vla が付いた: $LOG"; fi
+  run_case "" "$TMP/keystores" "$e" --vla
+  [ "$RC" -eq 0 ] || fail "$e --vla: exit 0 のはずが $RC: $ERR"
+  grep -q -- "docker-compose.sros2.yml --profile vla up -d" <<<"$LOG" || fail "$e --vla: --profile vla が付かない: $LOG"
+  if grep -q -- "--profile arm" <<<"$LOG"; then fail "$e --vla: 指定していない arm が付いた: $LOG"; fi
+  run_case "" "$TMP/keystores" "$e" --arm --vla
+  [ "$RC" -eq 0 ] || fail "$e --arm --vla: exit 0 のはずが $RC: $ERR"
+  grep -q -- "--profile arm --profile vla up -d" <<<"$LOG" || fail "$e --arm --vla: 両方の profile が付かない: $LOG"
+done
+run_case "" "$TMP/keystores" a --vla
+[ "$RC" -eq 0 ] || fail "a --vla: exit 0 のはずが $RC: $ERR"
+grep -q -- "compose --profile vla up -d --build --force-recreate" <<<"$LOG" || fail "a --vla: --profile vla が付かない: $LOG"
+run_case "" "$TMP/keystores" a --arm --vla
+grep -q -- "compose --profile arm --profile vla up -d" <<<"$LOG" || fail "a --arm --vla: 両方の profile が付かない: $LOG"
+# profile を付けないときは、空の配列でも macOS の bash 3.2 で落ちない（compose に profile が渡らない）
+for e in a b c; do
+  run_case "" "$TMP/keystores" "$e"
+  [ "$RC" -eq 0 ] || fail "$e（profile なし）: exit 0 のはずが $RC: $ERR"
+  if grep -q -- "--profile" <<<"$LOG"; then fail "$e（profile なし）: profile が付いた: $LOG"; fi
 done
 
-# (h) b/c で ros2arm が起動中 → 警告は出すが続行する（環境 A のまま混在する旨）
+# (h) b/c で ros2arm / ros2server が起動中なのに --arm / --vla が無い → 警告は出すが続行する（前の環境のまま混在する旨）
 run_case "ros2arm" "$TMP/keystores" c
 [ "$RC" -eq 0 ] || fail "c(ros2arm 起動中): exit 0 のはずが $RC: $ERR"
-grep -q "ros2arm" <<<"$ERR" || fail "c(ros2arm 起動中): 警告が出ない: $ERR"
+grep -q "ros2arm.*--arm" <<<"$ERR" || fail "c(ros2arm 起動中): --arm の警告が出ない: $ERR"
+run_case "ros2server" "$TMP/keystores" b
+[ "$RC" -eq 0 ] || fail "b(ros2server 起動中): exit 0 のはずが $RC: $ERR"
+grep -q "ros2server.*--vla" <<<"$ERR" || fail "b(ros2server 起動中): --vla の警告が出ない: $ERR"
+# 指定したときは警告しない
+run_case "ros2arm ros2server" "$TMP/keystores" c --arm --vla
+[ "$RC" -eq 0 ] || fail "c(両方起動中 + 両方指定): exit 0 のはずが $RC: $ERR"
+if grep -q "混在" <<<"$ERR"; then fail "c(指定済み): 警告が出た: $ERR"; fi
 
 # (i) 環境 b が ./workspace に置いた鍵のコピー（目印ファイルつき）の扱い
 mk_leak() { rm -rf "$TMP/ws"; mkdir -p "$TMP/ws/sros2-keystore"; touch "$TMP/ws/sros2-keystore/key.pem" "$TMP/ws/sros2-keystore/.sros2-generated"; }

@@ -42,3 +42,44 @@ services:
       - ./workspace:/workspace
       - ./sros2/entrypoint.sh:/sros2/entrypoint.sh:ro
       - ${SROS2_KEYSTORE_ROOT:-./sros2/keystores}/${SROS2_ENV:?}/containers/ros2lab-b:/sros2/src:ro
+
+  # ros2server（VLA ノード・変換ノード）: ros2lab と同じ作り（root で動く。ros_entrypoint.sh に引き継ぐ）。
+  # profile vla のサービス。環境 b / c で使うときは scripts/up-env.sh の --vla を付ける。
+  ros2server:
+    <<: *sros2
+    environment:
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - ROS_SECURITY_ENABLE=true
+      - ROS_SECURITY_STRATEGY=${SROS2_STRATEGY:?scripts/up-env.sh 経由で起動すること}
+      - ROS_SECURITY_KEYSTORE=/run/sros2/keystore
+      - SROS2_REQUIRE_CRL=${SROS2_REQUIRE_CRL:-}
+      - ROS_SECURITY_ENCLAVE_OVERRIDE=${SROS2_ENCLAVE_ROS2SERVER:-/lab/ros2server}
+      - VLA_ENDPOINT=${VLA_ENDPOINT:-http://vla-server:8000/act}
+    volumes:
+      - ./workspace:/workspace
+      - ./sros2/entrypoint.sh:/sros2/entrypoint.sh:ro
+      - ${SROS2_KEYSTORE_ROOT:-./sros2/keystores}/${SROS2_ENV:?}/containers/ros2server:/sros2/src:ro
+
+  # ros2arm（アームシミュ）: ノードは ubuntu（uid 1000）で動き、ベースイメージの /entrypoint.sh（supervisord でデスクトップを
+  # 起動）を持つので、ros2lab と違う点が 3 つある。profile arm のサービス。環境 b / c では scripts/up-env.sh の --arm を付ける。
+  #  - SROS2_NEXT=/entrypoint.sh: 鍵を置いたあと、ベースイメージの entrypoint に引き継ぐ（command は元の CMD のまま）。
+  #  - SROS2_CHOWN=1000:1000 と tmpfs の uid/gid: 鍵を ubuntu だけが読めるようにする（root のままだとノードが鍵を読めない）。
+  #  - SROS2_ENV_FILE=/run/sros2-env.sh: デスクトップの端末はコンテナの ENV を継承しないので、~/.bashrc が読む環境ファイルを書く。
+  ros2arm:
+    entrypoint: ["/sros2/entrypoint.sh"]
+    tmpfs:
+      - /run/sros2:rw,mode=0700,size=1m,uid=1000,gid=1000
+    environment:
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - ROS_SECURITY_ENABLE=true
+      - ROS_SECURITY_STRATEGY=${SROS2_STRATEGY:?scripts/up-env.sh 経由で起動すること}
+      - ROS_SECURITY_KEYSTORE=/run/sros2/keystore
+      - SROS2_REQUIRE_CRL=${SROS2_REQUIRE_CRL:-}
+      - ROS_SECURITY_ENCLAVE_OVERRIDE=${SROS2_ENCLAVE_ROS2ARM:-/lab/ros2arm}
+      - SROS2_NEXT=/entrypoint.sh
+      - SROS2_CHOWN=1000:1000
+      - SROS2_ENV_FILE=/run/sros2-env.sh
+    volumes:
+      - ./workspace:/workspace
+      - ./sros2/entrypoint.sh:/sros2/entrypoint.sh:ro
+      - ${SROS2_KEYSTORE_ROOT:-./sros2/keystores}/${SROS2_ENV:?}/containers/ros2arm:/sros2/src:ro

@@ -77,7 +77,7 @@ cd "$WORK"
 # コンテナ名の一覧。
 # 環境 C の enclave 名はコンテナ名の - を _ にしたもの（sros2 の enclave 名に - は使えない）。
 # 環境 B は全コンテナで同じ enclave（B-AU-03）。policy の enclave path と一致させる。
-CONTAINERS="ros2lab-a ros2lab-b"
+CONTAINERS="ros2lab-a ros2lab-b ros2arm ros2server"
 enclave_of() {
   if [ "$ENV_NAME" = "b" ]; then echo "/lab/shared"; else echo "/lab/${1//-/_}"; fi
 }

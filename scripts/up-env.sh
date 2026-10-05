@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SROS2 の環境 A / B / C を切り替えて ros2lab-a/b を起動し直す。
+# SROS2 の環境 A / B / C を切り替えて ros2lab-a/b（と、指定すれば ros2arm・ros2server）を起動し直す。
 #   a: SROS2 未適用（現行の compose そのまま）
 #   b: SROS2 適用済み + 意図的な誤設定（台帳 sros2/ledger/ledger.yaml の不備）
 #   c: 推奨どおりの SROS2（Enforce）
@@ -7,15 +7,17 @@
 # 切替はコンテナの作り直し（環境変数と mount が変わるため）。
 # 直接 `docker compose up` を使うと環境ラベルと keystore の mount が付かないため、
 # SROS2 を使うときは必ずこのスクリプト経由で起動すること。
-#   bash scripts/up-env.sh a|b|c [--arm]
-# --arm は環境 a のときだけ使える（ros2arm はまだ SROS2 化していないため、
-# b / c と一緒に起動すると ros2arm だけ環境 A のまま混在する）。
+#   bash scripts/up-env.sh a|b|c [--arm] [--vla]
+#   --arm: ros2arm（アームシミュ）も同じ環境で起動し直す（profile arm）。
+#   --vla: ros2server と vla-server（VLA 連携）も同じ環境で起動し直す（profile vla。vla-server は ROS を使わないので環境 a/b/c の対象外）。
+# ros2arm / ros2server は ros2lab-a/b と同じ環境で起動しないと DDS で通信できない（環境が混在する）。
+# 環境を切り替えたら、動かしているシミュ・ノードは起動し直しになる。
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 usage() {
-  echo "Usage: bash scripts/up-env.sh a|b|c [--arm]" >&2
+  echo "Usage: bash scripts/up-env.sh a|b|c [--arm] [--vla]" >&2
   exit 2
 }
 
@@ -28,17 +30,19 @@ case "$ENV_NAME" in
 esac
 
 ARM=0
+VLA=0
 for arg in "$@"; do
   case "$arg" in
     --arm) ARM=1 ;;
+    --vla) VLA=1 ;;
     *) usage ;;
   esac
 done
-
-if [ "$ENV_NAME" != "a" ] && [ "$ARM" -eq 1 ]; then
-  echo "環境 $ENV_NAME では --arm を使えない。ros2arm はまだ SROS2 化していないため、ros2arm だけ環境 A のまま混在する。" >&2
-  exit 2
-fi
+# 起動し直す profile（指定した分だけ）。指定しなかったコンテナは触らない。
+# 空の配列を set -u で展開すると macOS 標準の bash 3.2 が失敗するので、${PROFILES[@]+"${PROFILES[@]}"} の形で展開する
+PROFILES=()
+[ "$ARM" -eq 1 ] && PROFILES+=(--profile arm)
+[ "$VLA" -eq 1 ] && PROFILES+=(--profile vla)
 
 # SROS2_KEYSTORE_ROOT はテスト用の上書き
 KS_ROOT="${SROS2_KEYSTORE_ROOT:-sros2/keystores}"
@@ -69,11 +73,7 @@ cleanup_leaked_keys() {
 }
 
 if [ "$ENV_NAME" = "a" ]; then
-  if [ "$ARM" -eq 1 ]; then
-    docker compose --profile arm up -d --build --force-recreate
-  else
-    docker compose up -d --build --force-recreate
-  fi
+  docker compose ${PROFILES[@]+"${PROFILES[@]}"} up -d --build --force-recreate
   cleanup_leaked_keys
   exit 0
 fi
@@ -91,9 +91,16 @@ if [ ! -d "$KS_ROOT/$ENV_NAME" ]; then
   exit 1
 fi
 
-if [ -n "$(docker ps --filter 'name=^ros2arm$' --filter 'status=running' -q)" ]; then
-  echo "警告: ros2arm が起動中。ros2arm は SROS2 化していない（環境 A のまま）ため、ros2lab とは通信できない。" >&2
-fi
+# 指定しなかった ros2arm / ros2server が動いていると、前の環境のまま混在して ros2lab・ros2arm・ros2server が通信できない
+for pair in "ros2arm:--arm:$ARM" "ros2server:--vla:$VLA"; do
+  c="${pair%%:*}"
+  rest="${pair#*:}"
+  flag="${rest%%:*}"
+  want="${rest##*:}"
+  if [ "$want" -eq 0 ] && [ -n "$(docker ps --filter "name=^$c\$" --filter 'status=running' -q)" ]; then
+    echo "警告: $c が起動中。$flag を付けていないので環境 $ENV_NAME に切り替わらず、前の環境のまま混在して ros2lab と通信できない。" >&2
+  fi
+done
 
 # gen-keystore.sh が書く、コンテナごとの enclave 名の対応（SROS2_ENCLAVE_*）を読む。
 # 無いと既定の enclave 名で起動してしまい、環境 b の意図（enclave 名の不一致）を壊すので、無ければ中断する。
@@ -113,7 +120,7 @@ case "$ENV_NAME" in
     ;;
 esac
 
-docker compose -f docker-compose.yml -f docker-compose.sros2.yml up -d --build --force-recreate
+docker compose -f docker-compose.yml -f docker-compose.sros2.yml ${PROFILES[@]+"${PROFILES[@]}"} up -d --build --force-recreate
 if [ "$ENV_NAME" = "c" ]; then
   cleanup_leaked_keys
 fi

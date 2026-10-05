@@ -9,6 +9,11 @@
 #     （ros2 側が有効と解釈する値を、ここで見逃さないため）。
 #   - 鍵ファイルは空でないこと（空ファイルを弾く）。
 #   - SROS2_REQUIRE_CRL=true のとき（環境 c）は crl.pem も必須。true / false / 空以外は拒否する。
+# 任意の設定（ros2arm のように、ノードが root 以外で動き、デスクトップの端末がコンテナの ENV を継承しないコンテナ向け）:
+#   - SROS2_CHOWN=<user[:group]>: 鍵の置き場（DST）の所有者を変える。モード（0700/0600）は変えない。
+#     user[:group] の形以外は拒否する。変更に失敗したら起動しない（鍵が読めないまま起動しないため）。
+#   - SROS2_ENV_FILE=<path>: SROS2 が有効なときだけ、ROS_SECURITY_ENABLE / STRATEGY / KEYSTORE / ENCLAVE_OVERRIDE を
+#     source できる形で書く（0644。鍵は含まない）。値は source されるので、英数字と _ . / - 以外を含むものは拒否する。
 # SROS2_SRC / SROS2_DST / SROS2_NEXT はテスト用の上書き。
 set -eu
 # 鍵を置く間だけ、作るディレクトリ・ファイルを自分だけが読める権限にする（途中のディレクトリも 0700）。
@@ -56,6 +61,31 @@ case "$enable" in
     done
     chmod 0700 "$DST" "$DST/enclaves" "$dir"
     chmod 0600 "$dir"/*
+    if [ -n "${SROS2_CHOWN:-}" ]; then
+      # user[:group]（英数字と _ . - のみ。先頭が - や . のものは chown のオプション・パスと誤解されうるので拒否）
+      case "$SROS2_CHOWN" in
+        -* | .* | *[!A-Za-z0-9_.:-]*) die "SROS2_CHOWN の値が不正: '$SROS2_CHOWN'（user[:group] の形にすること）" ;;
+      esac
+      chown -R "$SROS2_CHOWN" "$DST" || die "SROS2_CHOWN=$SROS2_CHOWN で鍵の所有者を変えられない。鍵が読めないまま起動しないため中止する。"
+    fi
+    if [ -n "${SROS2_ENV_FILE:-}" ]; then
+      for v in ROS_SECURITY_ENABLE ROS_SECURITY_STRATEGY ROS_SECURITY_KEYSTORE ROS_SECURITY_ENCLAVE_OVERRIDE; do
+        eval "val=\${$v:-}"
+        case "$val" in
+          *[!A-Za-z0-9_./-]*) die "$v の値が env ファイルに書けない（英数字と _ . / - のみ）: '$val'" ;;
+        esac
+      done
+      # 先に全部検査してから書く（途中で止まって中途半端なファイルを残さない）。鍵ではないので 0644
+      (
+        umask 022
+        {
+          for v in ROS_SECURITY_ENABLE ROS_SECURITY_STRATEGY ROS_SECURITY_KEYSTORE ROS_SECURITY_ENCLAVE_OVERRIDE; do
+            eval "val=\${$v:-}"
+            if [ -n "$val" ]; then echo "export $v=$val"; fi
+          done
+        } > "$SROS2_ENV_FILE"
+      ) || die "SROS2_ENV_FILE=$SROS2_ENV_FILE を書けない。"
+    fi
     ;;
   "" | false) ;;
   *) die "ROS_SECURITY_ENABLE の値が不正: '${ROS_SECURITY_ENABLE:-}'（true / false か未設定にすること）" ;;
