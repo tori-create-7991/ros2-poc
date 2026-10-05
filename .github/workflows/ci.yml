@@ -21,6 +21,7 @@ jobs:
           bash scripts/test-up-env.sh
           bash scripts/test-entrypoint.sh
           bash scripts/test-probe.sh
+          bash scripts/test-swap.sh
       - name: SROS2 ledger check
         run: |
           python3 -c 'import yaml' || (sudo apt-get update && sudo apt-get install -y python3-yaml)

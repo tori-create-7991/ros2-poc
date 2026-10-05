@@ -11,7 +11,9 @@
 #   - SROS2_REQUIRE_CRL=true のとき（環境 c）は crl.pem も必須。true / false / 空以外は拒否する。
 # SROS2_SRC / SROS2_DST / SROS2_NEXT はテスト用の上書き。
 set -eu
-# 作るディレクトリ・ファイルを自分だけが読める権限にする（途中のディレクトリも 0700）
+# 鍵を置く間だけ、作るディレクトリ・ファイルを自分だけが読める権限にする（途中のディレクトリも 0700）。
+# 次の entrypoint には元の umask で渡す（./workspace などに作るファイルが 0600 にならないように）
+old_umask="$(umask)"
 umask 077
 
 SRC="${SROS2_SRC:-/sros2/src}"
@@ -59,4 +61,5 @@ case "$enable" in
   *) die "ROS_SECURITY_ENABLE の値が不正: '${ROS_SECURITY_ENABLE:-}'（true / false か未設定にすること）" ;;
 esac
 
+umask "$old_umask"
 exec "$NEXT" "$@"

@@ -19,3 +19,4 @@ sros2/ca-private
 sros2/rogue
 sros2/.stage-*
 sros2/.old-*
+sros2/.lock-*

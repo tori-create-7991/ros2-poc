@@ -17,7 +17,7 @@ no_() { if "$@"; then fail "偽のはずが真: $*"; fi; }
 
 # --- 数値・文字列の述語 ---
 yes_ eq a a; no_ eq a b
-yes_ gt_zero 3; no_ gt_zero 0; no_ gt_zero ""; no_ gt_zero abc
+yes_ gt_zero 3; yes_ gt_zero 1; no_ gt_zero 0; no_ gt_zero ""; no_ gt_zero abc
 yes_ le 90 91; yes_ le 91 91; no_ le 92 91; no_ le abc 91
 yes_ nonempty_and_differ x y; no_ nonempty_and_differ "" y; no_ nonempty_and_differ x x
 yes_ bash_ge14 "cert=89 crl=179"; yes_ bash_ge14 "cert=14 crl=14"   # 境界（14 日ちょうどは通る）
@@ -32,6 +32,7 @@ yes_ rejected 0 "$TMP/up.log"
 no_ rejected 0 "$TMP/down.log"
 no_ rejected 0 "$TMP/none.log"
 no_ rejected 5 "$TMP/up.log"       # 受信があれば拒否ではない
+no_ rejected 1 "$TMP/up.log"       # 1 件でも受信があれば拒否ではない（境界）
 no_ rejected "" "$TMP/up.log"      # 購読が実行できなかった（空）は拒否ではない
 yes_ rejected_pair "0 0" "$TMP/up.log"
 no_ rejected_pair "0 0" "$TMP/down.log"
@@ -40,8 +41,11 @@ no_ rejected_pair "" "$TMP/up.log"
 
 # --- 暗号化の判定（RTPS あり・平文 0・受信あり）---
 yes_ encrypted_ok 100 0 20
+yes_ encrypted_ok 1 0 1        # 境界（RTPS 1 件・受信 1 件でも成り立つ）
 no_ encrypted_ok 0 0 20      # パケットが取れていない
 no_ encrypted_ok 100 5 20    # 平文が出ている
+no_ encrypted_ok 100 1 20    # 平文が 1 件でも出ていれば暗号化ではない（境界）
+no_ encrypted_ok 100 0 -1
 no_ encrypted_ok 100 0 0     # 通信が流れていない（0 件が「暗号化の証拠」にならない）
 no_ encrypted_ok 100 0 ""
 

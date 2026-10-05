@@ -13,6 +13,8 @@ case "$ENV_NAME" in b | c) ;; *) echo "環境は b か c: $ENV_NAME" >&2; exit 2
 
 # shellcheck source=scripts/sros2/lib/common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+# shellcheck source=scripts/sros2/lib/swap.sh
+. "$(dirname "${BASH_SOURCE[0]}")/swap.sh"
 need_ros2
 
 # governance に Domain ID が焼き込まれる。ros2-poc は Domain 42 固定なので 42 で生成する。
@@ -36,24 +38,38 @@ STAGE="$BASE/.stage-$ENV_NAME"
 OLD="$BASE/.old-$ENV_NAME"
 LOCK="$BASE/.lock-$ENV_NAME"
 
-# 同じ環境の生成が同時に走ると、STAGE や OLD を壊し合うので排他する
-if ! mkdir "$LOCK" 2>/dev/null; then
-  echo "別の生成が実行中（$LOCK がある）。残骸なら削除してから再実行すること。" >&2
+# 事前検査（ロックを取る前に、何も変えずに中止できるものを先に済ませる）
+# 環境 b は ./workspace に鍵のコピーを置く（B-AU-07）。共有領域（全コンテナから書き込める）なので、
+#   - シンボリックリンク（切れたリンクを含む）が置かれていたら、辿らずに中止する
+#   - 同名の別のディレクトリがあるなら、何もせず中止する
+if [ -n "$WORKSPACE_DIR" ]; then
+  if [ -L "$WORKSPACE_DIR/sros2-keystore" ]; then
+    echo "$WORKSPACE_DIR/sros2-keystore がシンボリックリンク。辿らずに中止する。手で確認して削除すること。" >&2
+    exit 1
+  fi
+  if [ "$ENV_NAME" = "b" ] && [ -e "$WORKSPACE_DIR/sros2-keystore" ] && [ ! -f "$WORKSPACE_DIR/sros2-keystore/.sros2-generated" ]; then
+    echo "$WORKSPACE_DIR/sros2-keystore は既にあり、このスクリプトが作ったものではない。B-AU-07 の注入を中止する。" >&2
+    exit 1
+  fi
+fi
+
+if ! acquire_lock "$LOCK"; then
+  echo "別の生成が実行中（$LOCK がある）。別の生成が動いていないことを確認して、$LOCK を削除してから再実行すること。" >&2
   exit 1
 fi
+# ロックを取ったあとの終了では、必ず後始末する（入れ替えの最中の中断は元に戻す）。INT / TERM / HUP も EXIT を通す
+cleanup() {
+  cleanup_swap
+  rm -rf "${WORK:-}" "$STAGE" "$LOCK"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM HUP
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK" "$STAGE" "$LOCK"' EXIT
 
-# 前回の入れ替えが途中で失敗していると、旧データが OLD に残っている。黙って消さずに中止する
-if [ -e "$OLD" ]; then
-  echo "$OLD がある。前回の入れ替えが途中で失敗している。中身（旧の keystore / ca-private / rogue）を元の場所へ戻すか、不要なら削除してから再実行すること。" >&2
-  exit 1
-fi
-
-# 環境 b は ./workspace に鍵のコピーを置く（B-AU-07）。同名の別のディレクトリがあるなら、何もせず中止する
-if [ "$ENV_NAME" = "b" ] && [ -n "$WORKSPACE_DIR" ] \
-  && [ -e "$WORKSPACE_DIR/sros2-keystore" ] && [ ! -f "$WORKSPACE_DIR/sros2-keystore/.sros2-generated" ]; then
-  echo "$WORKSPACE_DIR/sros2-keystore は既にあり、このスクリプトが作ったものではない。B-AU-07 の注入を中止する。" >&2
+# 前回の入れ替えが途中で失敗していると（SIGKILL など）、旧データが OLD に残っている。黙って消さずに中止する。
+# keystore は再生成できるので、旧い鍵を保つ必要がなければ OLD を削除して再実行すればよい
+if ! old_is_clear "$OLD"; then
+  echo "$OLD がある。前回の入れ替えが途中で終わっている。keystore は再生成できるので、$OLD を削除して再実行すること（旧い鍵を保ちたいときは、中身を手で確認する）。" >&2
   exit 1
 fi
 cd "$WORK"
@@ -251,38 +267,8 @@ chmod -R go-rwx "$CA_OUT"
 # 失効済みの不正証明書（診断コンテナだけに渡す）
 cp -r "$WORK/rogue-revoked" "$ROGUE_OUT/revoked"
 
-# 入れ替え（ここまで来たら全部できている）。旧ディレクトリは OLD へ退避してから新しいものを入れる。
-# 途中で失敗したら、入れた新しいものを消して、退避した旧を元の場所へ戻す（keystore と ca-private が食い違わないように）
-final_of() { case "$1" in ks) echo "$FINAL_KS" ;; ca) echo "$FINAL_CA" ;; rogue) echo "$FINAL_ROGUE" ;; esac; }
-new_of() { case "$1" in ks) echo "$KS_OUT" ;; ca) echo "$CA_OUT" ;; rogue) echo "$ROGUE_OUT" ;; esac; }
-MOVED=""  # 旧を OLD へ退避した名前
-DONE=""   # 新しいものを入れた名前
-swap_one() {
-  # SROS2_TEST_FAIL_SWAP=<ks|ca|rogue> は、その名前の入れ替えを失敗させる（復元のテスト用。通常は使わない）
-  [ "${SROS2_TEST_FAIL_SWAP:-}" != "$1" ] || return 1
-  local name="$1" f n
-  f="$(final_of "$name")"
-  n="$(new_of "$name")"
-  mkdir -p "$(dirname "$f")"
-  if [ -e "$f" ]; then
-    mv "$f" "$OLD/$name" || return 1
-    MOVED="$MOVED $name"
-  fi
-  mv "$n" "$f" || return 1
-  DONE="$DONE $name"
-}
-rollback() {
-  local name
-  for name in $DONE; do rm -rf "$(final_of "$name")"; done
-  for name in $MOVED; do mv "$OLD/$name" "$(final_of "$name")"; done
-  rmdir "$OLD" 2>/dev/null || true
-}
-if ! { mkdir -p "$OLD" && swap_one ks && swap_one ca && swap_one rogue; }; then
-  echo "keystore の入れ替えに失敗した。元に戻す。" >&2
-  rollback
-  exit 1
-fi
-rm -rf "$OLD"
+# 入れ替え（ここまで来たら全部できている）。失敗・中断したら元に戻す（swap.sh）
+swap_all || exit 1
 
 # ./workspace の鍵のコピーは、入れ替えのあとに触る（途中で失敗しても keystore と食い違わないように）。
 # 目印ファイルがあるもの（このスクリプトが作ったもの）だけを消す・作り直す

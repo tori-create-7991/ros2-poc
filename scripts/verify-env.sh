@@ -103,7 +103,7 @@ verify_c() {
   wait
   check C4 "鍵なしの参加者は拒否される（受信 ${r%% *} 件 / 見えた publisher ${r##* }。認証済みの publisher は起動できている）" rejected_pair "$r" "$LAST_PUB_LOG"
 
-  # 不正証明書（AU-3）。対照（valid）が通ることで、試験が成立していることを確かめる
+  # 不正証明書。対照（valid）が通ることで、試験が成立していることを確かめる
   must_gen_rogue c all || return 1
   local c
   for c in valid wrongca selfsigned revoked; do

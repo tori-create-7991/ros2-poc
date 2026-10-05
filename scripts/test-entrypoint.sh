@@ -107,6 +107,13 @@ done
 run "$TMP/full" ROS_SECURITY_ENABLE=true
 [ "$(mode "$TMP/dst/enclaves/lab")" = "700" ] || fail "途中のディレクトリが 0700 でない: $(mode "$TMP/dst/enclaves/lab")"
 
+# 4h) 次の entrypoint には元の umask で渡す（秘密を置く間だけ 077）
+printf '#!/bin/sh\numask\n' > "$TMP/next.sh"
+chmod +x "$TMP/next.sh"
+rm -rf "$TMP/dst"
+got="$(umask 022; env ROS_SECURITY_ENABLE=true SROS2_SRC="$TMP/full" SROS2_DST="$TMP/dst" SROS2_NEXT="$TMP/next.sh" sh "$ROOT/sros2/entrypoint.sh")"
+[ "$got" = "0022" ] || fail "次の entrypoint の umask が元の値でない: $got"
+
 # 5) SROS2 無効 → 鍵が無くても素通し
 run "$TMP/none"
 [ "$RC" -eq 0 ] || fail "SROS2 無効: exit 0 のはずが $RC: $ERR"

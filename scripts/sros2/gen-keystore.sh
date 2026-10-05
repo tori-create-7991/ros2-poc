@@ -37,6 +37,8 @@ if ! docker image inspect ros2lab:jazzy >/dev/null 2>&1; then
 fi
 
 # ros2 CLI が使うホームを書き込める場所にする（コンテナ内は呼び出したユーザーの uid で動かす）
-exec docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e SROS2_TEST_FAIL_SWAP \
+# --init: Ctrl-C などのシグナルを bash に届け、中断時の後始末（入れ替えの復元）を走らせる
+exec docker run --rm --init -u "$(id -u):$(id -g)" -e HOME=/tmp \
+  -e SROS2_ALLOW_TEST_HOOKS -e SROS2_TEST_FAIL_SWAP -e SROS2_TEST_FAIL_ROLLBACK \
   -v "$PWD/sros2:/w" -v "$PWD/workspace:/ws" -v "$PWD/scripts/sros2/lib:/lib-sros2:ro" \
   ros2lab:jazzy bash /lib-sros2/gen-keystore-inner.sh "$1" /w /ws
