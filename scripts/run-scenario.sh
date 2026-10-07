@@ -5,6 +5,7 @@
 # 出力: workspace/runs/<日時>/（scenario.mp4, result.json, commands.log ほか）
 # 終了コード: 0 = 全ステップ PASS / 1 = FAIL あり / 2 = 環境・実行時の問題（指令が送れなかった場合を含む）/
 #            64 = 引数の誤り / 130 = Ctrl-C
+# 環境変数 RUN_LABEL=<名前> を付けると run_meta.json に残り、性能比較（scenario_cli perf）の目印になる（例: RUN_LABEL=light）。
 set -euo pipefail
 
 CALLER_DIR="$PWD"   # --scenario の相対パスは呼び出し元から解決する
@@ -40,6 +41,12 @@ if [ -z "$TIMEOUT" ]; then
   if [ "$START_SIM" = 1 ]; then TIMEOUT=900; else TIMEOUT=120; fi
 fi
 case "$TIMEOUT" in ''|*[!0-9]*) echo "--timeout は秒数（整数）" >&2; exit 64 ;; esac
+
+RUN_LABEL="${RUN_LABEL:-}"
+if [ -n "$RUN_LABEL" ] && [[ ! "$RUN_LABEL" =~ ^[A-Za-z0-9_-]{1,32}$ ]]; then
+  echo "RUN_LABEL は英数字・_・- の 32 文字まで" >&2
+  exit 64
+fi
 
 if [[ "$SCENARIO" == */* || "$SCENARIO" == *.yaml || "$SCENARIO" == *.yml ]]; then
   # パス指定: 呼び出し元のディレクトリから解決する（リポジトリ内の同名ファイルを黙って選ばない）
@@ -123,6 +130,14 @@ fi
 rec_check_leftovers
 
 rec_make_run_dir
+# 性能比較の目印: ラベルと実行環境（Colima VM の CPU・メモリ）。取れない項目は null（比較表では「-」）
+VM_INFO="$(docker info --format '{{.NCPU}} {{.MemTotal}}' 2>/dev/null || true)"
+read -r VM_CPUS VM_MEM <<<"$VM_INFO" || true
+[[ "${VM_CPUS:-}" =~ ^[1-9][0-9]*$ ]] || VM_CPUS=null
+if [[ "${VM_MEM:-}" =~ ^[1-9][0-9]*$ ]]; then VM_MEM_GIB=$(( VM_MEM / 1073741824 )); else VM_MEM_GIB=null; fi
+printf '{"label": "%s", "cpus": %s, "mem_gib": %s, "scenario": "%s", "started": "%s"}\n' \
+  "$RUN_LABEL" "$VM_CPUS" "$VM_MEM_GIB" "$(basename "$SCENARIO_FILE" .yaml | tr -c 'A-Za-z0-9._\n-' '_' | tr -d '\n')" "$TS" > "$RUN_HOST/run_meta.json" \
+  || echo "run_meta.json を書けない（性能比較の目印が残らない）" >&2
 cp "$SCENARIO_FILE" "$RUN_HOST/scenario.yaml" || fail_env "シナリオをコピーできない"
 echo "出力先: $RUN_HOST"
 

@@ -227,6 +227,17 @@ def test_judge_ignores_next_step_without_send_time(tmp_path):
     assert 'joints_not_still' not in r0['codes'] and r0['t_end'] > 10.0
 
 
+def test_perf_prints_comparison_table(tmp_path, capsys):
+    for name, label, rtf in (('r1', 'default', 0.3), ('r2', 'light', 0.8)):
+        d = tmp_path / name
+        d.mkdir()
+        (d / 'run_meta.json').write_text(json.dumps({'label': label, 'cpus': 6}))
+        (d / 'result.json').write_text(json.dumps({'verdict': 'PASS', 'performance': {'rtf': rtf, 'wall_sec': 40.0}}))
+    assert CLI.main(['perf', str(tmp_path / 'r1'), str(tmp_path / 'r2')]) == 0
+    out = capsys.readouterr().out
+    assert 'default' in out and 'light' in out and '0.30' in out and '0.80' in out and '40.00' in out
+
+
 def test_doctor_accepts_an_installed_font_name(monkeypatch, capsys):
     monkeypatch.setattr(CLI, '_font_families', lambda: 'DejaVu Sans\nNoto Sans CJK JP,Noto Sans CJK JP Bold\n')
     monkeypatch.setattr(CLI.shutil, 'which', lambda exe: None)

@@ -6,6 +6,7 @@
   scenario_cli budget <run_dir>       記録の最大秒数（記録プロセスの安全弁）を出す
   scenario_cli wait <run_dir> <index> ステップ index の送信後、腕が止まって判定できる時刻まで待つ
   scenario_cli judge <run_dir>        記録を判定して result.json を書く（全 PASS で 0、FAIL で 1）
+  scenario_cli perf <run_dir>...      run を RTF・所要時間の表で比べる
   scenario_cli vla-prepare <run_dir>  vla_steps.jsonl（run-vla.sh --record）から steps.json / events.jsonl /
                                       narration.json を作り、最後に指令を送ったステップの番号を出す。
                                       以降は wait / judge / compose をそのまま使う
@@ -25,6 +26,7 @@ import yaml
 
 from ros2_poc_sim import compose_video as C
 from ros2_poc_sim import motion_judge as M
+from ros2_poc_sim import perf as PERF
 from ros2_poc_sim import narration as N
 from ros2_poc_sim import scenario as S
 from ros2_poc_sim import vla_record as V
@@ -137,8 +139,17 @@ def cmd_judge(a):
         print(C.verdict_line(r))
         for reason in r.get('reasons') or []:
             print(f'    - {reason}')
+    if (res.get('performance') or {}).get('rtf') is None:
+        print('RTF を算出できない（clock.csv に /clock が記録されていない、または区間が短い）。判定には影響しない',
+              file=sys.stderr)
     print(f"RESULT {res['passed']}/{res['total']} PASS")
     return 0 if res['verdict'] == 'PASS' else 1
+
+
+def cmd_perf(a):
+    """複数の run を RTF・所要時間の表で比べる（--light や CPU 増設の効果の確認用）。"""
+    print(PERF.format_table([PERF.load_run(d) for d in a.run_dirs]))
+    return 0
 
 
 def _first_frame_t(run_dir):
@@ -232,6 +243,8 @@ def main(argv=None):
     w.add_argument('index', type=int)
     j = sub.add_parser('judge')
     j.add_argument('run_dir')
+    pf = sub.add_parser('perf')
+    pf.add_argument('run_dirs', nargs='+')
     v = sub.add_parser('vla-prepare')
     v.add_argument('run_dir')
     m = sub.add_parser('compose')
@@ -239,7 +252,7 @@ def main(argv=None):
     m.add_argument('--font', default=C.FONT, help='fontconfig のフォント名')
     a = p.parse_args(argv)
     handler = {'doctor': cmd_doctor, 'commands': cmd_commands, 'budget': cmd_budget, 'wait': cmd_wait,
-               'judge': cmd_judge, 'compose': cmd_compose, 'vla-prepare': cmd_vla_prepare}[a.cmd]
+               'judge': cmd_judge, 'compose': cmd_compose, 'vla-prepare': cmd_vla_prepare, 'perf': cmd_perf}[a.cmd]
     try:
         return handler(a)
     except Exception as e:   # noqa: BLE001 — 想定外の失敗は「FAIL」(1) ではなく環境・記録の問題 (2) にする

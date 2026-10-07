@@ -7,6 +7,7 @@
   camera_info.json    最初の CameraInfo（k, width, height, frame_id）
   joints.jsonl        /joint_states（間引き）
   ee.jsonl            カメラ光学座標での手先位置（TF、間引き）
+  clock.csv           wall,sim（/clock の sim time と壁時計。約 1Hz。RTF の算出用、無くても判定は動く）
 時刻はすべてコンテナの壁時計（time.time()）。ros2lab の `date` と同じ Colima VM の時計を共有する。
 """
 import argparse
@@ -19,6 +20,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
+from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import CameraInfo, Image, JointState
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -38,17 +40,22 @@ class Observer(Node):
         self.frame_id = None
         self.last_joint_t = 0.0
         self.last_frame_t = 0.0
+        self.last_clock_t = 0.0
         self.deadline = time.time() + max_duration
         # 行バッファ: 実行中に run-scenario.sh / scenario_cli wait が読むので、書いたらすぐ見えるようにする
         self.frames_csv = (self.out / 'camera_frames.csv').open('w', encoding='utf-8', buffering=1)
         self.frames_csv.write('n,t\n')
         self.joints = (self.out / 'joints.jsonl').open('w', encoding='utf-8', buffering=1)
         self.ee = (self.out / 'ee.jsonl').open('w', encoding='utf-8', buffering=1)
+        self.clock_csv = (self.out / 'clock.csv').open('w', encoding='utf-8', buffering=1)
+        self.clock_csv.write('wall,sim\n')
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.create_subscription(Image, image_topic, self.on_image, qos_profile_sensor_data)
         self.create_subscription(CameraInfo, info_topic, self.on_info, qos_profile_sensor_data)
         self.create_subscription(JointState, '/joint_states', self.on_joints, 50)
+        # best-effort: publisher が reliable / best-effort のどちらでも繋がる（reliable 購読は best-effort の /clock と繋がらず黙って空になる）
+        self.create_subscription(Clock, '/clock', self.on_clock, qos_profile_sensor_data)
         self.create_timer(period, self.on_timer)
         self.get_logger().info(f'記録開始: {self.out}')
 
@@ -103,6 +110,13 @@ class Observer(Node):
         self.joints.write(json.dumps({'t': t, 'name': list(msg.name),
                                       'position': [float(x) for x in msg.position]}) + '\n')
 
+    def on_clock(self, msg):
+        t = time.time()
+        if t - self.last_clock_t < 1.0:
+            return
+        self.last_clock_t = t
+        self.clock_csv.write(f'{t:.6f},{msg.clock.sec + msg.clock.nanosec * 1e-9:.6f}\n')
+
     def on_timer(self):
         if not self.frame_id:
             return
@@ -114,7 +128,7 @@ class Observer(Node):
         self.ee.write(json.dumps({'t': time.time(), 'xyz': [v.x, v.y, v.z]}) + '\n')
 
     def close(self):
-        for f in (self.frames_csv, self.joints, self.ee):
+        for f in (self.frames_csv, self.joints, self.ee, self.clock_csv):
             f.close()
         if self.ffmpeg is not None:
             self.ffmpeg.stdin.close()
