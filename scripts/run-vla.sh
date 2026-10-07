@@ -18,7 +18,7 @@ usage: bash scripts/run-vla.sh --instruction "<指示文>" [--steps N] [--endpoi
   --steps        実行するステップ数（1〜100、既定 3）
   --endpoint     POST /act の URL（既定: 同じ compose の vla-server。本物の OpenVLA サーバーに替えるときに指定）
   --unnorm-key   OpenVLA の unnorm_key（英数字・_ . - のみ。スタブは無視。CRANE-X7 向けは未検証）
-  --timeout      アームのコントローラ・シミュのトピックが見えるまで待つ秒数（既定 120）
+  --timeout      アームのコントローラ・シミュのトピックが見えるまで待つ秒数（各待ちごと。既定 120）
   --record       録画して判定する（動画 scenario.mp4 と result.json を workspace/runs/<日時>/ に作る）。
                  判定は「指令どおり動いたか」（関節・映像・静止・手先が VLA の差分どおりか）。VLA の出力の良し悪しは見ない
 EOF
@@ -106,35 +106,49 @@ if [ "$RECORD" = 1 ]; then
   . scripts/lib/record.sh
   rec_doctor
   rec_init_run
-  # 同じアームに別の指令が混ざらないよう、run-scenario と同じロック（ros2arm の /tmp/run-scenario.lock）を取る。
-  # run-scenario はこのロックと run-vla のロックの両方を見るので、排他は双方向になる
-  rec_lock_acquire
-  trap release_lock EXIT
 else
   arm() { docker exec ros2arm bash -c "$1"; }
-  # 同じアームに run-scenario の指令が混ざらないようにする（run-scenario は ros2arm の /tmp にロックを置く）
-  if arm "test -d /tmp/run-scenario.lock" < /dev/null 2>/dev/null; then
-    fail_env "run-scenario が実行中（ロック /tmp/run-scenario.lock あり）。同じアームに指令が混ざるので、終わってから実行する。"
-  fi
-fi
-# 自分自身の同時実行も拒否する（ロックは ros2server の /tmp。コンテナを作り直すと消える）。
-# run-scenario はこのロックを見て断る
-VLA_LOCK=/tmp/run-vla.lock
-if ! srv "mkdir $VLA_LOCK" < /dev/null > /dev/null 2>&1; then
-  fail_env "別の run-vla が実行中（ロック $VLA_LOCK あり）。前回を強制終了したなら、実行中でないと確かめて外す: docker exec ros2server rm -r $VLA_LOCK"
 fi
 CONVERTER='[v]la_converter'
 NODE='[v]la_node'
+VLA_LOCK=/tmp/run-vla.lock
+HAVE_VLA_LOCK=0
+VLA_LOCK_ATTEMPT=0
+VLA_OWNER="$(date +%Y%m%d-%H%M%S) $(hostname -s 2>/dev/null || echo host) $$"
+# 後片付け。トラップはロックを取る前に入れる（取得の途中の Ctrl-C / TERM でロックを漏らさない）。
+# 取れた分だけ無条件に外し、取得の途中だった分は所有者が自分のときだけ外す。取れなかったとき（他人が持っている）は何も外さない
 # shellcheck disable=SC2317,SC2329  # trap から呼ぶ（shellcheck の版によって指摘の番号が違う）
 cleanup() {
   # 記録の停止には最大 2 分ほどかかるので、その間の Ctrl-C ではロックを外すところまで進める
   [ "$RECORD" = 0 ] || trap '' INT TERM HUP
-  # docker exec は（TTY なしでは）シグナルを転送しないので、Ctrl-C のあとコンテナ内に残らないよう VLA ノードも止める
-  srv "pkill -INT -f '$NODE'; pkill -INT -f '$CONVERTER'; rm -r $VLA_LOCK" < /dev/null > /dev/null 2>&1 || true
-  [ "$RECORD" = 0 ] || rec_cleanup
+  if [ "$HAVE_VLA_LOCK" = 1 ]; then
+    # docker exec は（TTY なしでは）シグナルを転送しないので、Ctrl-C のあとコンテナ内に残らないよう VLA ノードも止める
+    srv "pkill -INT -f '$NODE'; pkill -INT -f '$CONVERTER'; rm -r $VLA_LOCK" < /dev/null > /dev/null 2>&1 || true
+  elif [ "$VLA_LOCK_ATTEMPT" = 1 ]; then
+    srv "grep -qxF '$VLA_OWNER' $VLA_LOCK/owner && rm -r $VLA_LOCK" < /dev/null > /dev/null 2>&1 || true
+  fi
+  if [ "$RECORD" = 1 ]; then rec_cleanup; fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
+
+# 同じアームに run-scenario の指令が混ざらないよう、ロックは「自分のロックを取ってから、相手のロックを見る」（set → check）。
+# --record は run-scenario と同じロック（ros2arm の /tmp/run-scenario.lock）を取る。run-scenario は自分のロックを取ってから
+# run-vla のロック（ros2server の /tmp/run-vla.lock）を見るので、同時に始まっても両方が通ることはない（両方が断ることはありうる）
+if [ "$RECORD" = 1 ]; then
+  rec_lock_acquire
+fi
+# 自分自身の同時実行も拒否する（ロックは ros2server の /tmp。コンテナを作り直すと消える）
+VLA_LOCK_ATTEMPT=1
+if ! srv "mkdir $VLA_LOCK && echo '$VLA_OWNER' > $VLA_LOCK/owner" < /dev/null > /dev/null 2>&1; then
+  VLA_LOCK_ATTEMPT=0
+  fail_env "別の run-vla が実行中（ロック $VLA_LOCK あり）。前回を強制終了したなら、実行中でないと確かめて外す: docker exec ros2server rm -r $VLA_LOCK"
+fi
+VLA_LOCK_ATTEMPT=0
+HAVE_VLA_LOCK=1
+if [ "$RECORD" = 0 ] && arm "test -d /tmp/run-scenario.lock" < /dev/null 2>/dev/null; then
+  fail_env "run-scenario が実行中（ロック /tmp/run-scenario.lock あり）。同じアームに指令が混ざるので、終わってから実行する。"
+fi
 
 if [ "$RECORD" = 1 ]; then
   rec_check_leftovers

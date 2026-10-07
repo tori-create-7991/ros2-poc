@@ -103,24 +103,24 @@ fail_env() { echo "$1" >&2; exit 2; }
 rec_doctor
 rec_init_run
 
-# このスクリプトは同じアームに指令する。run-vla.sh（--record なしを含む）が動いていると指令が混ざるので断る。
-# run-vla は ros2server の /tmp にロックを置く（ros2server が無い構成では何もしない）
-if running ros2server && docker exec ros2server test -d /tmp/run-vla.lock < /dev/null 2>/dev/null; then
-  fail_env "run-vla が実行中（ロック /tmp/run-vla.lock あり）。同じアームに指令が混ざるので、終わってから実行する。"
-fi
-
 # 同時実行の拒否（同じアームに 2 本の指令が混ざる）。ロックは ros2arm の /tmp に置く。
-# コンテナを作り直す（up-arm.sh）と消えるが、docker restart や Colima の再起動では残る
-rec_lock_acquire
-trap release_lock EXIT
-rec_check_leftovers
-
+# コンテナを作り直す（up-arm.sh）と消えるが、docker restart や Colima の再起動では残る。
+# トラップは取得の前に入れる（取得の途中の Ctrl-C でロックを漏らさない。取得に失敗したときは他人のロックを外さない）
 # shellcheck disable=SC2317,SC2329  # trap から呼ぶ（shellcheck のバージョンでコードが違う）
 cleanup() {
   trap '' INT   # 後片付けの途中で Ctrl-C されてもロックを外すところまで進める
   rec_cleanup
 }
 trap cleanup EXIT
+rec_lock_acquire
+# このスクリプトは同じアームに指令する。run-vla.sh（--record なしを含む）が動いていると指令が混ざるので断る。
+# run-vla は ros2server の /tmp にロックを置く（ros2server が無い構成では何もしない）。
+# 自分のロックを取ってから見る（set → check）。run-vla も自分のロックを取ってから run-scenario のロックを見るので、
+# 同時に始まっても両方が通ることはない（両方が断ることはありうる）
+if running ros2server && docker exec ros2server test -d /tmp/run-vla.lock < /dev/null 2>/dev/null; then
+  fail_env "run-vla が実行中（ロック /tmp/run-vla.lock あり）。同じアームに指令が混ざるので、終わってから実行する。強制終了の残りなら、実行中でないと確かめて外す: docker exec ros2server rm -r /tmp/run-vla.lock"
+fi
+rec_check_leftovers
 
 rec_make_run_dir
 cp "$SCENARIO_FILE" "$RUN_HOST/scenario.yaml" || fail_env "シナリオをコピーできない"

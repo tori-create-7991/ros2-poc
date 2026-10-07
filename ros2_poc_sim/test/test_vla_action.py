@@ -127,7 +127,7 @@ def test_reject_ack_for_answers_invalid_messages_that_have_a_seq():
 
 def test_ack_detail_roundtrip_and_old_parse_ack_still_works():
     detail = {'target_joints': [0.1, 0.1, 0.1, -0.5, 0.1, 0.1, 0.1], 'duration': 1.5, 't_sent': 1.7e9, 'ee_before': [0.1, 0.0, 0.4],
-              'ee_cmd': [0.1, 0.0, 0.38], 'ee_after': [0.1, 0.0, 0.381], 'ee_error': 0.001, 'graph': None,
+              'ee_cmd': [0.1, 0.0, 0.38], 'ee_after': [0.1, 0.0, 0.381], 'ee_error': 0.001, 'gripper': None,
               'clamped': False}
     raw = A.format_ack(3, 'ok', '', detail)
     assert len(raw) <= A.MAX_ACK_CHARS
@@ -139,7 +139,7 @@ def test_ack_detail_roundtrip_and_old_parse_ack_still_works():
 
 @pytest.mark.parametrize('detail', [
     {'target_joints': [0.0] * 6}, {'target_joints': [float('nan')] * 7}, {'ee_cmd': [0, 0]},
-    {'ee_error': -1.0}, {'ee_error': float('inf')}, {'graph': 'half'}, {'clamped': 1}, {'unknown': 1},
+    {'ee_error': -1.0}, {'ee_error': float('inf')}, {'gripper': 'half'}, {'clamped': 1}, {'unknown': 1},
     {'t_sent': True}, {'t_sent': 0}, {'duration': 0}, {'duration': 1e9}, {'target_joints': [9.0] * 7}, 'x', [1],
 ])
 def test_bad_ack_detail_is_rejected_when_sending_but_the_ack_itself_is_still_received(detail):

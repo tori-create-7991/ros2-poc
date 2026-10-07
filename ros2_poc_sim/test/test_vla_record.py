@@ -12,7 +12,7 @@ Q = [0.0, 0.1, 0.0, -1.0, 0.0, -0.5, 0.0]
 
 def _detail(**over):
     d = {'target_joints': Q, 'duration': 1.5, 't_sent': 101.0, 'ee_before': [0.1, 0.0, 0.40],
-         'ee_cmd': [0.1, 0.0, 0.38], 'ee_after': [0.1, 0.0, 0.381], 'ee_error': 0.001, 'graph': None,
+         'ee_cmd': [0.1, 0.0, 0.38], 'ee_after': [0.1, 0.0, 0.381], 'ee_error': 0.001, 'gripper': None,
          'clamped': False}
     d.update(over)
     return d
@@ -69,7 +69,7 @@ def test_move_text():
 
 
 def test_gripper_change_is_narrated(tmp_path):
-    out = R.prepare(_write(tmp_path, [_rec(0, detail=_detail(graph='open'))]))
+    out = R.prepare(_write(tmp_path, [_rec(0, detail=_detail(gripper='open'))]))
     assert out['narration']['steps'][0]['now'].endswith('グリッパを開く')
 
 
@@ -142,6 +142,14 @@ def test_vla_prepare_prints_nothing_when_no_step_was_sent(tmp_path, capsys):
     _write(tmp_path, [_rec(0, 'ik_failed', {'ee_before': [0.1, 0, 0.4], 'ee_cmd': [0.1, 0, 0.3]})])
     assert CLI.main(['vla-prepare', str(tmp_path)]) == 0
     assert capsys.readouterr().out == '\n'
+
+
+@pytest.mark.parametrize('status', ['ok', 'timeout'])
+def test_ok_or_timeout_without_detail_is_an_error_not_a_fake_send_failure(tmp_path, status):
+    with pytest.raises(ValueError, match='detail'):
+        R.prepare(_write(tmp_path, [_rec(0, status, {})]))
+    # 準備できないときは終了コード 2（判定しない）
+    assert CLI.main(['vla-prepare', str(tmp_path)]) == 2
 
 
 def test_rejected_after_the_arm_command_went_out_is_still_counted_as_sent(tmp_path):

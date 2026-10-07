@@ -107,9 +107,9 @@ def _now_text(rec):
         dx, dy, dz = rec['vector'][:3]
         move = move_text((0, 0, 0), (dx, dy, dz))
     text = f'VLA の出力で手先を動かす: {move}'
-    if d.get('graph') == 'open':
+    if d.get('gripper') == 'open':
         text += '、グリッパを開く'
-    elif d.get('graph') == 'close':
+    elif d.get('gripper') == 'close':
         text += '、グリッパを閉じる'
     if d.get('clamped'):
         text += '（上限にクランプ）'
@@ -130,6 +130,10 @@ def prepare(path):
     steps, events, now = [], [], []
     for rec in recs:
         d = rec['detail']
+        if rec['status'] in ('ok', 'timeout') and not ('t_sent' in d and 'target_joints' in d):
+            # 腕は動いたのに detail が無い（変換ノードと vla_node の版違い、detail が不正で捨てられた）。偽の send_failed にしない
+            raise ValueError(f'ステップ {rec["index"] + 1} は status={rec["status"]} なのに ack の detail（送信時刻・目標関節）が無い'
+                             '（変換ノードと vla_node の版が違う可能性）')
         # 腕へ指令を送ったか。送信時刻（t_sent）が残っていれば送っている（グリッパの失敗で rejected でも腕は動く）
         sent = 't_sent' in d and 'target_joints' in d
         q = d['target_joints'] if 'target_joints' in d else FALLBACK_JOINTS

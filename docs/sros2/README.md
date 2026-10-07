@@ -128,7 +128,7 @@ permissions はノードの和集合になる。`sros2/policy/lab-c.xml` の `/l
   パラメータ・ログ系サービス（`describe_parameters` など）だけ `*/<サービス名>` のパターン。ノード名ごとの列挙は次の起動で外れるため。
 - 稼働中のグラフには、短命のプロセス（controller の `spawner`）や起動時だけ作られるクライアントが載らない。拒否ログを
   `sim_policy.py` の `--denials` に渡して足りない分を足し、拒否が無くなるまで繰り返した（実測は下）。
-- 生成の入力は `sros2/policy/sim-inputs/`（稼働中のグラフ `live-graph.xml` と、拒否ログから足した分 `denials.txt`）にコミットしてある。
+- 生成の入力は `sros2/policy/sim-inputs/`（稼働中のグラフ `live-graph.xml` と、拒否ログから足した分）にコミットしてある。足した分は、全 enclave に要る分を `denials.txt`、ros2arm のノード（`camera_adapter`・`scenario_observer`）だけが使う分を `denials-arm.txt` に分けている（`ros2server` に余計な購読を足さない最小権限のため）。
   `ros2_poc_sim/test/test_sim_policy.py` が、この入力から再生成した結果と `lab-c.xml` の一致を検査する（手で編集して食い違うと CI が落ちる）。
 - グラフに現れない（オンデマンドで作られる）エンドポイントは拒否され、そのノードが落ちる。見つかったら次の手順で生成し直す。
 
@@ -139,12 +139,12 @@ permissions はノードの和集合になる。`sros2/policy/lab-c.xml` の `/l
 #    シミュを起動した端末の出力（ファイルに残すなら `ros2 launch ... > sim.log 2>&1`）に Fast DDS の拒否が出ている:
 grep -E "not found in allow rule" sim.log | head                      # 例: rr/controller_manager/load_controllerReply topic not found in allow rule
 # 2. 拒否を足す。sim_policy.denials() が読める形（<publish|subscribe|reply|request>:<名前>）にして、
-#    sros2/policy/sim-inputs/denials.txt に足す（ros2arm / ros2server どちらのログも同じ形式）:
+#    sros2/policy/sim-inputs/denials.txt（どちらの enclave にも要る分）か denials-arm.txt（ros2arm だけに要る分）に足す:
 python3 -c "import sys; sys.path.insert(0, 'scripts/sros2/lib'); import sim_policy as S; print(*[f'{v}:{n}' for v, n in S.denials('sim.log')], sep='\n')"
 # 3. sim_policy.py の先頭に書いた 2 つのコマンドで enclave を作り直し、sros2/policy/lab-c.xml の該当部分を置き換える
 # 4. 反映: bash scripts/sros2/gen-keystore.sh c && bash scripts/up-env.sh c --arm --vla（反映後に拒否が 0 になるまで繰り返す）
 ```
-- `run-vla.sh --record` の記録（`ros2arm` 内の `scenario_observer`）が購読する `/camera/color/image_raw` と `/camera/color/camera_info` は、稼働中のグラフ（ros2arm は発行側）に購読として載らないので `denials.txt` に足した。
+- `run-vla.sh --record` の記録（`ros2arm` 内の `scenario_observer`）が購読する `/camera/color/image_raw` と `/camera/color/camera_info` は、稼働中のグラフ（ros2arm は発行側）に購読として載らないので `denials-arm.txt` に足した（ros2arm の enclave だけ）。
   実測（2026-10-05）で、`camera_adapter` が起動時に購読する `/sim_camera/realsense_d435/raw/camera_info` も足りないと分かり（拒否ログ `not found in allow rule`、`camera_adapter` が再起動を繰り返し、`/camera/color/*` が出なかった）、足して再生成した。
   再生成後は環境 c で `run-vla.sh --record` が 2 ステップとも PASS し、拒否ログは 0 だった（ros2arm・ros2server）。
 - `ros2lab-a/b` の権限（トピック 6 件、ワイルドカードなし、default DENY）は変わらない。`verify-env.sh c` の C10 はこちらを見る。

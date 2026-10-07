@@ -75,7 +75,7 @@ class StepRunner:
         detail.update(target_joints=[float(v) for v in q], duration=float(duration), t_sent=float(t_sent))
         self.io.send_arm(q, duration)
         target = A.gripper_target(action.gripper, self.gripper_threshold, self.open_when_high)
-        detail['graph'] = target if target != self._last_gripper else None
+        detail['gripper'] = target if target != self._last_gripper else None
         if target != self._last_gripper:
             if not self.io.send_gripper(A.gripper_angle(target)):
                 return 'rejected', 'gripper_cmd が失敗した（アームの指令は送信済み）'

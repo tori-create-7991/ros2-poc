@@ -53,7 +53,7 @@ case "$args" in
   *"mkdir /tmp/run-scenario.lock"*) [ "${STUB_SCENARIO_LOCK:-0}" = 1 ] && exit 1; exit 0 ;;
   *"cat /tmp/run-scenario.lock/owner"*) echo "${STUB_OWNER:-}" ;;
   *"scenario_cli doctor"*) [ "${STUB_DOCTOR_FAIL:-0}" = 1 ] && exit 2; exit 0 ;;
-  *"mkdir /tmp/run-vla.lock"*) [ "${STUB_VLA_LOCK:-0}" = 1 ] && exit 1; exit 0 ;;
+  *"mkdir /tmp/run-vla.lock"*) [ "${STUB_VLA_LOCK:-0}" = 1 ] && exit 1; [ -n "${STUB_HANG_LOCK:-}" ] && sleep "$STUB_HANG_LOCK"; exit 0 ;;
   *"grep -c 'Node name"*) echo "${STUB_CONTROLLERS:-1}" ;;
   *"ros2 run ros2_poc_sim vla_node"*) exit "${STUB_NODE_RC:-0}" ;;
   *pgrep*)
@@ -94,6 +94,7 @@ run_case() {
 ALL="ros2arm ros2server vla-server"
 no_docker() { [ -z "$LOG" ] || fail "$1: docker が呼ばれた: $LOG"; }
 no_exec() { if grep -qE "^(exec|compose)" <<<"$LOG"; then fail "$1: コンテナに命令が送られた: $LOG"; fi; }
+called() { grep -q -- "$1" <<<"$LOG"; }
 started() { grep -q "vla_converter" <<<"$LOG" && grep -q "ros2 run ros2_poc_sim vla_node" <<<"$LOG"; }
 lock_released() { grep -q "rm -r /tmp/run-vla.lock" <<<"$LOG"; }
 lock_taken() { grep -q "mkdir /tmp/run-vla.lock" <<<"$LOG"; }
@@ -173,11 +174,39 @@ for env in "" "<no value>"; do
   [ "$RC" = 0 ] || fail "ros2arm も空ラベルなら a 同士で通るはず: $RC $ERR"
 done
 
-# --- run-scenario が実行中 → 2（変換ノードも起動しない。ロックも取らない）
+# --- run-scenario が実行中 → 2（変換ノードは起動しない）。自分のロックを先に取ってから見て（set → check）、断るときは外す
 STUB_SCENARIO_LOCK=1 run_case "$ALL" --instruction "move up"
 [ "$RC" = 2 ] || fail "run-scenario 実行中: $RC"
 grep -q run-scenario <<<"$ERR" || fail "run-scenario のメッセージが無い: $ERR"
-if started || lock_taken; then fail "run-scenario 実行中なのに起動した: $LOG"; fi
+if started; then fail "run-scenario 実行中なのに起動した: $LOG"; fi
+lock_taken || fail "run-scenario 実行中: 先に自分のロックを取るはず: $LOG"
+lock_released || fail "run-scenario 実行中: 取った自分のロックを外していない: $LOG"
+# 他人の run-vla のロック（取れなかった）は外さない。取れた自分のロックの後片付けでは、ノードを止めるのは自分が取ったあとだけ
+
+# --- ロック取得の途中で Ctrl-C / TERM が来ても、docker exec は取得の途中で終わらない（コンテナ側で mkdir が済む）ので、
+# トラップが所有者を照合して外す。取れなかったときは何も外さない（他人のロックを外さない・他人のノードを止めない）
+STUB_VLA_LOCK=1 run_case "$ALL" --instruction "move up"
+if called "pkill -INT"; then fail "ロックが取れなかったのに VLA ノードを止めた（他人のノードを止めうる）: $LOG"; fi
+if called "grep -qxF"; then fail "ロックが取れなかったのに所有者照合の解放を試みた: $LOG"; fi
+
+# ロック取得の途中（docker exec の往復中）に TERM が来た場合: bash はフォアグラウンドのコマンドが終わってからトラップを実行する。
+# そのとき取得はコンテナ側で済んでいるので、所有者を照合して外す（外さないとロックが漏れて次の実行が止まる）
+STUB_LOG="$TMP/log.hang"
+: > "$STUB_LOG"
+export STUB_LOG
+( cd "$ROOT" && PATH="$TMP:$PATH" STUB_RUNNING="$ALL" STUB_HANG_LOCK=2 STUB_WS="$TMP" \
+    exec bash "$ROOT/scripts/run-vla.sh" --instruction "move up" --timeout 0 > /dev/null 2>&1 ) &
+hang_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  grep -q "mkdir /tmp/run-vla.lock" "$STUB_LOG" && break
+  sleep 0.1
+done
+kill -TERM "$hang_pid" 2>/dev/null || true
+wait "$hang_pid" 2>/dev/null || true
+LOG="$(cat "$STUB_LOG")"
+grep -q "grep -qxF .* /tmp/run-vla.lock/owner && rm -r /tmp/run-vla.lock" <<<"$LOG" \
+  || fail "取得の途中の TERM で、所有者を照合してロックを外していない: $LOG"
+if started; then fail "取得の途中で止めたのに変換ノードが起動した: $LOG"; fi
 
 # --- 別の run-vla が実行中 → 2。他人のロックは外さない
 STUB_VLA_LOCK=1 run_case "$ALL" --instruction "move up"
@@ -236,7 +265,6 @@ lock_released || fail "ノード rc=2: ロックが残る"
 # --record: 記録 → 変換ノード → VLA ノード → 判定の入力を作る → 最後の送信を待つ → 止める → 判定 → 合成
 # =====================================================================================================
 line_of() { grep -n -m1 -- "$1" <<<"$LOG" | cut -d: -f1; }
-called() { grep -q -- "$1" <<<"$LOG"; }
 RC_ARGS=(--instruction "move down" --steps 3 --record --timeout 0)
 scenario_lock_released() { called "rm -r /tmp/run-scenario.lock"; }
 locks_released() { lock_released && scenario_lock_released; }

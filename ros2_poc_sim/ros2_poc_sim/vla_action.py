@@ -31,7 +31,7 @@ MAX_DETAIL_DURATION = 60.0   # ack の detail の指令時間の上限 [s]（sce
 STATUSES = ('ok', 'rejected', 'ik_failed', 'timeout')
 # ack の detail（vla_step.StepRunner.last_detail）。どれも任意
 DETAIL_KEYS = ('target_joints', 'duration', 't_sent', 'ee_before', 'ee_cmd', 'ee_after', 'ee_error',
-               'graph', 'clamped')
+               'gripper', 'clamped')
 
 
 @dataclass(frozen=True)
@@ -143,9 +143,9 @@ def check_detail(detail):
             if v is not None and (not _is_number(v) or v < 0):
                 raise ValueError('ee_error は 0 以上の有限の数値か null')
             out[k] = None if v is None else float(v)
-        elif k == 'graph':
+        elif k == 'gripper':
             if v not in ('open', 'close', None):
-                raise ValueError(f'graph は open / close / null（{v!r}）')
+                raise ValueError(f'gripper は open / close / null（{v!r}）')
             out[k] = v
         else:   # clamped
             if not isinstance(v, bool):

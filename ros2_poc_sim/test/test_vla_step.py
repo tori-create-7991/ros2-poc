@@ -222,10 +222,10 @@ def test_last_detail_records_targets_times_and_end_effector_error():
     assert d['ee_before'] == [0.1, 0.0, 0.4] and d['ee_cmd'] == pytest.approx([0.1, 0.0, 0.38])
     assert d['ee_after'] == pytest.approx([0.1, 0.003, 0.384]) and d['ee_error'] == pytest.approx(0.005)
     assert d['target_joints'] == io.ik and d['t_sent'] == 100.0 and d['duration'] >= T.MIN_DURATION
-    assert d['graph'] == 'close' and d['clamped'] is False
+    assert d['gripper'] == 'close' and d['clamped'] is False
     A.check_detail(d)       # ack に載せられる形
     _run(io, runner=runner, gripper=0.0)
-    assert runner.last_detail['graph'] is None      # 同じ向きなら送らない
+    assert runner.last_detail['gripper'] is None      # 同じ向きなら送らない
 
 
 def test_last_detail_is_partial_when_rejected_and_reset_each_run():

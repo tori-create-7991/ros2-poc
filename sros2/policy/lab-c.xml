@@ -443,11 +443,9 @@
             <topic>rosout</topic>
           </topics>
           <topics subscribe="ALLOW">
-            <topic>/camera/color/camera_info</topic>
             <topic>/camera/color/image_raw</topic>
             <topic>/crane_x7_gripper_controller/gripper_cmd/_action/feedback</topic>
             <topic>/crane_x7_gripper_controller/gripper_cmd/_action/status</topic>
-            <topic>/sim_camera/realsense_d435/raw/camera_info</topic>
             <topic>/sim_camera/realsense_d435/raw/image</topic>
             <topic>/vla/ack</topic>
             <topic>/vla/action</topic>

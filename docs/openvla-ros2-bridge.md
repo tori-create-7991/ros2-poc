@@ -132,7 +132,7 @@ OpenVLA の `deploy.py` の原文（2026-10-05 確認）に合わせている。
 `ros2server` にカスタムメッセージは作れないので、標準の `std_msgs/String` に JSON を載せる。他のノードからも同じ契約で動かせる。
 
 - `/vla/action`: `{"seq": int>=0, "delta": [dx, dy, dz, droll, dpitch, dyaw], "gripper": 0..1}`。`delta` は `base_link` 基準、並進 [m]・回転 [rad]（ベース基準の増分）。gripper は 0（閉）〜1（開）。
-- `/vla/ack`: `{"seq": int, "status": "ok|rejected|ik_failed|timeout", "reason": str, "detail": {...}}`。`detail` は任意で、記録・判定用（`target_joints` / `duration` / `t_sent` / `ee_before` / `ee_cmd` / `ee_after` / `ee_error` / `graph` / `clamped`。`vla_action.check_detail` が型・有限値・長さを検査し、未知のキーは不正）。ack の大きさの上限は 4096 文字（指令は 1024 文字）。
+- `/vla/ack`: `{"seq": int, "status": "ok|rejected|ik_failed|timeout", "reason": str, "detail": {...}}`。`detail` は任意で、記録・判定用（`target_joints` / `duration` / `t_sent` / `ee_before` / `ee_cmd` / `ee_after` / `ee_error` / `gripper` / `clamped`。`vla_action.check_detail` が型・有限値・長さを検査し、未知のキーは不正）。ack の大きさの上限は 4096 文字（指令は 1024 文字）。
 
 変換ノードは同時に 1 ステップだけ処理する（処理中の指令は `rejected`「busy」）。不正な指令でも `seq` が読めれば `rejected` の ack を返す（読めなければ ack を返せず、VLA ノードは待ち続けて終了コード 2 になる）。VLA ノードの `seq` は実行ごとにランダムな値から始め、前回の遅い ack と取り違えない。1 ステップの最悪待ちは約 90 秒（TF・`/joint_states` 各 15、IK 8、購読者待ち 10、グリッパ 25、静止待ち約 19）で、VLA ノードの `--ack-timeout`（既定 240 秒）より短い。
 
@@ -209,7 +209,10 @@ ROS 非依存の単体テストは `cd ros2_poc_sim && python -m pytest -q test/
 - **画像の購読は既定で RELIABLE**（`vla_node --image-qos best_effort` で変えられる）。仮想カメラのプロファイルが reliable で、BEST_EFFORT だと暗号化（SROS2 環境 c）下で落ちた断片が再送されず、フレームが完成しないことがあった。発行側（実カメラなど）が best_effort のときだけ best_effort にする。
 - **カメラ映像は `/joint_states` より約 1〜1.5 秒遅れる**ので、2 ステップ目以降は 1.5 秒待ってから新しいフレームを取る（[sim-scenario-recording.md](sim-scenario-recording.md) と同じ実測）。
 - 変換ノードは前のステップの `gripper` を覚えていて、変化したときだけ `gripper_cmd` を送る。起動直後の最初のステップは必ず送る（現在のグリッパ状態を読まないため）。
-- シミュ（CPU 描画）は遅く、`ros2arm` のシナリオ実行（`run-scenario.sh`）と同時には動かせない。排他は**双方向**: `run-vla.sh` は `run-scenario.sh` のロックを見て（`--record` は同じロックを取って）断り、`run-scenario.sh` は `run-vla` のロックを見て断る。ロックを「確認してから取る・実行する」までの隙間は残るので、同時に実行しない。
+- シミュ（CPU 描画）は遅く、`ros2arm` のシナリオ実行（`run-scenario.sh`）と同時には動かせない。排他は**双方向**: どちらも「自分のロックを取ってから、相手のロックを見る」（`run-vla.sh` は `--record` なら `run-scenario.sh` と同じロックも取る）。相手のロックがあれば、取った自分のロックを外して断る。
+同時に始まっても両方が通ることはない（両方が断ることはありうる）。ロックの取得の途中の Ctrl-C / TERM でも、所有者を照合して外す（漏らさない）。ただし `run-vla` のロックの強制終了後の残りは自動では判定できない（所有者の記録はあるが、生存確認は無い）ので、案内のコマンドで手で外す。
+- `--record` の記録は、`vla_node` の最悪の待ちから見積もった時間（`300 + 400 × ステップ数` 秒）で自動停止する。`--steps 100` では約 11 時間になるので、ホスト側のスクリプトが SIGKILL などで消えると、記録プロセスがその間残りうる（次の実行は `前回の記録プロセスが残っている` で止まる。案内のコマンドで止める）。長い実行では `--steps` を小さくする。
+- `run-vla.sh` の後片付けは、`vla_node` / 変換ノードに SIGINT を送るだけで、止まるまで待たず、TERM / KILL にも上げない（記録プロセスは INT → TERM → KILL で止める）。止まらなかったときは次の実行の冒頭で INT を再送する。`scenario_cli judge` / `compose` の実行中の Ctrl-C は、コンテナ内の処理を止めない（`docker exec` はシグナルを転送しない）。
 - アームの指令を送ったあとにグリッパが失敗すると、アームは動いたのに `rejected`（reason に「アームの指令は送信済み」）になる。
 - `run-vla.sh` の Ctrl-C / SIGTERM では VLA ノードと変換ノードを止めてロックを外す（`docker exec` はシグナルを転送しないため）。この後始末は docker スタブのテストの範囲で、実コンテナでの確認は未実施。
 - `ros2server` は `ros2lab` と同じ使い勝手のため root・権限制限なしで動く（`vla-server` は読み取り専用・権限なし）。
@@ -221,6 +224,7 @@ ROS 非依存の単体テストは `cd ros2_poc_sim && python -m pytest -q test/
 | 症状 | 原因・対処 |
 |---|---|
 | `ros2server から crane_x7_arm_controller が見えない` | シミュが起動していない、または Discovery の遅れ。数十秒待つ。`docker exec ros2server bash -lc 'ros2 topic list'` で `/camera/color/image_raw` が見えるか確認 |
+| `別の run-vla が実行中` | 前回の `run-vla.sh` が強制終了（SIGKILL・VM 停止など）して、ロックが残っている。実行中でないと確かめてから `docker exec ros2server rm -r /tmp/run-vla.lock`。`run-scenario.sh` が「run-vla が実行中」と断るときも同じ |
 | `run-scenario が実行中` | シナリオ実行が同じアームを使っている。終わってから実行する。強制終了の残りなら `docker exec ros2arm rm -r /tmp/run-scenario.lock`（実行中でないと確かめてから） |
 | 終了コード 2 で `ack が来ない` | 変換ノードが落ちた。`docker exec ros2server tail -n 20 /tmp/vla_converter.log` |
 | `rejected`（busy） | 前のステップを処理中。`run-vla.sh` は 1 ステップずつ待つので通常は出ない。手で `/vla/action` を連続で出すと出る |

@@ -150,12 +150,16 @@ grep -q "前提が揃っていない" <<<"$ERR" || fail "doctor: 案内が無い
 if grep -q "mkdir -p /workspace/runs" <<<"$LOG"; then fail "doctor 失敗で出力先が作られた: $LOG"; fi
 
 # run-vla が動いている（ros2server の /tmp/run-vla.lock あり）→ 同じアームに指令が混ざるので断る（排他は双方向）。
-# ロックは取らない・記録も始めない。ros2server が起動していなければ見に行かない
+# 先に自分のロックを取ってから見る（set → check。run-vla も同じ順なので、同時に始まっても両方が通ることはない）。
+# 断るときは取った自分のロックを外す。記録は始めない。ros2server が起動していなければ見に行かない
 STUB_VLA_LOCK=1 run_case "$ALL ros2server"
 [ "$RC" -eq 2 ] || fail "run-vla 実行中は exit 2 のはずが $RC: $ERR"
 grep -q "run-vla が実行中" <<<"$ERR" || fail "run-vla 実行中: 案内が無い: $ERR"
+grep -q "docker exec ros2server rm -r /tmp/run-vla.lock" <<<"$ERR" || fail "run-vla 実行中: 強制終了の残りを外す案内が無い: $ERR"
 grep -q "^exec ros2server test -d /tmp/run-vla.lock" <<<"$LOG" || fail "run-vla 実行中: ロックを見に行っていない: $LOG"
-if grep -qE "mkdir /tmp/run-scenario.lock|scenario_observer --out|x11grab" <<<"$LOG"; then fail "run-vla 実行中なのにロック・記録が動いた: $LOG"; fi
+grep -q "mkdir /tmp/run-scenario.lock" <<<"$LOG" || fail "run-vla 実行中: 先に自分のロックを取るはず: $LOG"
+lock_released || fail "run-vla 実行中: 取った自分のロックを外していない: $LOG"
+if grep -qE "scenario_observer --out|x11grab" <<<"$LOG"; then fail "run-vla 実行中なのに記録が動いた: $LOG"; fi
 STUB_VLA_LOCK=1 run_case "$ALL"
 if grep -q "run-vla.lock" <<<"$LOG"; then fail "ros2server が無いのに run-vla のロックを見に行った: $LOG"; fi
 STUB_VLA_LOCK=0 run_case "$ALL ros2server"

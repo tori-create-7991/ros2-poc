@@ -16,6 +16,8 @@
 
 REC_LABEL="${REC_LABEL:-run-scenario}"
 REC_LOCK=/tmp/run-scenario.lock
+HAVE_ARM_LOCK=0   # ロックを取れたか（取れた分だけ無条件に外す）
+LOCK_ATTEMPT=0    # 取得の途中か（docker exec の往復中にシグナルが来た場合に備え、所有者が自分のときだけ外す）
 RECORDING=0     # 記録プロセスを起動したか
 STOPPED=0       # 記録プロセスが止まったことを確かめたか
 STOP_GAVE_UP=0  # KILL まで送っても止まらなかったか（後片付けで同じ待ちを繰り返さない）
@@ -39,6 +41,8 @@ rec_init_run() {
   RUN="/workspace/runs/$TS"
   # 記録プロセス（observer・カメラ用 ffmpeg・デスクトップ録画）。[s] などは pkill / pgrep 自身を呼ぶ
   # bash -c のコマンドラインに一致させないため。ANY_* は他の実行（前回の残り）も含めて探すとき用
+  # ロックの持ち主（取得の前に決めておく。トラップが取得の途中でも所有者を照合して外せる）
+  OWNER="$TS $(hostname -s 2>/dev/null || echo host) $$"
   RECORDERS="[s]cenario_observer --out $RUN|[r]awvideo.*$RUN/camera\.mp4|[x]11grab.*$RUN/desktop\.mp4"
   # 最初の停止指示（INT）はカメラ用 ffmpeg に直接送らない。observer が入力を閉じれば ffmpeg は残りを
   # 書き出して終わる。ffmpeg に INT を送ると読み残したフレーム（最後のステップの判定用）が落ちる
@@ -50,8 +54,9 @@ rec_init_run() {
 # コンテナを作り直す（up-arm.sh）と消えるが、docker restart や Colima の再起動では残る
 rec_lock_acquire() {
   local owner started owner_host owner_pid
-  OWNER="$TS $(hostname -s 2>/dev/null || echo host) $$"
+  LOCK_ATTEMPT=1
   if ! arm "mkdir $REC_LOCK && echo '$OWNER' > $REC_LOCK/owner" < /dev/null 2>/dev/null; then
+    LOCK_ATTEMPT=0   # 取れなかった（他人のロックは外さない）
     owner="$(arm "cat $REC_LOCK/owner" < /dev/null 2>/dev/null || true)"
     read -r started owner_host owner_pid <<<"${owner:-}" || true
     # 記録中、または同じホストで持ち主のプロセスが生きている（シミュ起動待ちなど記録前の段階）なら実行中
@@ -62,9 +67,20 @@ rec_lock_acquire() {
     fi
     fail_env "前回の $REC_LABEL のロックが残っている（開始 ${started:-不明}、記録プロセスは無い）。実行中でなければ外す: docker exec ros2arm rm -r $REC_LOCK"
   fi
+  LOCK_ATTEMPT=0
+  HAVE_ARM_LOCK=1
 }
 # shellcheck disable=SC2317,SC2329  # trap から呼ぶ
-release_lock() { arm "rm -r $REC_LOCK" < /dev/null > /dev/null 2>&1 || true; }
+release_lock() {
+  if [ "$HAVE_ARM_LOCK" = 1 ]; then
+    arm "rm -r $REC_LOCK" < /dev/null > /dev/null 2>&1 || true
+    HAVE_ARM_LOCK=0
+  elif [ "$LOCK_ATTEMPT" = 1 ]; then
+    # 取得の途中でシグナルが来た: コンテナ側で mkdir が済んでいたら漏れるので、所有者が自分のときだけ外す
+    arm "grep -qxF '$OWNER' $REC_LOCK/owner && rm -r $REC_LOCK" < /dev/null > /dev/null 2>&1 || true
+    LOCK_ATTEMPT=0
+  fi
+}
 
 # 前回の記録プロセスが残っていたら止めてもらう（残るとシミュがさらに遅くなる）
 rec_check_leftovers() {
