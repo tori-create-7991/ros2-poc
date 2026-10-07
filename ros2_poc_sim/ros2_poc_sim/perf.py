@@ -16,7 +16,8 @@ MIN_SPAN_SEC = 1.0   # これより短い区間の RTF は誤差が大きいの�
 
 def read_clock_csv(path):
     """clock.csv を [(wall, sim)] で返す。無い・壊れた行・nan/inf は捨てる。wall が戻る行、
-    sim が戻る行（シミュのリセット。RTF が負になる）も捨てる。壁時計が先に飛ぶと、以降の行は捨てられる。"""
+    sim が戻る行（シミュのリセット。RTF が負になる）も捨てる。どちらも、直前までの最大値を超えるまで
+    後続の行は捨てられる（リセットや時計の飛びを挟む run の RTF は参考値）。"""
     p = Path(path)
     if not p.exists():
         return []
@@ -98,7 +99,7 @@ def summarize(clock_rows, frame_times, steps):
     fps_times = [t for t in frame_times if ok and t0 <= t <= t1]
     return {'rtf': _r(rtf(clock_rows, t0, t1) if ok else None),
             'rtf_min': _r(rtf_min(clock_rows, t0=t0, t1=t1) if ok else None),
-            'wall_sec': _r(t1 - t0 if ok else None), 'camera_fps': _r(camera_fps(fps_times)),
+            'wall_sec': _r(max(t1 - t0, 0.0) if ok else None), 'camera_fps': _r(camera_fps(fps_times)),
             'steps': out_steps}
 
 
@@ -132,10 +133,10 @@ def format_table(rows):
         if v is None:
             return '-'
         # 他の人から受け取った run の値が端末を操作しないよう、制御文字・記号は ? にする
-        return f'{v:.2f}' if isinstance(v, float) else re.sub(r'[^\w.\-]', '?', str(v))
+        return f'{v:.2f}' if isinstance(v, float) else re.sub(r'[\x00-\x1f\x7f-\x9f]', '?', str(v))
     table = [[h for _, h in cols]] + [[cell(r.get(k)) for k, _ in cols] for r in rows]
     widths = [max(len(row[i]) for row in table) for i in range(len(cols))]
     out = '\n'.join('  '.join(c.ljust(w) for c, w in zip(row, widths)).rstrip() for row in table)
-    if len({r.get('scenario') for r in rows}) > 1:
+    if len({r.get('scenario') for r in rows} - {None, '-'}) > 1:
         out += '\n注意: シナリオが違う run を並べている。RTF は負荷の内容に依存するので、比べるなら同じシナリオで測る'
     return out

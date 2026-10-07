@@ -292,6 +292,7 @@ grep -q '"cpus": null' <<<"$meta" || fail "docker info 不可なら cpus は nul
 python3 -c 'import json,sys; json.loads(sys.argv[1])' "$meta" || fail "run_meta.json が JSON でない: $meta"
 STUB_DOCKER_INFO="6 12884901888" run_case "$ALL"
 meta="$(cat "$STUB_WS"/runs/*/run_meta.json)"
+grep -q '"scenario": "default"' <<<"$meta" || fail "scenario 名が default にならない: $meta"
 grep -q '"cpus": 6, "mem_gib": 12' <<<"$meta" || fail "docker info の実値が run_meta.json に入らない: $meta"
 # シナリオ名に " や \ があっても run_meta.json は壊れない
 printf 'steps: []\n' > "$TMP/we\"ird.yaml"

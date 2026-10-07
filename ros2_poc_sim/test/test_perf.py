@@ -115,3 +115,13 @@ def test_format_table_sanitizes_label_and_warns_on_mixed_scenarios():
     out = P.format_table(rows)
     assert '\x1b' not in out and '注意' in out
     assert '注意' not in P.format_table(rows[:1])
+
+
+def test_rtf_zero_when_sim_paused_is_not_none():
+    assert P.rtf([(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]) == 0.0
+
+
+def test_format_table_keeps_spaces_and_ignores_missing_scenario_in_warning():
+    rows = [{'run': 'a', 'label': 'light load', 'scenario': '-'}, {'run': 'b', 'label': 'x', 'scenario': 'default'}]
+    out = P.format_table(rows)
+    assert 'light load' in out and '注意' not in out
