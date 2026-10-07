@@ -77,3 +77,41 @@ def test_format_table_and_load_run(tmp_path):
     assert (r['label'], r['cpus'], r['rtf'], r['camera_fps']) == ('light', 6, 0.5, None)
     out = P.format_table([r, P.load_run(tmp_path / 'missing')])
     assert 'light' in out and '0.50' in out and out.splitlines()[0].startswith('run')
+
+
+def test_read_clock_drops_nonfinite_and_sim_going_backwards(tmp_path):
+    p = tmp_path / 'clock.csv'
+    p.write_text('wall,sim\n1,0\nnan,1\n2,inf\n3,5\n4,1\n5,6\n', encoding='utf-8')
+    assert P.read_clock_csv(p) == [(1.0, 0.0), (3.0, 5.0), (5.0, 6.0)]   # sim のリセット（5→1）は捨てる
+
+
+def test_summarize_uses_same_window_for_rtf_and_fps():
+    # 窓 [101, 111] の外（起動直後の遅い区間 100→101）は RTF に入れない
+    rows = [(90.0, 0.0), (100.0, 0.1), (101.0, 0.2), (111.0, 10.2), (120.0, 10.3)]
+    s = P.summarize(rows, [101.0, 106.0, 111.0, 118.0], [{'index': 0, 'name': 'a', 't_start': 102.0, 't_end': 111.0}])
+    assert s['rtf'] == pytest.approx(1.0)
+    assert s['wall_sec'] == pytest.approx(10.0)
+    assert s['camera_fps'] == pytest.approx(0.2)   # 窓内（101〜111）の 3 枚 = 2 区間 / 10 s
+
+
+def test_summarize_step_outside_clock_range_has_no_sim_sec():
+    rows = [(0.0, 0.0), (10.0, 10.0)]
+    s = P.summarize(rows, [1.0, 2.0], [{'index': 0, 'name': 'a', 't_start': 5.0, 't_end': 10.4}])
+    assert s['steps'][0]['sim_sec'] is None and s['steps'][0]['wall_sec'] == pytest.approx(5.4)
+
+
+def test_load_run_tolerates_non_dict_and_broken_json(tmp_path, capsys):
+    d = tmp_path / 'r'
+    d.mkdir()
+    (d / 'run_meta.json').write_text('[]')
+    (d / 'result.json').write_text('{"performance": 3, "verdict": "PASS"')
+    r = P.load_run(d)
+    assert r['label'] == '-' and r['rtf'] is None
+    assert 'JSON として読めない' in capsys.readouterr().err
+
+
+def test_format_table_sanitizes_label_and_warns_on_mixed_scenarios():
+    rows = [{'run': 'a', 'label': '\x1b[31mred', 'scenario': 'default'}, {'run': 'b', 'label': 'x', 'scenario': 'examples'}]
+    out = P.format_table(rows)
+    assert '\x1b' not in out and '注意' in out
+    assert '注意' not in P.format_table(rows[:1])

@@ -371,7 +371,10 @@ def judge_run(run_dir, run=subprocess.run):
             r['codes'].append('joints_not_still')
         results.append({**base, **r, 't_start': ev['t_start'], 't_sent': ev['t_sent'], 't_end': t_end})
     passed = sum(r['verdict'] == 'PASS' for r in results)
-    perf = P.summarize(P.read_clock_csv(d / 'clock.csv'), [f['t'] for f in frames.records], results)
+    try:   # 性能は補助情報。計算に失敗しても PASS / FAIL の判定は出す
+        perf = P.summarize(P.read_clock_csv(d / 'clock.csv'), [f['t'] for f in frames.records], results)
+    except Exception:   # noqa: BLE001
+        perf = None
     return {'passed': passed, 'total': len(results),
             'verdict': 'PASS' if results and passed == len(results) else 'FAIL', 'steps': results,
             'performance': perf}

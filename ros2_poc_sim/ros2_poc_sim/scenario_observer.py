@@ -54,7 +54,8 @@ class Observer(Node):
         self.create_subscription(Image, image_topic, self.on_image, qos_profile_sensor_data)
         self.create_subscription(CameraInfo, info_topic, self.on_info, qos_profile_sensor_data)
         self.create_subscription(JointState, '/joint_states', self.on_joints, 50)
-        self.create_subscription(Clock, '/clock', self.on_clock, 10)
+        # best-effort: publisher が reliable / best-effort のどちらでも繋がる（reliable 購読は best-effort の /clock と繋がらず黙って空になる）
+        self.create_subscription(Clock, '/clock', self.on_clock, qos_profile_sensor_data)
         self.create_timer(period, self.on_timer)
         self.get_logger().info(f'記録開始: {self.out}')
 

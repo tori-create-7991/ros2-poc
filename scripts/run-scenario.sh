@@ -187,10 +187,10 @@ arm "mkdir -p $RUN && chmod 777 $RUN" < /dev/null || fail_env "出力先を作�
 # 性能比較の目印: ラベルと実行環境（Colima VM の CPU・メモリ）。取れない項目は null（比較表では「-」）
 VM_INFO="$(docker info --format '{{.NCPU}} {{.MemTotal}}' 2>/dev/null || true)"
 read -r VM_CPUS VM_MEM <<<"$VM_INFO" || true
-[[ "${VM_CPUS:-}" =~ ^[0-9]+$ ]] || VM_CPUS=null
-if [[ "${VM_MEM:-}" =~ ^[0-9]+$ ]]; then VM_MEM_GIB=$(( VM_MEM / 1073741824 )); else VM_MEM_GIB=null; fi
+[[ "${VM_CPUS:-}" =~ ^[1-9][0-9]*$ ]] || VM_CPUS=null
+if [[ "${VM_MEM:-}" =~ ^[1-9][0-9]*$ ]]; then VM_MEM_GIB=$(( VM_MEM / 1073741824 )); else VM_MEM_GIB=null; fi
 printf '{"label": "%s", "cpus": %s, "mem_gib": %s, "scenario": "%s", "started": "%s"}\n' \
-  "$RUN_LABEL" "$VM_CPUS" "$VM_MEM_GIB" "$(basename "$SCENARIO_FILE" .yaml)" "$TS" > "$RUN_HOST/run_meta.json" \
+  "$RUN_LABEL" "$VM_CPUS" "$VM_MEM_GIB" "$(basename "$SCENARIO_FILE" | tr -c 'A-Za-z0-9._-' '_')" "$TS" > "$RUN_HOST/run_meta.json" \
   || echo "run_meta.json を書けない（性能比較の目印が残らない）" >&2
 cp "$SCENARIO_FILE" "$RUN_HOST/scenario.yaml" || fail_env "シナリオをコピーできない"
 echo "出力先: $RUN_HOST"

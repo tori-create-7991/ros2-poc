@@ -152,12 +152,13 @@ docker exec -u ubuntu ros2arm bash -lc 'source /opt/ros/jazzy/setup.bash; source
 
 | 列 | 意味 |
 |---|---|
-| RTF | Δsim / Δwall。1.0 で実時間どおり、小さいほど遅い。区間が 1 秒未満・`clock.csv` が無い run は `-` |
-| RTF最小 | 5 秒窓ごとの RTF の最小（一時的な落ち込み） |
+| RTF | Δsim / Δwall。1.0 で実時間どおり、小さいほど遅い。区間は下の 3 列と同じ（最初のフレーム〜最後のステップの判定時刻）。区間が 1 秒未満・`clock.csv` が無い run は `-` |
+| RTF最小 | `clock.csv` の 5 行（1Hz なら約 5 秒）ごとの RTF の最小（一時的な落ち込み） |
 | wall[s] | 最初のフレームから最後のステップの判定時刻までの壁時計 |
-| cam[fps] | カメラフレームの平均受信レート |
+| cam[fps] | 同じ区間でのカメラフレームの平均記録レート（上限 30fps で間引く） |
 
-`result.json` の `performance.steps` にステップごとの `wall_sec` と `sim_sec` も出る（指令の長さに対して実際にかかった時間）。
+`result.json` の `performance.steps` にステップごとの `wall_sec` と `sim_sec` も出る（指令の長さに対して実際にかかった時間）。`clock.csv` は約 1Hz なので、記録の末尾に終わったステップの `sim_sec` は `null` になることがある。
+`/clock` が記録されない（`clock.csv` がヘッダだけ）と RTF は全て `-` になり、判定時に端末へ理由が出る（PASS / FAIL には影響しない）。比べる表にシナリオ・メモリの列があり、シナリオが混在すると注意が出る。
 比べるときは、同じシナリオ・同じ視点で、他の重い処理（別セッションの推論コンテナなど）を止めてから測る。
 
 ## 制約

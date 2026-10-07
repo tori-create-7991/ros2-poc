@@ -126,6 +126,9 @@ def cmd_judge(a):
         print(C.verdict_line(r))
         for reason in r.get('reasons') or []:
             print(f'    - {reason}')
+    if not (res.get('performance') or {}).get('rtf'):
+        print('RTF を算出できない（clock.csv に /clock が記録されていない、または区間が短い）。判定には影響しない',
+              file=sys.stderr)
     print(f"RESULT {res['passed']}/{res['total']} PASS")
     return 0 if res['verdict'] == 'PASS' else 1
 

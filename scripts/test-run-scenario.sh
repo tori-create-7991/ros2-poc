@@ -27,6 +27,10 @@ if [ "${1:-}" = "ps" ]; then
   done
   exit 0
 fi
+if [ "${1:-}" = "info" ]; then
+  [ -n "${STUB_DOCKER_INFO:-}" ] && echo "$STUB_DOCKER_INFO"
+  exit 0
+fi
 if [ "${1:-}" = "inspect" ]; then
   if [[ "$*" == *ros2poc.env* ]]; then
     case "$*" in
@@ -286,6 +290,13 @@ meta="$(cat "$STUB_WS"/runs/*/run_meta.json)" || fail "run_meta.json が無い: 
 grep -q '"label": "light"' <<<"$meta" || fail "run_meta.json に label が無い: $meta"
 grep -q '"cpus": null' <<<"$meta" || fail "docker info 不可なら cpus は null のはず: $meta"
 python3 -c 'import json,sys; json.loads(sys.argv[1])' "$meta" || fail "run_meta.json が JSON でない: $meta"
+STUB_DOCKER_INFO="6 12884901888" run_case "$ALL"
+meta="$(cat "$STUB_WS"/runs/*/run_meta.json)"
+grep -q '"cpus": 6, "mem_gib": 12' <<<"$meta" || fail "docker info の実値が run_meta.json に入らない: $meta"
+# シナリオ名に " や \ があっても run_meta.json は壊れない
+printf 'steps: []\n' > "$TMP/we\"ird.yaml"
+run_case "$ALL" --scenario "$TMP/we\"ird.yaml"
+python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$STUB_WS"/runs/*/run_meta.json || fail "シナリオ名で run_meta.json が壊れた"
 run_case "$ALL"
 grep -q '"label": ""' "$STUB_WS"/runs/*/run_meta.json || fail "RUN_LABEL 未指定は空のラベル: $(cat "$STUB_WS"/runs/*/run_meta.json)"
 
