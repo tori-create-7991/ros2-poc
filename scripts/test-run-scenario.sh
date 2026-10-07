@@ -11,6 +11,7 @@ trap 'rm -rf "$TMP"' EXIT
 #   docker exec ...              STUB_EXEC_FAIL（正規表現）に一致すれば STUB_EXEC_RC（既定 2）で失敗。
 #                                pgrep は既定で「プロセス無し」。STUB_LEFTOVER=1 なら起動前から有り、
 #                                STUB_STUCK=1 なら記録の起動後ずっと有り（止まらない）
+#   test -d /tmp/run-vla.lock    STUB_VLA_LOCK=1 のとき「ある」（ros2server が起動中のときだけ見に行く）
 #   docker inspect（ros2poc.env）  ros2lab-a は STUB_LAB_ENV、ros2arm は STUB_ARM_ENV を返す（未設定なら a、空文字なら空 = ラベル導入前）
 #   /workspace/runs/<ts>         $STUB_WS/runs/<ts> に対応させ、記録・判定の成果物を置く
 cat > "$TMP/docker" <<'STUB'
@@ -52,6 +53,11 @@ case "$args" in
   *"pgrep -f '[a]rm_with_camera"*) [ "${STUB_SIM_RUNNING:-0}" = camera ] && exit 0; exit 1 ;;
   *"pgrep -f '[r]os2 launch"*) [ "${STUB_SIM_RUNNING:-0}" = other ] && exit 0; exit 1 ;;
   *"grep -c 'Node name"*) echo "${STUB_CONTROLLERS:-1}" ;;
+  *"mkdir /tmp/run-scenario.lock"*)
+    # 取得の途中（コンテナ側では済んでいる）にシグナルが来る状況を作る。待っている印を置いて、signal まで待つ
+    if [ -n "${STUB_HANG_ARM:-}" ]; then touch "$STUB_WS/waiting.arm"; sleep "$STUB_HANG_ARM"; fi
+    exit 0 ;;
+  *"test -d /tmp/run-vla.lock"*) [ "${STUB_VLA_LOCK:-0}" = 1 ] && exit 0; exit 1 ;;
   *"cat /tmp/run-scenario.lock/owner"*) echo "${STUB_OWNER:-}" ;;
   *pgrep*)
     if [ "${STUB_LEFTOVER:-0}" = 1 ]; then exit 0; fi
@@ -157,6 +163,45 @@ STUB_EXEC_FAIL='scenario_cli doctor' run_case "$ALL"
 [ "$RC" -eq 2 ] || fail "doctor 失敗は exit 2 のはずが $RC: $ERR"
 grep -q "前提が揃っていない" <<<"$ERR" || fail "doctor: 案内が無い: $ERR"
 if grep -q "mkdir -p /workspace/runs" <<<"$LOG"; then fail "doctor 失敗で出力先が作られた: $LOG"; fi
+
+# run-vla が動いている（ros2server の /tmp/run-vla.lock あり）→ 同じアームに指令が混ざるので断る（排他は双方向）。
+# 先に自分のロックを取ってから見る（set → check。run-vla も同じ順なので、同時に始まっても両方が通ることはない）。
+# 断るときは取った自分のロックを外す。記録は始めない。ros2server が起動していなければ見に行かない
+STUB_VLA_LOCK=1 run_case "$ALL ros2server"
+[ "$RC" -eq 2 ] || fail "run-vla 実行中は exit 2 のはずが $RC: $ERR"
+grep -q "run-vla が実行中" <<<"$ERR" || fail "run-vla 実行中: 案内が無い: $ERR"
+grep -q "docker exec ros2server rm -r /tmp/run-vla.lock" <<<"$ERR" || fail "run-vla 実行中: 強制終了の残りを外す案内が無い: $ERR"
+grep -q "^exec ros2server test -d /tmp/run-vla.lock" <<<"$LOG" || fail "run-vla 実行中: ロックを見に行っていない: $LOG"
+grep -q "mkdir /tmp/run-scenario.lock" <<<"$LOG" || fail "run-vla 実行中: 先に自分のロックを取るはず: $LOG"
+lock_released || fail "run-vla 実行中: 取った自分のロックを外していない: $LOG"
+if grep -qE "scenario_observer --out|x11grab" <<<"$LOG"; then fail "run-vla 実行中なのに記録が動いた: $LOG"; fi
+STUB_VLA_LOCK=1 run_case "$ALL"
+if grep -q "run-vla.lock" <<<"$LOG"; then fail "ros2server が無いのに run-vla のロックを見に行った: $LOG"; fi
+STUB_VLA_LOCK=0 run_case "$ALL ros2server"
+[ "$RC" -eq 0 ] || fail "run-vla が動いていなければ実行できるはずが $RC: $ERR"
+sent || fail "run-vla が動いていないのに指令が送られない"
+
+# ロックの取得の途中（docker exec の往復中）に TERM が来た場合: bash はフォアグラウンドのコマンドが終わってからトラップを実行する。
+# そのとき取得はコンテナ側で済んでいるので、トラップが取得の前に入っていて、所有者を照合して外す（外さないとロックが漏れる）
+hang_ws="$TMP/hang.$RANDOM"
+mkdir -p "$hang_ws"
+STUB_LOG="$TMP/log.hang"
+: > "$STUB_LOG"
+export STUB_LOG
+( cd "$ROOT" && PATH="$TMP:$PATH" STUB_RUNNING="$ALL" STUB_WS="$hang_ws" RUN_SCENARIO_WORKSPACE="$hang_ws" STUB_HANG_ARM=3 \
+    exec bash "$ROOT/scripts/run-scenario.sh" > /dev/null 2>&1 ) &
+hang_pid=$!
+for _ in $(seq 1 200); do
+  [ -f "$hang_ws/waiting.arm" ] && break
+  sleep 0.1
+done
+[ -f "$hang_ws/waiting.arm" ] || fail "取得の途中の状態を作れなかった"
+kill -TERM "$hang_pid" 2>/dev/null || true
+wait "$hang_pid" 2>/dev/null || true
+LOG="$(cat "$STUB_LOG")"
+grep -q "grep -qxF .* /tmp/run-scenario.lock/owner && rm -r /tmp/run-scenario.lock" <<<"$LOG" \
+  || fail "取得の途中の TERM で、所有者を照合してロックを外していない: $LOG"
+if grep -qE "scenario_observer --out|x11grab" <<<"$LOG"; then fail "取得の途中で止めたのに記録が動いた: $LOG"; fi
 
 # ロックが取れない・記録プロセスが動いている → 実行中として exit 2。他人のロックは外さない
 STUB_EXEC_FAIL='mkdir /tmp/run-scenario.lock' STUB_LEFTOVER=1 run_case "$ALL"

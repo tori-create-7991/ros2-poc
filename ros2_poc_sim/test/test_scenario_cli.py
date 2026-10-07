@@ -236,3 +236,41 @@ def test_perf_prints_comparison_table(tmp_path, capsys):
     assert CLI.main(['perf', str(tmp_path / 'r1'), str(tmp_path / 'r2')]) == 0
     out = capsys.readouterr().out
     assert 'default' in out and 'light' in out and '0.30' in out and '0.80' in out and '40.00' in out
+
+
+def test_doctor_accepts_an_installed_font_name(monkeypatch, capsys):
+    monkeypatch.setattr(CLI, '_font_families', lambda: 'DejaVu Sans\nNoto Sans CJK JP,Noto Sans CJK JP Bold\n')
+    monkeypatch.setattr(CLI.shutil, 'which', lambda exe: None)
+    assert CLI.main(['doctor']) == 2           # ffmpeg などが無い → 2。ただしフォントは見つかる
+    err = capsys.readouterr().err
+    assert 'フォントが無い' not in err and 'ffmpeg が無い' in err
+
+
+def test_compose_uses_narration_json_or_the_scenario_description(tmp_path, monkeypatch):
+    d = tmp_path
+    steps = S.parse_scenario({'steps': [{'name': 'a', 'positions': [0.0] * 7, 'description': '姿勢 A へ動かす'}]})
+    (d / 'steps.json').write_text(json.dumps([s.to_dict() for s in steps]))
+    (d / 'scenario.yaml').write_text('description: 基本動作の確認\nsteps: []\n', encoding='utf-8')
+    (d / 'result.json').write_text(json.dumps({'steps': [
+        {'index': 0, 'name': 'a', 'verdict': 'PASS', 'joint_err': 0.01, 'changed_ratio': 0.02,
+         't_start': 105.0, 't_sent': 106.0, 't_end': 110.0}]}))
+    (d / 'camera_info.json').write_text(json.dumps({'width': 640, 'height': 480, 'k': [1] * 9}))
+    (d / 'camera_frames.csv').write_text('n,t\n0,100.0\n')
+    (d / 'camera.mp4').write_bytes(b'')
+    (d / 'desktop.mp4').write_bytes(b'')
+    (d / 'desktop_t0.txt').write_text('100.0\n')
+    ran = []
+    monkeypatch.setattr(CLI.subprocess, 'run', lambda cmd, **kw: ran.append(cmd) or type('R', (), {'returncode': 0})())
+    assert CLI.main(['compose', str(d)]) == 0
+    ass = (d / 'overlay' / 'steps.ass').read_text(encoding='utf-8')
+    assert '基本動作の確認' in ass and 'いま: 姿勢 A へ動かす' in ass and 'つぎ: 終了（判定を表示します）' in ass
+    assert ran[0][0] == 'ffmpeg' and 'ass=overlay/steps.ass' in ran[0][ran[0].index('-filter_complex') + 1]
+    # narration.json があればそちらを使う（VLA）
+    (d / 'narration.json').write_text(json.dumps({'title': 'VLA への指示', 'steps': [
+        {'now': 'VLA の出力で手先を動かす: 下へ 2.0cm', 'next': '終了（判定を表示します）', 'command': 'VLA "x"'}]}),
+        encoding='utf-8')
+    assert CLI.main(['compose', str(d)]) == 0
+    assert 'VLA の出力で手先を動かす: 下へ 2.0cm' in (d / 'overlay' / 'steps.ass').read_text(encoding='utf-8')
+    # 不正な narration.json は環境・記録の問題（2）
+    (d / 'narration.json').write_text('[1]')
+    assert CLI.main(['compose', str(d)]) == 2

@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -x scripts/*.sh scripts/sros2/*.sh scripts/sros2/lib/*.sh sros2/entrypoint.sh
+        run: shellcheck -x scripts/*.sh scripts/sros2/*.sh scripts/sros2/lib/*.sh scripts/lib/*.sh sros2/entrypoint.sh
       - name: guard tests (docker stub)
         run: |
           bash scripts/test-up-real.sh

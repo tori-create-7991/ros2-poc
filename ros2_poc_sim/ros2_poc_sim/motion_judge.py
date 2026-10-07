@@ -85,8 +85,13 @@ def joint_error(actual, joints, expected):
 
 
 def judge_step(*, joints, expected, tolerance, actual_before, actual_after,
-               frame_before, frame_after, frame_settled, ee_xyz, K, motion_min):
-    """1 ステップの判定。入力が欠けていたら、その条件を FAIL にして理由を残す。"""
+               frame_before, frame_after, frame_settled, ee_xyz, K, motion_min,
+               ee_error=None, ee_tol=None):
+    """1 ステップの判定。入力が欠けていたら、その条件を FAIL にして理由を残す。
+
+    ee_tol を渡したときだけ「手先が指令位置どおりか」（VLA 用）も見る。ee_error は TF の実測と
+    指令位置の距離 [m]（None なら実測が取れなかったので FAIL）。シナリオは渡さない。
+    """
     reasons, codes = [], []
 
     def fail(code, reason):
@@ -106,6 +111,14 @@ def judge_step(*, joints, expected, tolerance, actual_before, actual_after,
                 fail(f'joint_err {err:.3f}>{tolerance:.3f}', f'関節誤差 {err:.3f} rad > 許容 {tolerance:.3f}')
         except ValueError as e:
             fail('joint_missing', str(e))
+
+    if ee_tol is not None:
+        res['ee_error'] = ee_error
+        if ee_error is None or not math.isfinite(ee_error):
+            fail('ee_delta_unknown', '手先の実測位置が取れない（TF）')
+        elif ee_error > ee_tol:
+            fail(f'ee_delta_mismatch {ee_error * 1000:.1f}mm>{ee_tol * 1000:.1f}mm',
+                 f'手先が指令位置から外れた（誤差 {ee_error * 1000:.1f} mm > 許容 {ee_tol * 1000:.1f} mm）')
 
     expect_motion = True
     if actual_before is not None:
@@ -365,7 +378,8 @@ def judge_run(run_dir, run=subprocess.run):
             actual_before=joints_at(joints, ev['t_start']), actual_after=joints_at(joints, t_end),
             frame_before=frame(fb), frame_after=frame(fa), frame_settled=frame(fs),
             ee_xyz=None if ee_rec is None else ee_rec['xyz'], K=K,
-            motion_min=GRIPPER_MOTION_MIN if st['kind'] == S.GRIPPER else MOTION_MIN)
+            motion_min=GRIPPER_MOTION_MIN if st['kind'] == S.GRIPPER else MOTION_MIN,
+            ee_error=st.get('ee_error'), ee_tol=st.get('ee_tolerance'))
         if not settled:
             r['verdict'] = 'FAIL'
             r['reasons'].append('/joint_states が静止しなかった（待ちの上限まで動き続けた、または記録が無い）')

@@ -2,15 +2,20 @@
 description: 基本動作の確認
 steps:
   - name: home
+    description: 全関節を 0（ホーム姿勢）にする
     positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     time_from_start: 3
   - name: pose_a
+    description: 姿勢 A へ動かす（腕を前に出して肘を曲げる）
     positions: [0.5, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0]
     time_from_start: 3
   - name: grip_close
+    description: グリッパを閉じる
     gripper: close
   - name: grip_open
+    description: グリッパを開く
     gripper: open
   - name: home_again
+    description: ホーム姿勢へ戻る
     positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     time_from_start: 3

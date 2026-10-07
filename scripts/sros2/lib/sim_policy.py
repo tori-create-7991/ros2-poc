@@ -17,7 +17,7 @@ ROS_SECURITY_ENCLAVE_OVERRIDE で 1 つの enclave を共有する。permissions
   # ros2_poc_sim/test/test_sim_policy.py がこの再生成の結果とコミット済みの lab-c.xml の一致を検査する。
   D=sros2/policy/sim-inputs
   python3 scripts/sros2/lib/sim_policy.py $D/live-graph.xml --enclave /lab/ros2arm --exclude '^(vla_|_ros2cli_)' \\
-      --self-clients --extra-file $D/denials.txt
+      --self-clients --extra-file $D/denials.txt --extra-file $D/denials-arm.txt
   python3 scripts/sros2/lib/sim_policy.py $D/live-graph.xml --enclave /lab/ros2server --include '^(vla_|transform_listener_impl)' \\
       --extra subscribe:/camera/color/image_raw --extra publish:/vla/action --extra subscribe:/vla/ack \\
       --std-node vla_node --anon-std --extra-file $D/denials.txt
@@ -25,7 +25,8 @@ ROS_SECURITY_ENCLAVE_OVERRIDE で 1 つの enclave を共有する。permissions
 
 反復: 稼働中のグラフには短命のプロセス（controller の spawner）や起動時だけ作られるクライアントが載らない。
 そのポリシーで環境 c を起動し、Fast DDS の拒否ログ（"topic not found in allow rule"）を --denials に渡して
-足りない分を足し、拒否が無くなるまで繰り返す。足した分は sim-inputs/denials.txt に残す（--extra-file）。
+足りない分を足し、拒否が無くなるまで繰り返す。足した分は sim-inputs/ に残す（--extra-file）。全 enclave に要る分は denials.txt、
+ros2arm のノード（camera_adapter・scenario_observer など）だけが使う分は denials-arm.txt（ros2server に余計な権限を足さないため）。
 """
 import argparse
 import re

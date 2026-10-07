@@ -2,7 +2,8 @@
 
 Mac のターミナルから 1 コマンドで、Gazebo 上の CRANE-X7 に関節指令を順に送り、
 仮想カメラの映像で「指令どおり動いたか」をステップごとに PASS / FAIL 判定し、
-デスクトップ画面・カメラ映像・命令文・判定結果を 1 本の mp4 に残す。実機（ros2real）へ移る前の確認用。
+デスクトップ画面・カメラ映像・「いま何をしていて次は何か」（日本語）・命令文・判定結果を 1 本の mp4 に残す。実機（ros2real）へ移る前の確認用。
+VLA の実行（`run-vla.sh --record`）も同じ録画・判定・動画の仕組みを使う（[openvla-ros2-bridge.md](openvla-ros2-bridge.md)）。
 
 ```bash
 bash scripts/up-arm.sh                                   # 未起動なら
@@ -28,8 +29,8 @@ camera.mp4 を書き終えられない・記録プロセスを止められない
 
 - `ros2real`（実機ドライバ）が起動していない
 - ros2lab-a が SROS2 環境 a で起動している（ラベル `ros2poc.env`。ラベル無しは a 扱い）。ros2arm も SROS2 環境 a であること（環境 b / c の ros2lab-a はアームのトピックに触れず、ros2arm と環境が違うと DDS で通信できない）。b / c なら `bash scripts/up-env.sh a --arm` で戻す
-- ros2arm に ffmpeg（libx264・drawtext 等）・xdpyinfo・フォントがある（`scenario_cli doctor`）
-- 別の run-scenario が実行中でない（ros2arm 内の `/tmp/run-scenario.lock`）、前回の記録プロセスが残っていない
+- ros2arm に ffmpeg（libx264・`ass` フィルタ等）・xdpyinfo・日本語フォント（fontconfig の `Noto Sans CJK JP`）がある（`scenario_cli doctor`）
+- 別の run-scenario / `run-vla.sh --record` が実行中でない（ros2arm 内の `/tmp/run-scenario.lock`）、`run-vla.sh` が実行中でない（自分のロックを取ってから、ros2server が起動していればその `/tmp/run-vla.lock` を見る。排他は双方向）、前回の記録プロセスが残っていない
 - ros2lab-a からアームのコントローラ（`crane_x7_arm_controller`）がちょうど 1 つ見える（Discovery 待ち。2 つ以上ならシミュの二重起動か実機と混在として止める）
 - 送るコマンドが想定の形（送信先ごとにトピック・型まで固定し、メッセージは二重引用符の中の数値・名前・記号のみ）
 
@@ -39,13 +40,14 @@ camera.mp4 を書き終えられない・記録プロセスを止められない
 
 | ファイル | 内容 |
 |---|---|
-| `scenario.mp4` | 合成動画。左: デスクトップ（x11grab）、右: 仮想カメラ（判定後は変化領域の枠と手先の投影点）、下帯: 命令と判定 |
+| `scenario.mp4` | 合成動画。左: デスクトップ（x11grab）、右: 仮想カメラ（判定後は変化領域の枠と手先の投影点）、下帯: 日本語の「いま／つぎ」・判定・命令（下の「動画の表示」） |
 | `result.json` | ステップごとの判定・根拠の数値（関節誤差、変化画素率、手先の投影点、理由）。random の展開値は `expect`。`performance` に RTF・所要時間（下の「性能の測定」） |
 | `clock.csv` | `wall,sim`（約 1Hz）。`/clock` の sim time と壁時計。RTF の元データ |
 | `run_meta.json` | `RUN_LABEL`・Colima VM の CPU 数とメモリ（GiB）・シナリオ名 |
 | `commands.log` | 実際に送ったコマンドの全文と送信先 |
 | `camera.mp4` / `desktop.mp4` | 記録の元データ |
 | `camera_frames.csv` / `joints.jsonl` / `ee.jsonl` / `camera_info.json` / `events.jsonl` / `steps.json` | 判定の入力（`scenario_cli judge` で判定し直せる） |
+| `overlay/steps.ass` / `overlay/filtergraph.txt` | 下帯の字幕（ASS）と ffmpeg の filtergraph。合成に失敗したらここを見る |
 
 1 回あたり 3〜5MB（デスクトップ録画が大半。既定シナリオの実測）。`workspace/runs/` は自動では消えないので、
 不要になったら `workspace/runs/<日時>` を消す（ros2arm が作ったファイルなので、ホストで消せないときは
@@ -73,12 +75,13 @@ Mac: scripts/run-scenario.sh
 ## シナリオの書き方
 
 ```yaml
-description: 任意
+description: 任意                # 動画の冒頭にタイトルとして出す（80 文字以内）
 repeat: 1                      # 全体の繰り返し（--repeat で上書き）。名前に #1, #2 が付く
 steps:
   - name: pose_a               # 英数字・_・-（40 文字以内）
     positions: [0.5, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0]   # 7 関節 [rad]。リミット外は実行前にエラー
     time_from_start: 3         # 既定 3
+    description: 姿勢 A へ動かす  # 任意。動画の「いま」にそのまま出す（80 文字以内、改行などの制御文字は不可）
     tolerance: 0.05            # 任意（既定 0.05 rad）
     expect: [...]              # 任意。判定の期待値だけ差し替える（fail_demo 用）
   - name: wave                 # 経由点。判定は最後の点
@@ -93,6 +96,22 @@ steps:
 
 関節の順は `shoulder_fixed_part_pan`, `shoulder_revolute_part_tilt`, `upper_arm_revolute_part_twist`,
 `upper_arm_revolute_part_rotate`, `lower_arm_fixed_part`, `lower_arm_revolute_part`, `wrist`（すべて `crane_x7_` 始まり）。
+
+## 動画の表示（下帯）
+
+下帯は ASS 字幕（ffmpeg の `ass` フィルタ = libass）で、ステップごとに次を出す。
+
+| 行 | 内容 |
+|---|---|
+| 1 行目 | `ステップ 2/5  いま: 姿勢「pose_a」へ動かす（7 関節、3 秒）`（`description:` があればそれ）。右上に判定が出たあとの `総合 5/5 合格` |
+| 2 行目 | `つぎ: グリッパを閉じる`（最後は `終了（判定を表示します）`） |
+| 3 行目 | `判定: 動作の完了を待っています…` → 静止して判定できたら `判定: 合格 — 関節の誤差 0.001 rad・映像の変化 2.1%` / `判定: 不合格 — <日本語の理由>`（緑 / 赤） |
+| 4 行目（小） | 送った命令（送信先と値だけ。全文は `commands.log`） |
+
+最初のステップが始まる前は、シナリオの `description:` をタイトルとして出す。
+日本語を `drawtext` で描くと ffmpeg 6.1 は日本語を含む行を途中で切るので、`ass` フィルタ（libass）で焼いている。
+フォントは fontconfig の名前（`Noto Sans CJK JP`）で探す。字幕には `{` `}` `\` と制御文字を入れない（全角の似た文字に置き換える）。
+判定コードの日本語化は `ros2_poc_sim/narration.py`、字幕の組み立ては `compose_video.py`。
 
 ## 判定（各ステップ、全部満たせば PASS）
 
@@ -109,8 +128,8 @@ steps:
   3 秒の指令が実際には 7〜15 秒かかる（実測）。静止（0.8 秒間の変化 ≤ 0.002 rad）を検出してから、
   カメラ映像の遅れ（関節より 1〜1.5 秒遅れる。実測）ぶん 1.5 秒待って判定する。
   `指令時間 × 5 + 10` 秒たっても止まらなければ、その時刻で判定し `joints_not_still` で FAIL にする。
-- 動画の下帯の理由は ASCII の短いコード（`joint_err`、`no_motion`、`ee_outside_change`、`not_settled` など）。
-  日本語の理由は `result.json` と端末に出る（ffmpeg 6.1 の drawtext はマルチバイト文字を含む行を途中で切るため）。
+- 動画の下帯の理由は日本語（`narration.code_text`）。`result.json` の `codes` は ASCII の短いコード（`joint_err`、`no_motion`、`ee_outside_change`、`not_settled` など）、`reasons` は日本語の文。
+- VLA の実行（`run-vla.sh --record`）では、上の 4 つに加えて **5. 手先が VLA の差分どおりに動いたか**（静止後の TF の実測と、IK に渡した指令位置の距離 ≤ 10 mm、位置のみ）を見る（[openvla-ros2-bridge.md](openvla-ros2-bridge.md)）。
 
 ## 視点 fixed_front_wide
 
@@ -135,6 +154,8 @@ docker exec ros2arm pkill -INT -f '[r]os2 launch ros2_poc_sim'   # 数秒で Gaz
 | 動画の左側が RViz で、Gazebo の GUI が見えない | デスクトップをそのまま録画しているため。Gazebo のシーンは右側の仮想カメラで見える。必要なら noVNC で Gazebo のウィンドウを前に出してから実行する |
 | `合成に失敗した` | `overlay/filtergraph.txt` と ffmpeg のメッセージを確認 |
 | `別の run-scenario が実行中` | 記録プロセスが動いている。終わるのを待つ |
+| `run-vla が実行中` | `run-vla.sh` が同じアームを使っている（ros2server の `/tmp/run-vla.lock`）。終わってから実行する。強制終了の残りなら `docker exec ros2server rm -r /tmp/run-vla.lock`（実行中でないと確かめてから） |
+| 動画の日本語が出ない・四角になる | `scenario_cli doctor` を実行する。`Noto Sans CJK JP` が `fc-list` に無いか、ffmpeg に `ass` フィルタが無い |
 | `前回の run-scenario のロックが残っている` | 前回を強制終了した（SIGKILL・VM 停止など）。記録プロセスが無いことを確かめて `docker exec ros2arm rm -r /tmp/run-scenario.lock`。ロックはコンテナを作り直すと消えるが、`docker restart` や Colima の再起動では残る |
 | `前回の記録プロセスが残っている` | 前回を強制終了した。案内のコマンドで止めてから再実行する。記録プロセスは停止の指示が届かなくても、シナリオから計算した上限時間で止まる |
 | `記録プロセスを止められない` | 判定に使う camera.mp4 が未完の可能性があるので判定しない（終了コード 2） |
@@ -166,4 +187,4 @@ docker exec -u ubuntu ros2arm bash -lc 'source /opt/ros/jazzy/setup.bash; source
 - シミュ専用。実機（ros2real）では使わない（スクリプトが拒否する）。
 - グリッパの命令は ros2arm から送る。実機でグリッパを動かすには、ros2lab に `control_msgs` を入れるか ros2real 側から送る必要がある（未対応）。
 - DDS は無認証（[sim-camera-profile.md](sim-camera-profile.md) の「隔離方針との関係」と同じ）。同じドメインの誰でも画像・CameraInfo・TF・`/joint_states` を偽装でき、判定（PASS / FAIL）を変えられる。**判定が意味を持つのは信頼できるネットワーク内だけ**。`ros2-lab-net` に信頼できないコンテナを繋いだまま実行しない。記録ノードは画像の大きさ（1920×1080 まで）・頻度（30fps まで）・CameraInfo の値を検査し、記録時間にも上限を置いている。
-- 録画・合成の ffmpeg・xdpyinfo・フォントはベースイメージ由来（Dockerfile では宣言していない）。ベースイメージを更新して無くなった場合は `scenario_cli doctor` で実行前に止まる。
+- 録画・合成の ffmpeg・xdpyinfo・フォント（Noto Sans CJK JP）はベースイメージ由来（Dockerfile では宣言していない）。ベースイメージを更新して無くなった場合は `scenario_cli doctor` で実行前に止まる。
