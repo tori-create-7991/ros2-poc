@@ -42,6 +42,8 @@ FALLBACK_WAIT_SEC = 4.0   # scenario_cli wait が使えないときに、指令�
 NAME_RE = re.compile(r'^[A-Za-z0-9_\-]{1,40}$')
 MAX_STEPS = 200
 MAX_TIME_FROM_START = 60.0
+MAX_DESCRIPTION = 80
+CONTROL_RE = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]')
 
 ARM, GRIPPER = 'arm', 'gripper'
 # 送信先は論理名で返す（コンテナ名への対応は scripts/run-scenario.sh だけが持つ）
@@ -56,6 +58,8 @@ class Step:
     expect: tuple                   # 判定に使う期待値（既定は最後の点）
     tolerance: float
     joints: list = field(default_factory=list)
+    description: str = ''           # 動画に出す日本語の説明（任意。空なら narration が自動で作る）
+    origin: str = ''                # 'random' = random の展開で作ったステップ
 
     @property
     def duration(self):
@@ -66,13 +70,14 @@ class Step:
     def from_dict(cls, d):
         return cls(d['name'], d['kind'],
                    [(tuple(p['positions']), p['time_from_start']) for p in d['points']],
-                   tuple(d['expect']), d['tolerance'], list(d['joints']))
+                   tuple(d['expect']), d['tolerance'], list(d['joints']),
+                   d.get('description', ''), d.get('origin', ''))
 
     def to_dict(self):
         return {'name': self.name, 'kind': self.kind, 'joints': list(self.joints),
                 'points': [{'positions': list(p), 'time_from_start': t} for p, t in self.points],
                 'expect': list(self.expect), 'tolerance': self.tolerance,
-                'duration': self.duration}
+                'duration': self.duration, 'description': self.description, 'origin': self.origin}
 
 
 def _num(v, where):
@@ -108,6 +113,17 @@ def _tolerance(v, where):
     return t
 
 
+def _description(v, where):
+    if not isinstance(v, str):
+        raise ValueError(f'{where}: 文字列で書く（{v!r}）')
+    v = v.strip()
+    if len(v) > MAX_DESCRIPTION:
+        raise ValueError(f'{where}: {MAX_DESCRIPTION} 文字以内（{len(v)} 文字）')
+    if CONTROL_RE.search(v):
+        raise ValueError(f'{where}: 制御文字（改行など）は使えない')
+    return v
+
+
 def _gripper_angle(v, where):
     if v == 'open':
         return GRIPPER_OPEN
@@ -131,15 +147,16 @@ def _parse_step(d, idx):
     if len(kinds) != 1:
         raise ValueError(f'{where}: positions / waypoints / gripper / random のどれか 1 つだけを書く（{kinds}）')
     kind = kinds[0]
-    unknown = set(d) - {'name', 'tolerance', 'expect', 'time_from_start', kind}
+    unknown = set(d) - {'name', 'tolerance', 'expect', 'time_from_start', 'description', kind}
     if unknown:
         raise ValueError(f'{where}: 不明なキー {sorted(unknown)}')
+    desc = _description(d['description'], f'{where}.description') if 'description' in d else ''
 
     if kind == 'gripper':
         angle = _gripper_angle(d['gripper'], f'{where}.gripper')
         expect = (_gripper_angle(d['expect'], f'{where}.expect'),) if 'expect' in d else (angle,)
         tol = _tolerance(d.get('tolerance', GRIPPER_TOLERANCE), f'{where}.tolerance')
-        return [Step(name, GRIPPER, [((angle,), 0.0)], expect, tol, [GRIPPER_JOINT])]
+        return [Step(name, GRIPPER, [((angle,), 0.0)], expect, tol, [GRIPPER_JOINT], desc)]
 
     tol = _tolerance(d.get('tolerance', ARM_TOLERANCE), f'{where}.tolerance')
     if kind == 'random':
@@ -165,7 +182,8 @@ def _parse_step(d, idx):
                 mid, half = (lo + hi) / 2, (hi - lo) / 2 * RANDOM_SCALE
                 pos.append(round(rng.uniform(mid - half, mid + half), 4))
             pos = tuple(pos)
-            steps.append(Step(f'{name}_{i + 1}', ARM, [(pos, t)], pos, tol, list(ARM_JOINTS)))
+            steps.append(Step(f'{name}_{i + 1}', ARM, [(pos, t)], pos, tol, list(ARM_JOINTS),
+                              desc, 'random'))
         return steps
 
     if kind == 'positions':
@@ -186,7 +204,7 @@ def _parse_step(d, idx):
             points.append((_arm_positions(wp['positions'], f'{w}.positions'), t))
             prev = t
     expect = _arm_positions(d['expect'], f'{where}.expect') if 'expect' in d else points[-1][0]
-    return [Step(name, ARM, points, expect, tol, list(ARM_JOINTS))]
+    return [Step(name, ARM, points, expect, tol, list(ARM_JOINTS), desc)]
 
 
 def parse_scenario(data, repeat=None):
@@ -196,6 +214,8 @@ def parse_scenario(data, repeat=None):
     unknown = set(data) - {'steps', 'repeat', 'description'}
     if unknown:
         raise ValueError(f'不明なキー {sorted(unknown)}')
+    if 'description' in data:
+        _description(data['description'], 'description')
     n = data.get('repeat', 1) if repeat is None else repeat
     if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 20:
         raise ValueError(f'repeat は 1〜20 の整数（{n!r}）')
@@ -207,8 +227,18 @@ def parse_scenario(data, repeat=None):
     out = []
     for k in range(1, n + 1):
         for s in base:
-            out.append(Step(f'{s.name}#{k}', s.kind, s.points, s.expect, s.tolerance, s.joints))
+            out.append(Step(f'{s.name}#{k}', s.kind, s.points, s.expect, s.tolerance, s.joints,
+                            s.description, s.origin))
     return out
+
+
+def scenario_title(data):
+    """シナリオ全体の description（動画の冒頭に出すタイトル）。無い・不正なら空文字。"""
+    d = data.get('description') if isinstance(data, dict) else None
+    try:
+        return _description(d, 'description') if d is not None else ''
+    except ValueError:
+        return ''
 
 
 def load_scenario(path, repeat=None):

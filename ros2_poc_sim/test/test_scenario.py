@@ -165,3 +165,31 @@ def test_generated_commands_pass_run_scenario_check():
                 'trajectory_msgs/msg/JointTrajectory "{a: $(id)}"',
                 'ros2 topic pub -w 1 --times 3 -r 2 /other trajectory_msgs/msg/JointTrajectory "{a: 1}"']:
         assert not re.fullmatch(patterns[S.LAB], bad), bad
+
+
+def test_description_is_kept_on_every_expanded_step_and_roundtrips():
+    steps = S.parse_scenario({'steps': [
+        {'name': 'a', 'positions': [0.0] * 7, 'description': '  姿勢 A へ  '},
+        {'name': 'r', 'random': {'n': 2, 'seed': 3}, 'description': 'ランダム'},
+        {'name': 'g', 'gripper': 'open'}], 'repeat': 2})
+    assert [s.description for s in steps] == ['姿勢 A へ', 'ランダム', 'ランダム', '', '姿勢 A へ', 'ランダム', 'ランダム', '']
+    assert [s.origin for s in steps][:4] == ['', 'random', 'random', '']
+    assert all(S.Step.from_dict(s.to_dict()) == s for s in steps)
+
+
+@pytest.mark.parametrize('desc', ['x' * 81, 'a\nb', 'a\x00b', 123, ['x']])
+def test_bad_description_is_rejected(desc):
+    with pytest.raises(ValueError, match='description'):
+        S.parse_scenario({'steps': [{'positions': [0.0] * 7, 'description': desc}]})
+    with pytest.raises(ValueError, match='description'):
+        S.parse_scenario({'description': desc, 'steps': [{'positions': [0.0] * 7}]})
+
+
+def test_scenario_title_and_bundled_descriptions():
+    assert S.scenario_title({'description': '基本動作の確認'}) == '基本動作の確認'
+    assert S.scenario_title({}) == '' and S.scenario_title(None) == '' and S.scenario_title({'description': 'a\nb'}) == ''
+    import pathlib
+    for p in (pathlib.Path(__file__).parents[1] / 'config' / 'scenarios').glob('*.yaml'):
+        steps = S.load_scenario(p)
+        assert all(s.description for s in steps), p      # 同梱シナリオは全ステップに日本語の説明を付ける
+        assert not any(s.description.isascii() for s in steps), p

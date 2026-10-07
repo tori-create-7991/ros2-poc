@@ -2,15 +2,19 @@
 description: 経由点とランダム姿勢の例
 steps:
   - name: home
+    description: ホーム姿勢にする
     positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     time_from_start: 3
   - name: wave
+    description: 経由点 3 点で腕を左右に振る
     waypoints:
       - {positions: [0.6, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0], time_from_start: 2}
       - {positions: [-0.6, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0], time_from_start: 4}
       - {positions: [0.0, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0], time_from_start: 6}
   - name: random_pose
+    description: ランダムな姿勢へ動かす（seed 固定で毎回同じ）
     random: {n: 3, seed: 1, time_from_start: 3}
   - name: home_again
+    description: ホーム姿勢へ戻る
     positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     time_from_start: 3

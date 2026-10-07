@@ -1,0 +1,6 @@
+# ros2arm の enclave だけに足す分（ros2server には要らない。最小権限のため denials.txt と分ける）。形式は denials.txt と同じ。
+# camera_adapter（ros2arm）が起動時に購読する。環境 c の実測の拒否ログから足した（2026-10-05。無いと /camera/color/* が出ない）
+subscribe:/sim_camera/realsense_d435/raw/camera_info
+# run-vla.sh --record の scenario_observer（ros2arm）が購読する。環境 c で --record が通ることを実測で確認した（2026-10-05）
+subscribe:/camera/color/image_raw
+subscribe:/camera/color/camera_info

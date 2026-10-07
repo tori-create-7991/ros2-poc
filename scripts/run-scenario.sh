@@ -95,95 +95,36 @@ send() {
 }
 fail_env() { echo "$1" >&2; exit 2; }
 
-# 録画・合成に要る外部コマンド・フォント（ベースイメージ由来）を先に確かめる
-arm "ros2 run ros2_poc_sim scenario_cli doctor" < /dev/null \
-  || fail_env "ros2arm に録画・合成の前提が揃っていない（上のメッセージ参照。'bash scripts/up-arm.sh' でイメージを作り直す）"
+# 記録・判定・合成の共通部（run-vla.sh --record と共有）
+# shellcheck source=scripts/lib/record.sh
+. scripts/lib/record.sh
 
-TS="$(date +%Y%m%d-%H%M%S)"
-# ホスト側の出力先は ros2arm の /workspace のマウント元（up-arm.sh を実行した checkout の ./workspace）。
-# このスクリプトのある checkout とは限らない（git worktree など）。テストでは RUN_SCENARIO_WORKSPACE で差し替える
-WORKSPACE_HOST="${RUN_SCENARIO_WORKSPACE:-$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' ros2arm 2>/dev/null || true)}"
-if [ -z "$WORKSPACE_HOST" ] || [ ! -d "$WORKSPACE_HOST" ]; then
-  fail_env "ros2arm の /workspace のマウント元が分からない（${WORKSPACE_HOST:-空}）。'bash scripts/up-arm.sh' で作り直す"
-fi
-RUN_HOST="$WORKSPACE_HOST/runs/$TS"
-RUN="/workspace/runs/$TS"
-# 記録プロセス（observer・カメラ用 ffmpeg・デスクトップ録画）。[s] などは pkill / pgrep 自身を呼ぶ
-# bash -c のコマンドラインに一致させないため。ANY_* は他の実行（前回の残り）も含めて探すとき用
-RECORDERS="[s]cenario_observer --out $RUN|[r]awvideo.*$RUN/camera\.mp4|[x]11grab.*$RUN/desktop\.mp4"
-# 最初の停止指示（INT）はカメラ用 ffmpeg に直接送らない。observer が入力を閉じれば ffmpeg は残りを
-# 書き出して終わる。ffmpeg に INT を送ると読み残したフレーム（最後のステップの判定用）が落ちる
-RECORDERS_INT="[s]cenario_observer --out $RUN|[x]11grab.*$RUN/desktop\.mp4"
-ANY_RECORDERS='[s]cenario_observer --out /workspace/runs/|[r]awvideo.*/workspace/runs/[0-9-]*/camera\.mp4|[x]11grab.*/workspace/runs/[0-9-]*/desktop\.mp4'
+# 録画・合成に要る外部コマンド・フォント（ベースイメージ由来）を先に確かめる
+rec_doctor
+rec_init_run
 
 # 同時実行の拒否（同じアームに 2 本の指令が混ざる）。ロックは ros2arm の /tmp に置く。
-# コンテナを作り直す（up-arm.sh）と消えるが、docker restart や Colima の再起動では残る
-LOCK=/tmp/run-scenario.lock
-OWNER="$TS $(hostname -s 2>/dev/null || echo host) $$"
-if ! arm "mkdir $LOCK && echo '$OWNER' > $LOCK/owner" < /dev/null 2>/dev/null; then
-  owner="$(arm "cat $LOCK/owner" < /dev/null 2>/dev/null || true)"
-  read -r started owner_host owner_pid <<<"${owner:-}" || true
-  # 記録中、または同じホストで持ち主のプロセスが生きている（シミュ起動待ちなど記録前の段階）なら実行中
-  if arm "pgrep -f '$ANY_RECORDERS'" > /dev/null 2>&1 < /dev/null \
-     || { [ "${owner_host:-}" = "$(hostname -s 2>/dev/null || echo host)" ] && [ -n "${owner_pid:-}" ] \
-          && kill -0 "$owner_pid" 2>/dev/null; }; then
-    fail_env "別の run-scenario が実行中（開始 ${started:-不明}）。実行中でないと確かめられたら外す: docker exec ros2arm rm -r $LOCK"
-  fi
-  fail_env "前回の run-scenario のロックが残っている（開始 ${started:-不明}、記録プロセスは無い）。実行中でなければ外す: docker exec ros2arm rm -r $LOCK"
-fi
-# shellcheck disable=SC2317,SC2329  # trap から呼ぶ
-release_lock() { arm "rm -r $LOCK" < /dev/null > /dev/null 2>&1 || true; }
-trap release_lock EXIT
-# 前回の記録プロセスが残っていたら止めてもらう（残るとシミュがさらに遅くなる）
-if arm "pgrep -f '$ANY_RECORDERS'" > /dev/null 2>&1 < /dev/null; then
-  fail_env "前回の記録プロセスが残っている。止めてから再実行する: docker exec ros2arm pkill -INT -f '$ANY_RECORDERS'"
-fi
-
-RECORDING=0     # 記録プロセスを起動したか
-STOPPED=0       # 記録プロセスが止まったことを確かめたか
-STOP_GAVE_UP=0  # KILL まで送っても止まらなかったか（後片付けで同じ待ちを繰り返さない）
-stop_recorders() {
-  # observer は ffmpeg の書き出しを最大 60 秒待つので、それより長く待ってから TERM → KILL に上げる
-  [ "$RECORDING" = 1 ] && [ "$STOPPED" = 0 ] || return 0
-  [ "$STOP_GAVE_UP" = 0 ] || return 1
-  echo "記録を止めている（最大 2 分ほどかかる）"
-  local sig
-  for sig in INT TERM KILL; do
-    local pattern="$RECORDERS"
-    if [ "$sig" = INT ]; then pattern="$RECORDERS_INT"; fi
-    arm "pkill -$sig -f '$pattern'" < /dev/null > /dev/null 2>&1 || true
-    for _ in $(seq 1 "$([ "$sig" = INT ] && echo 90 || echo 10)"); do
-      if ! arm "pgrep -f '$RECORDERS'" > /dev/null 2>&1 < /dev/null; then
-        STOPPED=1
-        return 0
-      fi
-      sleep 1
-    done
-    echo "記録プロセスが SIG$sig で止まらない" >&2
-  done
-  STOP_GAVE_UP=1
-  return 1
-}
+# コンテナを作り直す（up-arm.sh）と消えるが、docker restart や Colima の再起動では残る。
+# トラップは取得の前に入れる（取得の途中の Ctrl-C でロックを漏らさない。取得に失敗したときは他人のロックを外さない）
 # shellcheck disable=SC2317,SC2329  # trap から呼ぶ（shellcheck のバージョンでコードが違う）
 cleanup() {
-  trap '' INT   # 後片付けの途中で Ctrl-C されてもロックを外すところまで進める
-  # docker exec は（TTY なしでは）シグナルを転送しないので、コンテナ内の wait は明示的に止める
-  [ "$RECORDING" = 0 ] || arm "pkill -f '[s]cenario_cli wait $RUN '" < /dev/null > /dev/null 2>&1 || true
-  stop_recorders || true
-  release_lock
+  trap '' INT TERM HUP   # 後片付けの途中のシグナルでも、ロックを外すところまで進める
+  rec_cleanup
 }
 trap cleanup EXIT
+rec_lock_acquire
+# このスクリプトは同じアームに指令する。run-vla.sh（--record なしを含む）が動いていると指令が混ざるので断る。
+# run-vla は ros2server の /tmp にロックを置く（ros2server が無い構成では何もしない）。
+# 自分のロックを取ってから見る（set → check）。run-vla も自分のロックを取ってから run-scenario のロックを見るので、
+# 同時に始まっても両方が通ることはない（両方が断ることはありうる）
+if running ros2server && docker exec ros2server test -d /tmp/run-vla.lock < /dev/null 2>/dev/null; then
+  fail_env "run-vla が実行中（ロック /tmp/run-vla.lock あり）。同じアームに指令が混ざるので、終わってから実行する。強制終了の残りなら、実行中でないと確かめて外す: docker exec ros2server rm -r /tmp/run-vla.lock"
+fi
+rec_check_leftovers
 
-# ros2arm の ubuntu が書けるよう、ディレクトリはコンテナ側で作る（/workspace は root と ubuntu が混在する）。
-# Linux ホストではホストのユーザーが ubuntu(uid 1000) と別になりうるので、ホスト側からも書けるよう 777 にする
-arm "mkdir -p $RUN && chmod 777 $RUN" < /dev/null || fail_env "出力先を作れない: $RUN_HOST"
+rec_make_run_dir
 cp "$SCENARIO_FILE" "$RUN_HOST/scenario.yaml" || fail_env "シナリオをコピーできない"
 echo "出力先: $RUN_HOST"
-
-topic_ok() {
-  arm "timeout 15 ros2 topic echo --once --field header.stamp $1 > /dev/null 2>&1" < /dev/null
-}
-sim_ready() { topic_ok /joint_states && topic_ok /camera/color/image_raw; }
 
 if ! sim_ready; then
   if [ "$START_SIM" = 1 ]; then
@@ -199,14 +140,7 @@ if ! sim_ready; then
       arm_bg "exec ros2 launch ros2_poc_sim arm_with_camera.launch.py placement:=fixed_front_wide > /workspace/runs/sim-$TS.log 2>&1"
     fi
   fi
-  echo "トピック（/joint_states, /camera/color/image_raw）を待つ（最大 ${TIMEOUT} 秒）"
-  deadline=$(( $(date +%s) + TIMEOUT ))
-  until sim_ready; do
-    if [ "$(date +%s)" -ge "$deadline" ]; then
-      fail_env "トピックが流れない。カメラ付きのシミュ（arm_with_camera.launch.py）が動いていなければ、他のシミュを止めて --start-sim を付ける（docs/sim-scenario-recording.md）。"
-    fi
-    sleep 5
-  done
+  rec_wait_sim "$TIMEOUT" "カメラ付きのシミュ（arm_with_camera.launch.py）が動いていなければ、他のシミュを止めて --start-sim を付ける（docs/sim-scenario-recording.md）。"
 fi
 
 lab true < /dev/null > /dev/null || fail_env "ros2lab-a でコマンドを実行できない"
@@ -262,21 +196,7 @@ done < "$RUN_HOST/commands.tsv"
 MAX_SEC="$(arm "ros2 run ros2_poc_sim scenario_cli budget $RUN" < /dev/null)" || fail_env "記録時間の上限を計算できない"
 [[ "$MAX_SEC" =~ ^[0-9]+$ ]] || fail_env "記録時間の上限が数値でない: $MAX_SEC"
 
-SIZE="$(arm "xdpyinfo -display :1 | awk '/dimensions:/{print \$2}'" < /dev/null)"
-if [[ ! "$SIZE" =~ ^[0-9]+x[0-9]+$ ]]; then
-  fail_env "デスクトップ（DISPLAY=:1）の大きさが取れない（${SIZE:-空}）。noVNC のデスクトップが起動しているか確認する。"
-fi
-# 記録プロセスは停止の指示が届かなくても MAX_SEC 秒で止まる（-t / --max-duration）
-RECORDING=1
-arm_bg "exec ros2 run ros2_poc_sim scenario_observer --out $RUN --max-duration $MAX_SEC > $RUN/observer.log 2>&1"
-arm_bg "date +%s.%N > $RUN/desktop_t0.txt; exec ffmpeg -y -v error -f x11grab -framerate 10 -video_size $SIZE -t $MAX_SEC -i :1 -c:v libx264 -preset ultrafast -pix_fmt yuv420p $RUN/desktop.mp4 2> $RUN/desktop_ffmpeg.log"
-# 記録の立ち上がり待ち: 送信前のフレームが要るので、カメラのフレームが記録され始めるまで待つ
-frames_recorded() { { wc -l < "$RUN_HOST/camera_frames.csv"; } 2>/dev/null || echo 0; }
-for _ in $(seq 1 60); do
-  [ "$(frames_recorded)" -ge 4 ] && break
-  sleep 1
-done
-[ "$(frames_recorded)" -ge 4 ] || fail_env "カメラのフレームが記録されない（$RUN_HOST/observer.log を確認）"
+rec_start "$MAX_SEC"
 
 SEND_FAILED=0
 : > "$RUN_HOST/events.jsonl"
@@ -310,20 +230,8 @@ while IFS=$'\t' read -r name target wait cmd <&3; do
   arm "ros2 run ros2_poc_sim scenario_cli wait $RUN $((i - 1))" < /dev/null || sleep "$wait"
 done 3< "$RUN_HOST/commands.tsv"
 
-stop_recorders || fail_env "記録プロセスを止められないので判定しない（camera.mp4 が未完の可能性）"
-
-judge_rc=0
-arm "ros2 run ros2_poc_sim scenario_cli judge $RUN" < /dev/null || judge_rc=$?
-if [ "$judge_rc" -gt 1 ] || [ ! -f "$RUN_HOST/result.json" ]; then
-  fail_env "判定に失敗した（rc=$judge_rc）"
-fi
-# 合成の失敗は判定結果（終了コード）を変えない。result.json が判定の正
-if arm "ros2 run ros2_poc_sim scenario_cli compose $RUN" < /dev/null; then
-  echo "動画: $RUN_HOST/scenario.mp4"
-else
-  echo "合成に失敗した（$RUN_HOST/overlay/filtergraph.txt を確認）。判定は result.json を見る" >&2
-fi
-echo "判定: $RUN_HOST/result.json"
+rec_stop_and_judge
+rec_compose
 if [ "$SEND_FAILED" -gt 0 ]; then
   # 判定（result.json）は残すが、指令が届いていないので動作の FAIL ではなく実行時の問題として返す
   fail_env "指令を送れなかったステップが ${SEND_FAILED} 個ある（result.json の send_failed）"

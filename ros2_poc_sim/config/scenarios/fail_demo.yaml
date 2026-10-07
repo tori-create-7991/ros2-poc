@@ -2,12 +2,15 @@
 description: 意図的に FAIL させるデモ
 steps:
   - name: home
+    description: ホーム姿勢にする
     positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     time_from_start: 3
   - name: wrong_expect
+    description: 姿勢 A へ動かすが、期待値はホームのまま（不合格になる）
     positions: [0.5, 0.3, 0.0, -1.2, 0.0, -0.5, 0.0]
     time_from_start: 3
     expect: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
   - name: home_again
+    description: ホーム姿勢へ戻る
     positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     time_from_start: 3

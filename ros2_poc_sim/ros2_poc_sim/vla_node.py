@@ -28,6 +28,7 @@ from std_msgs.msg import String
 from ros2_poc_sim import vla_action as A
 from ros2_poc_sim import vla_client as V
 from ros2_poc_sim import vla_loop as L
+from ros2_poc_sim import vla_record as R
 
 DEFAULT_ENDPOINT = 'http://vla-server:8000/act'
 IMAGE_TOPIC = '/camera/color/image_raw'
@@ -68,12 +69,12 @@ class VlaNode(Node):
 
     def _on_ack(self, msg):
         try:
-            seq, status, reason = A.parse_ack(msg.data)
+            ack = A.parse_ack_full(msg.data)
         except ValueError as e:
             self.get_logger().warning(f'不正な ack を破棄: {e}')
             return
         with self._cond:
-            self._acks[seq] = (seq, status, reason)
+            self._acks[ack[0]] = ack
             self._cond.notify_all()
 
     def wait_converter(self, timeout):
@@ -120,6 +121,8 @@ def parse_args(argv):
     ap.add_argument('--image-qos', choices=('reliable', 'best_effort'), default='reliable',
                     help='画像の購読の信頼性。発行側（実カメラなど）が best_effort のときだけ best_effort にする（既定: reliable）')
     ap.add_argument('--request-timeout', type=float, default=60.0, help='POST /act のタイムアウト [s]')
+    ap.add_argument('--record-file', default=None,
+                    help='ステップごとの記録（JSON 行）を追記する絶対パス（run-vla.sh --record が渡す）')
     ap.add_argument('--ack-timeout', type=float, default=240.0, help='1 ステップの ack を待つ上限 [s]（シミュは遅い）')
     return ap.parse_args(argv)
 
@@ -132,6 +135,8 @@ def main(argv=None):
         V.validate_request(a.instruction, a.unnorm_key)
         if not 1 <= a.steps <= L.MAX_STEPS:
             raise ValueError(f'--steps は 1〜{L.MAX_STEPS}')
+        if a.record_file is not None:
+            R.validate_record_path(a.record_file)
     except ValueError as e:
         print(f'引数の誤り: {e}', file=sys.stderr)
         return 64
@@ -158,6 +163,8 @@ def main(argv=None):
             lambda action: node.pub.publish(String(data=A.format_action(action))),
             lambda seq: node.wait_ack(seq, a.ack_timeout),
             log=lambda m: print(m, flush=True),
+            on_step=(lambda info: R.append_record(a.record_file, R.make_record(info, a.instruction)))
+            if a.record_file else None,
             start_seq=random.randint(1, 10 ** 9))    # 実行ごとに変える（前回の遅い ack と取り違えない）
         return code
     except KeyboardInterrupt:

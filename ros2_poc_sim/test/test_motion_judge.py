@@ -257,3 +257,40 @@ def test_judge_time_undecided_while_waiting_then_decided():
 def test_settle_time_holds_while_window_still_open():
     recs = _traj(10.0, 12.0, HOME, POSE_A, until=12.6)   # 静止区間が 0.6 秒ぶんしかない
     assert M.settle_time(recs, J, POSE_A, 0.05, 10.0, 3.0, now=12.6) is None   # 実行中は区間が終わるまで保留
+
+
+def test_ee_error_is_judged_only_when_a_tolerance_is_given():
+    plain = M.judge_step(**_ok_inputs())
+    assert plain['verdict'] == 'PASS' and 'ee_error' not in plain          # シナリオの挙動は変えない
+    ok = M.judge_step(**_ok_inputs(ee_error=0.004, ee_tol=0.01))
+    assert ok['verdict'] == 'PASS' and ok['ee_error'] == 0.004
+    bad = M.judge_step(**_ok_inputs(ee_error=0.0123, ee_tol=0.01))
+    assert bad['verdict'] == 'FAIL' and bad['codes'] == ['ee_delta_mismatch 12.3mm>10.0mm']
+    assert '12.3 mm' in bad['reasons'][0]
+    for missing in (None, float('nan')):
+        r = M.judge_step(**_ok_inputs(ee_error=missing, ee_tol=0.01))
+        assert r['verdict'] == 'FAIL' and r['codes'] == ['ee_delta_unknown']
+    assert M.judge_step(**_ok_inputs(ee_error=0.5))['verdict'] == 'PASS'   # 許容を渡さなければ見ない
+
+
+def test_judge_run_passes_ee_fields_from_steps_json(tmp_path):
+    steps = S.parse_scenario({'steps': [{'name': 'a', 'positions': POSE_A, 'time_from_start': 2}]})
+    events = [{'index': 0, 't_start': 10.0, 't_sent': 11.0, 'rc': 0}]
+    _write_run(tmp_path, steps, events, _traj(11.0, 12.0, HOME, POSE_A, until=16.0, dt=0.1),
+               [(n, 9.0 + n * 0.2) for n in range(40)],
+               [{'t': t, 'xyz': [0.0, 0.0, 1.0]} for t in np.arange(9, 16, 0.1)])
+    d = json.loads((tmp_path / 'steps.json').read_text())
+    d[0].update(ee_error=0.02, ee_tolerance=0.01)
+    (tmp_path / 'steps.json').write_text(json.dumps(d))
+    moved = _with_box(300, 200, 360, 280).tobytes()
+
+    class R:
+        def __init__(self, out):
+            self.stdout = out
+
+    def run(cmd, **kw):
+        n = int(cmd[cmd.index('-vf') + 1].split('\\,')[1].rstrip(')'))
+        return R(moved if 9.0 + n * 0.2 >= 12 else _bg().tobytes())
+
+    (r,) = M.judge_run(tmp_path, run=run)['steps']
+    assert r['verdict'] == 'FAIL' and r['codes'] == ['ee_delta_mismatch 20.0mm>10.0mm']

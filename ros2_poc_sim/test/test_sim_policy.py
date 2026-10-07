@@ -170,12 +170,24 @@ def test_committed_policy_matches_what_the_generator_makes_from_the_committed_in
     enclaves = {e.get('path'): e for e in root.iter('enclave')}
     live, denials = str(INPUTS / 'live-graph.xml'), str(INPUTS / 'denials.txt')
     arm = _regenerate(capsys, [live, '--enclave', '/lab/ros2arm', '--exclude', r'^(vla_|_ros2cli_)', '--self-clients',
-                               '--extra-file', denials])
+                               '--extra-file', denials, '--extra-file', str(INPUTS / 'denials-arm.txt')])
     server = _regenerate(capsys, [live, '--enclave', '/lab/ros2server', '--include', r'^(vla_|transform_listener_impl)',
                                   '--extra', 'subscribe:/camera/color/image_raw', '--extra', 'publish:/vla/action',
                                   '--extra', 'subscribe:/vla/ack', '--std-node', 'vla_node', '--anon-std', '--extra-file', denials])
     assert _entries(arm) == _entries(enclaves['/lab/ros2arm'])
     assert _entries(server) == _entries(enclaves['/lab/ros2server'])
+
+
+def test_camera_info_subscriptions_are_only_granted_to_the_arm_enclave():
+    """最小権限: camera_info の購読は ros2arm（camera_adapter・scenario_observer）だけ。ros2server（vla_node・変換ノード）には要らない。"""
+    root = ET.parse(ROOT / 'sros2' / 'policy' / 'lab-c.xml').getroot()
+    enclaves = {e.get('path'): e for e in root.iter('enclave')}
+    sub = ('topics', (('subscribe', 'ALLOW'),))
+    arm, server = _entries(enclaves['/lab/ros2arm']), _entries(enclaves['/lab/ros2server'])
+    for topic in ('/camera/color/camera_info', '/camera/color/image_raw', '/sim_camera/realsense_d435/raw/camera_info'):
+        assert (sub[0], sub[1], topic) in arm, topic
+    assert (sub[0], sub[1], '/camera/color/camera_info') not in server
+    assert (sub[0], sub[1], '/sim_camera/realsense_d435/raw/camera_info') not in server
 
 
 def test_dropping_an_input_changes_the_result(capsys):
