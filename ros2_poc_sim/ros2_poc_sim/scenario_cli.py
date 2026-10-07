@@ -6,6 +6,7 @@
   scenario_cli budget <run_dir>       記録の最大秒数（記録プロセスの安全弁）を出す
   scenario_cli wait <run_dir> <index> ステップ index の送信後、腕が止まって判定できる時刻まで待つ
   scenario_cli judge <run_dir>        記録を判定して result.json を書く（全 PASS で 0、FAIL で 1）
+  scenario_cli perf <run_dir>...      run を RTF・所要時間の表で比べる
   scenario_cli compose <run_dir>      desktop.mp4 / camera.mp4 と判定から scenario.mp4 を作る
 終了コード: 0 / 1（FAIL あり）/ 2（環境・記録の問題）/ 64（シナリオ・引数の誤り）
 """
@@ -21,6 +22,7 @@ import yaml
 
 from ros2_poc_sim import compose_video as C
 from ros2_poc_sim import motion_judge as M
+from ros2_poc_sim import perf as PERF
 from ros2_poc_sim import scenario as S
 
 # 動画の下帯に出す送信先の表示名（実際の振り分けは scripts/run-scenario.sh）
@@ -128,6 +130,12 @@ def cmd_judge(a):
     return 0 if res['verdict'] == 'PASS' else 1
 
 
+def cmd_perf(a):
+    """複数の run を RTF・所要時間の表で比べる（--light や CPU 増設の効果の確認用）。"""
+    print(PERF.format_table([PERF.load_run(d) for d in a.run_dirs]))
+    return 0
+
+
 def _first_frame_t(run_dir):
     frames = M.read_frames_csv(Path(run_dir) / 'camera_frames.csv')
     return frames[0]['t'] if frames else None
@@ -170,12 +178,14 @@ def main(argv=None):
     w.add_argument('index', type=int)
     j = sub.add_parser('judge')
     j.add_argument('run_dir')
+    pf = sub.add_parser('perf')
+    pf.add_argument('run_dirs', nargs='+')
     m = sub.add_parser('compose')
     m.add_argument('run_dir')
     m.add_argument('--font', default=C.FONT)
     a = p.parse_args(argv)
     handler = {'doctor': cmd_doctor, 'commands': cmd_commands, 'budget': cmd_budget, 'wait': cmd_wait,
-               'judge': cmd_judge, 'compose': cmd_compose}[a.cmd]
+               'judge': cmd_judge, 'compose': cmd_compose, 'perf': cmd_perf}[a.cmd]
     try:
         return handler(a)
     except Exception as e:   # noqa: BLE001 — 想定外の失敗は「FAIL」(1) ではなく環境・記録の問題 (2) にする

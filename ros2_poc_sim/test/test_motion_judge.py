@@ -167,6 +167,17 @@ def test_judge_run_end_to_end_with_fake_video(tmp_path):
     assert a['verdict'] == 'PASS', a['reasons']
     assert a['t_end'] == pytest.approx(12.0 + M.SETTLE_SEC)   # 期待値に届いて静止した時刻 + SETTLE
     assert b['verdict'] == 'FAIL' and 'rc=1' in b['reasons'][0]
+    perf = res['performance']   # clock.csv が無い run でも判定は動き、RTF だけが null になる
+    assert perf['rtf'] is None and perf['wall_sec'] == pytest.approx(a['t_end'] - 9.0)
+    assert perf['camera_fps'] == pytest.approx(5.0) and [x['index'] for x in perf['steps']] == [0]
+
+
+def test_judge_run_reports_rtf_from_clock_csv(tmp_path):
+    steps = S.parse_scenario({'steps': [{'positions': POSE_A, 'time_from_start': 1}]})
+    _write_run(tmp_path, steps, [{'index': 0, 't_start': 1.0, 't_sent': 1.5, 'rc': 0}],
+               _traj(1.5, 2.5, HOME, POSE_A, until=6.0), [], [], info=False)
+    (tmp_path / 'clock.csv').write_text('wall,sim\n0,0\n10,5\n', encoding='utf-8')
+    assert M.judge_run(tmp_path, run=None)['performance']['rtf'] == pytest.approx(0.5)
 
 
 def test_judge_run_without_camera_info_fails_visual_conditions(tmp_path):

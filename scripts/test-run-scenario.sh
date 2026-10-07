@@ -101,6 +101,13 @@ for args in "--bogus" "--repeat 0" "--repeat 21" "--repeat x" "--timeout 1.5" "-
   [ -z "$LOG" ] || fail "引数 '$args' で docker が呼ばれた: $LOG"
 done
 
+# RUN_LABEL の不正（空白・スラッシュ・長すぎ）→ 64（docker は呼ばない）
+for bad in "a b" "../x" 'a"b' "$(printf 'x%.0s' $(seq 1 33))"; do
+  RUN_LABEL="$bad" run_case "$ALL"
+  [ "$RC" -eq 64 ] || fail "RUN_LABEL '$bad' は exit 64 のはずが $RC: $ERR"
+  [ -z "$LOG" ] || fail "RUN_LABEL '$bad' で docker が呼ばれた: $LOG"
+done
+
 # --- 起動前ガード
 # ros2real（実機ドライバ）起動中 → 拒否
 run_case "ros2real $ALL"
@@ -272,5 +279,14 @@ grep "pkill -KILL" <<<"$LOG" | grep -q "awvideo" || fail "KILL でカメラ用 f
 lock_released || fail "記録が止まらないときもロックは外す: $LOG"
 [ "$(grep -c "pkill -KILL" <<<"$LOG")" -eq 1 ] || fail "止められなかった後に停止を繰り返した: $LOG"
 rm "$TMP/seq"
+
+# RUN_LABEL と実行環境が run_meta.json に残る（docker info が取れないスタブでは null）
+RUN_LABEL=light run_case "$ALL"
+meta="$(cat "$STUB_WS"/runs/*/run_meta.json)" || fail "run_meta.json が無い: $ERR"
+grep -q '"label": "light"' <<<"$meta" || fail "run_meta.json に label が無い: $meta"
+grep -q '"cpus": null' <<<"$meta" || fail "docker info 不可なら cpus は null のはず: $meta"
+python3 -c 'import json,sys; json.loads(sys.argv[1])' "$meta" || fail "run_meta.json が JSON でない: $meta"
+run_case "$ALL"
+grep -q '"label": ""' "$STUB_WS"/runs/*/run_meta.json || fail "RUN_LABEL 未指定は空のラベル: $(cat "$STUB_WS"/runs/*/run_meta.json)"
 
 echo "OK: run-scenario guard tests passed"

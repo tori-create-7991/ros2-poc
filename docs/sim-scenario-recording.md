@@ -40,7 +40,9 @@ camera.mp4 を書き終えられない・記録プロセスを止められない
 | ファイル | 内容 |
 |---|---|
 | `scenario.mp4` | 合成動画。左: デスクトップ（x11grab）、右: 仮想カメラ（判定後は変化領域の枠と手先の投影点）、下帯: 命令と判定 |
-| `result.json` | ステップごとの判定・根拠の数値（関節誤差、変化画素率、手先の投影点、理由）。random の展開値は `expect` |
+| `result.json` | ステップごとの判定・根拠の数値（関節誤差、変化画素率、手先の投影点、理由）。random の展開値は `expect`。`performance` に RTF・所要時間（下の「性能の測定」） |
+| `clock.csv` | `wall,sim`（約 1Hz）。`/clock` の sim time と壁時計。RTF の元データ |
+| `run_meta.json` | `RUN_LABEL`・Colima VM の CPU 数とメモリ（GiB）・シナリオ名 |
 | `commands.log` | 実際に送ったコマンドの全文と送信先 |
 | `camera.mp4` / `desktop.mp4` | 記録の元データ |
 | `camera_frames.csv` / `joints.jsonl` / `ee.jsonl` / `camera_info.json` / `events.jsonl` / `steps.json` | 判定の入力（`scenario_cli judge` で判定し直せる） |
@@ -136,6 +138,27 @@ docker exec ros2arm pkill -INT -f '[r]os2 launch ros2_poc_sim'   # 数秒で Gaz
 | `前回の run-scenario のロックが残っている` | 前回を強制終了した（SIGKILL・VM 停止など）。記録プロセスが無いことを確かめて `docker exec ros2arm rm -r /tmp/run-scenario.lock`。ロックはコンテナを作り直すと消えるが、`docker restart` や Colima の再起動では残る |
 | `前回の記録プロセスが残っている` | 前回を強制終了した。案内のコマンドで止めてから再実行する。記録プロセスは停止の指示が届かなくても、シナリオから計算した上限時間で止まる |
 | `記録プロセスを止められない` | 判定に使う camera.mp4 が未完の可能性があるので判定しない（終了コード 2） |
+
+## 性能の測定（RTF・所要時間）
+
+シミュが実時間より遅いと、3 秒の指令が 9〜13 秒かかり、カメラのフレームも減る。設定を変えたときの効果は数値で比べる。
+
+```bash
+RUN_LABEL=default bash scripts/run-scenario.sh      # ラベルは英数字・_・- の 32 文字まで
+RUN_LABEL=cpu6    bash scripts/run-scenario.sh      # Colima の CPU を変えたあと、など
+docker exec -u ubuntu ros2arm bash -lc 'source /opt/ros/jazzy/setup.bash; source /opt/ros2_poc_ws/install/setup.bash; \
+  ros2 run ros2_poc_sim scenario_cli perf /workspace/runs/<日時1> /workspace/runs/<日時2>'
+```
+
+| 列 | 意味 |
+|---|---|
+| RTF | Δsim / Δwall。1.0 で実時間どおり、小さいほど遅い。区間が 1 秒未満・`clock.csv` が無い run は `-` |
+| RTF最小 | 5 秒窓ごとの RTF の最小（一時的な落ち込み） |
+| wall[s] | 最初のフレームから最後のステップの判定時刻までの壁時計 |
+| cam[fps] | カメラフレームの平均受信レート |
+
+`result.json` の `performance.steps` にステップごとの `wall_sec` と `sim_sec` も出る（指令の長さに対して実際にかかった時間）。
+比べるときは、同じシナリオ・同じ視点で、他の重い処理（別セッションの推論コンテナなど）を止めてから測る。
 
 ## 制約
 
