@@ -49,6 +49,10 @@ case "$args" in
   *"pgrep -f '[a]rm_with_camera"*) [ "${STUB_SIM_RUNNING:-0}" = camera ] && exit 0; exit 1 ;;
   *"pgrep -f '[r]os2 launch"*) [ "${STUB_SIM_RUNNING:-0}" = other ] && exit 0; exit 1 ;;
   *"grep -c 'Node name"*) echo "${STUB_CONTROLLERS:-1}" ;;
+  *"mkdir /tmp/run-scenario.lock"*)
+    # 取得の途中（コンテナ側では済んでいる）にシグナルが来る状況を作る。待っている印を置いて、signal まで待つ
+    if [ -n "${STUB_HANG_ARM:-}" ]; then touch "$STUB_WS/waiting.arm"; sleep "$STUB_HANG_ARM"; fi
+    exit 0 ;;
   *"test -d /tmp/run-vla.lock"*) [ "${STUB_VLA_LOCK:-0}" = 1 ] && exit 0; exit 1 ;;
   *"cat /tmp/run-scenario.lock/owner"*) echo "${STUB_OWNER:-}" ;;
   *pgrep*)
@@ -165,6 +169,28 @@ if grep -q "run-vla.lock" <<<"$LOG"; then fail "ros2server が無いのに run-v
 STUB_VLA_LOCK=0 run_case "$ALL ros2server"
 [ "$RC" -eq 0 ] || fail "run-vla が動いていなければ実行できるはずが $RC: $ERR"
 sent || fail "run-vla が動いていないのに指令が送られない"
+
+# ロックの取得の途中（docker exec の往復中）に TERM が来た場合: bash はフォアグラウンドのコマンドが終わってからトラップを実行する。
+# そのとき取得はコンテナ側で済んでいるので、トラップが取得の前に入っていて、所有者を照合して外す（外さないとロックが漏れる）
+hang_ws="$TMP/hang.$RANDOM"
+mkdir -p "$hang_ws"
+STUB_LOG="$TMP/log.hang"
+: > "$STUB_LOG"
+export STUB_LOG
+( cd "$ROOT" && PATH="$TMP:$PATH" STUB_RUNNING="$ALL" STUB_WS="$hang_ws" RUN_SCENARIO_WORKSPACE="$hang_ws" STUB_HANG_ARM=3 \
+    exec bash "$ROOT/scripts/run-scenario.sh" > /dev/null 2>&1 ) &
+hang_pid=$!
+for _ in $(seq 1 200); do
+  [ -f "$hang_ws/waiting.arm" ] && break
+  sleep 0.1
+done
+[ -f "$hang_ws/waiting.arm" ] || fail "取得の途中の状態を作れなかった"
+kill -TERM "$hang_pid" 2>/dev/null || true
+wait "$hang_pid" 2>/dev/null || true
+LOG="$(cat "$STUB_LOG")"
+grep -q "grep -qxF .* /tmp/run-scenario.lock/owner && rm -r /tmp/run-scenario.lock" <<<"$LOG" \
+  || fail "取得の途中の TERM で、所有者を照合してロックを外していない: $LOG"
+if grep -qE "scenario_observer --out|x11grab" <<<"$LOG"; then fail "取得の途中で止めたのに記録が動いた: $LOG"; fi
 
 # ロックが取れない・記録プロセスが動いている → 実行中として exit 2。他人のロックは外さない
 STUB_EXEC_FAIL='mkdir /tmp/run-scenario.lock' STUB_LEFTOVER=1 run_case "$ALL"

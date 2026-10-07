@@ -119,8 +119,8 @@ VLA_OWNER="$(date +%Y%m%d-%H%M%S) $(hostname -s 2>/dev/null || echo host) $$"
 # 取れた分だけ無条件に外し、取得の途中だった分は所有者が自分のときだけ外す。取れなかったとき（他人が持っている）は何も外さない
 # shellcheck disable=SC2317,SC2329  # trap から呼ぶ（shellcheck の版によって指摘の番号が違う）
 cleanup() {
-  # 記録の停止には最大 2 分ほどかかるので、その間の Ctrl-C ではロックを外すところまで進める
-  [ "$RECORD" = 0 ] || trap '' INT TERM HUP
+  # 後片付け（記録の停止は最大 2 分ほどかかる）の途中のシグナルでも、ロックを外すところまで進める
+  trap '' INT TERM HUP
   if [ "$HAVE_VLA_LOCK" = 1 ]; then
     # docker exec は（TTY なしでは）シグナルを転送しないので、Ctrl-C のあとコンテナ内に残らないよう VLA ノードも止める
     srv "pkill -INT -f '$NODE'; pkill -INT -f '$CONVERTER'; rm -r $VLA_LOCK" < /dev/null > /dev/null 2>&1 || true

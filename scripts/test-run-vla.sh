@@ -50,10 +50,14 @@ args="$*"
 run_dir() { [[ "$args" =~ /workspace/runs/([0-9-]+) ]] && echo "$STUB_WS/runs/${BASH_REMATCH[1]}"; }
 case "$args" in
   *"test -d /tmp/run-scenario.lock"*) [ "${STUB_SCENARIO_LOCK:-0}" = 1 ] && exit 0; exit 1 ;;
-  *"mkdir /tmp/run-scenario.lock"*) [ "${STUB_SCENARIO_LOCK:-0}" = 1 ] && exit 1; exit 0 ;;
+  *"mkdir /tmp/run-scenario.lock"*)
+    [ "${STUB_SCENARIO_LOCK:-0}" = 1 ] && exit 1
+    # 取得の途中（コンテナ側では済んでいる）にシグナルが来る状況を作る。待っている印を置いて、解除（signal 後）まで待つ
+    if [ -n "${STUB_HANG_ARM:-}" ]; then touch "$STUB_WS/waiting.arm"; sleep "$STUB_HANG_ARM"; fi
+    exit 0 ;;
   *"cat /tmp/run-scenario.lock/owner"*) echo "${STUB_OWNER:-}" ;;
   *"scenario_cli doctor"*) [ "${STUB_DOCTOR_FAIL:-0}" = 1 ] && exit 2; exit 0 ;;
-  *"mkdir /tmp/run-vla.lock"*) [ "${STUB_VLA_LOCK:-0}" = 1 ] && exit 1; [ -n "${STUB_HANG_LOCK:-}" ] && sleep "$STUB_HANG_LOCK"; exit 0 ;;
+  *"mkdir /tmp/run-vla.lock"*) [ "${STUB_VLA_LOCK:-0}" = 1 ] && exit 1; if [ -n "${STUB_HANG_LOCK:-}" ]; then touch "$STUB_WS/waiting.vla"; sleep "$STUB_HANG_LOCK"; fi; exit 0 ;;
   *"grep -c 'Node name"*) echo "${STUB_CONTROLLERS:-1}" ;;
   *"ros2 run ros2_poc_sim vla_node"*) exit "${STUB_NODE_RC:-0}" ;;
   *pgrep*)
@@ -190,23 +194,36 @@ if called "pkill -INT"; then fail "ロックが取れなかったのに VLA ノ�
 if called "grep -qxF"; then fail "ロックが取れなかったのに所有者照合の解放を試みた: $LOG"; fi
 
 # ロック取得の途中（docker exec の往復中）に TERM が来た場合: bash はフォアグラウンドのコマンドが終わってからトラップを実行する。
-# そのとき取得はコンテナ側で済んでいるので、所有者を照合して外す（外さないとロックが漏れて次の実行が止まる）
-STUB_LOG="$TMP/log.hang"
-: > "$STUB_LOG"
-export STUB_LOG
-( cd "$ROOT" && PATH="$TMP:$PATH" STUB_RUNNING="$ALL" STUB_HANG_LOCK=2 STUB_WS="$TMP" \
-    exec bash "$ROOT/scripts/run-vla.sh" --instruction "move up" --timeout 0 > /dev/null 2>&1 ) &
-hang_pid=$!
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-  grep -q "mkdir /tmp/run-vla.lock" "$STUB_LOG" && break
-  sleep 0.1
-done
-kill -TERM "$hang_pid" 2>/dev/null || true
-wait "$hang_pid" 2>/dev/null || true
-LOG="$(cat "$STUB_LOG")"
-grep -q "grep -qxF .* /tmp/run-vla.lock/owner && rm -r /tmp/run-vla.lock" <<<"$LOG" \
-  || fail "取得の途中の TERM で、所有者を照合してロックを外していない: $LOG"
-if started; then fail "取得の途中で止めたのに変換ノードが起動した: $LOG"; fi
+# そのとき取得はコンテナ側で済んでいるので、所有者を照合して外す（外さないとロックが漏れて次の実行が止まる）。
+# 引数: マーカー名（待っている印）, 期待する解放のコマンド（正規表現）, スクリプトの引数...（環境変数は呼び出し側で渡す）
+hang_term() {
+  local marker="$1" expect="$2" ws="$TMP/hang.$RANDOM"
+  shift 2
+  mkdir -p "$ws"
+  STUB_LOG="$TMP/log.hang.$RANDOM"
+  : > "$STUB_LOG"
+  export STUB_LOG
+  ( cd "$ROOT" && PATH="$TMP:$PATH" STUB_RUNNING="$ALL" STUB_WS="$ws" RUN_SCENARIO_WORKSPACE="$ws" exec "$@" > /dev/null 2>&1 ) &
+  local pid=$! _
+  # スタブが「待っている」印を置くまで待つ（時間に依存しない。上限 20 秒）
+  for _ in $(seq 1 200); do
+    [ -f "$ws/$marker" ] && break
+    sleep 0.1
+  done
+  [ -f "$ws/$marker" ] || fail "取得の途中の状態を作れなかった（$marker）"
+  kill -TERM "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  LOG="$(cat "$STUB_LOG")"
+  grep -q "$expect" <<<"$LOG" || fail "取得の途中の TERM で、所有者を照合してロックを外していない（$marker）: $LOG"
+  if started; then fail "取得の途中で止めたのに変換ノードが起動した（$marker）: $LOG"; fi
+}
+# VLA のロック（非 --record。env の前に exec で、TERM がスクリプト本体に届くようにする）
+hang_term waiting.vla "grep -qxF .* /tmp/run-vla.lock/owner && rm -r /tmp/run-vla.lock" \
+  env STUB_HANG_LOCK=3 bash "$ROOT/scripts/run-vla.sh" --instruction "move up" --timeout 0
+# run-scenario と共有する arm のロック（--record）。取得途中の TERM で、arm のロックを所有者照合で外し、VLA のロックは取らない
+hang_term waiting.arm "grep -qxF .* /tmp/run-scenario.lock/owner && rm -r /tmp/run-scenario.lock" \
+  env STUB_HANG_ARM=3 bash "$ROOT/scripts/run-vla.sh" --record --instruction "move up" --timeout 0
+if called "mkdir /tmp/run-vla.lock"; then fail "arm のロックの取得途中で止めたのに VLA のロックを取った: $LOG"; fi
 
 # --- 別の run-vla が実行中 → 2。他人のロックは外さない
 STUB_VLA_LOCK=1 run_case "$ALL" --instruction "move up"

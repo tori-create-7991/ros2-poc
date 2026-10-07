@@ -108,7 +108,7 @@ rec_init_run
 # トラップは取得の前に入れる（取得の途中の Ctrl-C でロックを漏らさない。取得に失敗したときは他人のロックを外さない）
 # shellcheck disable=SC2317,SC2329  # trap から呼ぶ（shellcheck のバージョンでコードが違う）
 cleanup() {
-  trap '' INT   # 後片付けの途中で Ctrl-C されてもロックを外すところまで進める
+  trap '' INT TERM HUP   # 後片付けの途中のシグナルでも、ロックを外すところまで進める
   rec_cleanup
 }
 trap cleanup EXIT
