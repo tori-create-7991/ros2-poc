@@ -283,6 +283,14 @@ STUB_TSV='g\tsim\t0.0\tros2 action send_goal /crane_x7_gripper_controller/grippe
 [ "$RC" -eq 0 ] || fail "グリッパの正常系は exit 0 のはずが $RC: $ERR"
 grep -q "ros2arm bash -c .*date +%s.%N; timeout 30 ros2 action send_goal" <<<"$LOG" || fail "グリッパの指令が ros2arm から送られていない: $LOG"
 
+# --light: RViz と Gazebo の GUI を止める。付けなければ止めない
+run_case "$ALL" --light
+[ "$RC" -eq 0 ] || fail "--light の正常系は exit 0 のはずが $RC: $ERR"
+grep -q "pkill -x rviz2" <<<"$LOG" || fail "--light で RViz を止めていない: $LOG"
+grep -qF "[g]z sim gui" <<<"$LOG" || fail "--light で Gazebo の GUI を止めていない: $LOG"
+run_case "$ALL"
+if grep -q "pkill -x rviz2" <<<"$LOG"; then fail "--light 無しで RViz を止めた: $LOG"; fi
+
 # 最初の停止指示（INT）はカメラ用 ffmpeg に送らない（読み残したフレームが落ちる）。TERM / KILL では含める
 run_case "$ALL"
 grep "pkill -INT" <<<"$LOG" | grep -q "awvideo" && fail "INT をカメラ用 ffmpeg に送っている: $LOG"
