@@ -13,10 +13,11 @@ cd "$(dirname "$0")/.."
 
 usage() {
   cat >&2 <<'EOF'
-usage: bash scripts/run-scenario.sh [--scenario <名前|YAMLのパス>] [--repeat N] [--start-sim] [--timeout 秒]
+usage: bash scripts/run-scenario.sh [--scenario <名前|YAMLのパス>] [--repeat N] [--start-sim] [--light] [--timeout 秒]
   --scenario   default（既定）/ fail_demo / examples、または YAML ファイルのパス
   --repeat     シナリオ全体の繰り返し回数（YAML の repeat を上書き）
   --start-sim  シミュ（Gazebo + 仮想カメラ、三人称視点）が動いていなければ起動する
+  --light      軽量モード: GUI なし（gz sim サーバーのみ、RViz なし）のシミュで実行する（CPU を減らす。録画の左側は空になる）。--start-sim と使う
   --timeout    トピックが流れ始めるまで待つ秒数（既定 120、--start-sim 時 900）
 EOF
   exit 64
@@ -25,17 +26,20 @@ EOF
 SCENARIO=default
 REPEAT=""
 START_SIM=0
+LIGHT=0
 TIMEOUT=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --scenario) [ "$#" -ge 2 ] || usage; SCENARIO="$2"; shift 2 ;;
     --repeat) [ "$#" -ge 2 ] || usage; REPEAT="$2"; shift 2 ;;
     --start-sim) START_SIM=1; shift ;;
+    --light) LIGHT=1; shift ;;
     --timeout) [ "$#" -ge 2 ] || usage; TIMEOUT="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "不明な引数: $1" >&2; usage ;;
   esac
 done
+if [ "$LIGHT" = 1 ]; then LAUNCH_FILE=arm_with_camera_headless.launch.py; else LAUNCH_FILE=arm_with_camera.launch.py; fi
 case "$REPEAT" in ''|[1-9]|1[0-9]|20) ;; *) echo "--repeat は 1〜20" >&2; exit 64 ;; esac
 if [ -z "$TIMEOUT" ]; then
   if [ "$START_SIM" = 1 ]; then TIMEOUT=900; else TIMEOUT=120; fi
@@ -145,17 +149,36 @@ if ! sim_ready; then
   if [ "$START_SIM" = 1 ]; then
     # 別のシミュ（カメラ無しの公式 launch など）や起動途中のシミュに重ねて起動すると、Gazebo と
     # コントローラが二重になり、指令が両方に届いて判定が無意味になる
-    if arm "pgrep -f '[a]rm_with_camera\.launch\.py'" > /dev/null 2>&1 < /dev/null; then
+    if arm "pgrep -f '[a]rm_with_camera(_headless)?\.launch\.py'" > /dev/null 2>&1 < /dev/null; then
       # カメラ付きのシミュが起動途中（前回の --start-sim が待ちの上限で終わった後など）: 重ねずに待つ
       echo "カメラ付きのシミュが起動途中なので、起動はせずに待つ"
     elif arm "pgrep -f '[r]os2 launch|[g]z sim'" > /dev/null 2>&1 < /dev/null; then
       fail_env "ros2arm でカメラ無しのシミュ（README のデモなど）が動いている。止めてから --start-sim で起動し直す: docker exec ros2arm pkill -INT -f '[r]os2 launch'"
     else
       echo "シミュを起動する（初回やホストが重いときは数分〜十数分かかる）。ログ: $WORKSPACE_HOST/runs/sim-$TS.log"
-      arm_bg "exec ros2 launch ros2_poc_sim arm_with_camera.launch.py placement:=fixed_front_wide > /workspace/runs/sim-$TS.log 2>&1"
+      arm_bg "exec ros2 launch ros2_poc_sim $LAUNCH_FILE placement:=fixed_front_wide > /workspace/runs/sim-$TS.log 2>&1"
     fi
   fi
-  rec_wait_sim "$TIMEOUT" "カメラ付きのシミュ（arm_with_camera.launch.py）が動いていなければ、他のシミュを止めて --start-sim を付ける（docs/sim-scenario-recording.md）。"
+  rec_wait_sim "$TIMEOUT" "カメラ付きのシミュ（$LAUNCH_FILE）が動いていなければ、他のシミュを止めて --start-sim を付ける（docs/sim-scenario-recording.md）。"
+fi
+
+if [ "$LIGHT" = 1 ]; then
+  # GUI（gz sim gui）だけを止めると親の gz sim ごと終了して物理サーバーも落ちるので、止めずに GUI なしで起動する。
+  # GUI 付きのシミュが動いていたら、止めてから --start-sim --light で起動し直してもらう
+  if arm "pgrep -f '[a]rm_with_camera\.launch\.py|[g]z sim gui'" > /dev/null 2>&1 < /dev/null; then
+    fail_env "GUI 付きのシミュが動いている。--light は GUI なしで起動するので、止めてから --start-sim --light で起動し直す: docker exec ros2arm pkill -INT -f '[r]os2 launch'"
+  fi
+  echo "軽量モード: GUI なしのシミュで実行する（デスクトップ録画の左側は空になる）"
+  # RViz は move_group の launch が起動する。止めても他のノードは生きている。
+  # 起動した直後はトピックが先に流れ、RViz がまだ出ていないことがある。止めるのが空振りしないよう、出るまで待つ（最大 90 秒）
+  if [ "$START_SIM" = 1 ]; then
+    arm "for _ in \$(seq 1 90); do pgrep -x rviz2 > /dev/null && exit 0; sleep 1; done; exit 1" < /dev/null || true
+  fi
+  arm "for _ in 1 2 3; do pkill -x rviz2; sleep 1; pgrep -x rviz2 > /dev/null || exit 0; done; exit 1" < /dev/null \
+    || echo "RViz を止められなかった（CPU を余分に使うが、判定には影響しない）" >&2
+  sim_ready || fail_env "RViz を止めたらシミュのトピックが止まった。--light を付けずにシミュを起動し直す"
+elif arm "pgrep -f '[a]rm_with_camera_headless\.launch\.py'" > /dev/null 2>&1 < /dev/null; then
+  echo "GUI なしのシミュ（arm_with_camera_headless）に接続する。デスクトップ録画の左側は空になる" >&2
 fi
 
 lab true < /dev/null > /dev/null || fail_env "ros2lab-a でコマンドを実行できない"

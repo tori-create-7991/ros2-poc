@@ -50,6 +50,10 @@ if [ -n "${STUB_EXEC_FAIL:-}" ] && [[ "$args" =~ $STUB_EXEC_FAIL ]]; then
 fi
 run_dir() { [[ "$args" =~ /workspace/runs/([0-9-]+) ]] && echo "$STUB_WS/runs/${BASH_REMATCH[1]}"; }
 case "$args" in
+  *"pgrep -f '[a]rm_with_camera"*"[g]z sim gui"*) [ "${STUB_GZ_GUI:-0}" = 1 ] && exit 0; exit 1 ;;
+  *"pgrep -f '[a]rm_with_camera_headless"*) [ "${STUB_SIM_RUNNING:-0}" = headless ] && exit 0; exit 1 ;;
+  *"pkill -x rviz2"*) exit 0 ;;
+  *"pgrep -x rviz2"*) exit 0 ;;
   *"pgrep -f '[a]rm_with_camera"*) [ "${STUB_SIM_RUNNING:-0}" = camera ] && exit 0; exit 1 ;;
   *"pgrep -f '[r]os2 launch"*) [ "${STUB_SIM_RUNNING:-0}" = other ] && exit 0; exit 1 ;;
   *"grep -c 'Node name"*) echo "${STUB_CONTROLLERS:-1}" ;;
@@ -282,6 +286,35 @@ lock_released || fail "正常系でロックを外していない: $LOG"
 STUB_TSV='g\tsim\t0.0\tros2 action send_goal /crane_x7_gripper_controller/gripper_cmd control_msgs/action/ParallelGripperCommand "{command: {name: [crane_x7_gripper_finger_a_joint], position: [1.047198]}}"\n' run_case "$ALL"
 [ "$RC" -eq 0 ] || fail "グリッパの正常系は exit 0 のはずが $RC: $ERR"
 grep -q "ros2arm bash -c .*date +%s.%N; timeout 30 ros2 action send_goal" <<<"$LOG" || fail "グリッパの指令が ros2arm から送られていない: $LOG"
+
+# --light: GUI なしのシミュで実行する（RViz は止める。GUI だけを止めるとシミュ全体が落ちるので gz sim gui は止めない）
+run_case "$ALL" --light
+[ "$RC" -eq 0 ] || fail "--light の正常系は exit 0 のはずが $RC: $ERR"
+grep -q "pkill -x rviz2" <<<"$LOG" || fail "--light で RViz を止めていない: $LOG"
+if grep -E "pkill.*gz sim" <<<"$LOG"; then fail "--light で Gazebo を止めた（親ごと落ちる）: $LOG"; fi
+run_case "$ALL"
+if grep -q "pkill -x rviz2" <<<"$LOG"; then fail "--light 無しで RViz を止めた: $LOG"; fi
+# --light で GUI 付きのシミュが動いている → 止めずに案内して exit 2（送信しない）
+STUB_GZ_GUI=1 run_case "$ALL" --light
+[ "$RC" -eq 2 ] || fail "--light で GUI 付きのシミュが動いているときは exit 2 のはずが $RC: $ERR"
+grep -q "start-sim --light" <<<"$ERR" || fail "--light: 起動し直しの案内が無い: $ERR"
+if sent; then fail "--light の拒否で送信した: $LOG"; fi
+# --light なしで GUI なしのシミュが動いている → 録画の左側が空になる旨を知らせて続行
+STUB_SIM_RUNNING=headless run_case "$ALL"
+[ "$RC" -eq 0 ] || fail "headless のシミュへの接続は exit 0 のはずが $RC: $ERR"
+grep -q "GUI なしのシミュ" <<<"$ERR" || fail "headless: 録画の左側が空になる旨が無い: $ERR"
+# --start-sim --light は GUI なしの launch を起動し、付けなければ GUI 付き
+STUB_EXEC_FAIL='ros2 topic echo' run_case "$ALL" --start-sim --light --timeout 1
+grep -q "ros2 launch ros2_poc_sim arm_with_camera_headless.launch.py" <<<"$LOG" || fail "--start-sim --light が headless の launch を起動していない: $LOG"
+# --start-sim --light は、起動直後で RViz がまだ出ていないことがあるので、RViz の出現を待ってから止める（--start-sim 無しでは待たない）
+run_case "$ALL" --start-sim --light
+[ "$RC" -eq 0 ] || fail "--start-sim --light（起動済みのシミュ）は exit 0 のはずが $RC: $ERR"
+grep -q "seq 1 90.*pgrep -x rviz2" <<<"$LOG" || fail "--start-sim --light で RViz の出現を待っていない: $LOG"
+run_case "$ALL" --light
+if grep -q "seq 1 90" <<<"$LOG"; then fail "--start-sim 無しで RViz の出現を待った: $LOG"; fi
+STUB_EXEC_FAIL='ros2 topic echo' run_case "$ALL" --start-sim --timeout 1
+grep -q "ros2 launch ros2_poc_sim arm_with_camera.launch.py" <<<"$LOG" || fail "--start-sim が通常の launch を起動していない: $LOG"
+if grep -q "arm_with_camera_headless" <<<"$LOG"; then fail "--light 無しで headless の launch を起動した: $LOG"; fi
 
 # 最初の停止指示（INT）はカメラ用 ffmpeg に送らない（読み残したフレームが落ちる）。TERM / KILL では含める
 run_case "$ALL"

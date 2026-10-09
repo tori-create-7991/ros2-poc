@@ -17,6 +17,7 @@ bash scripts/run-scenario.sh --scenario <path/to/my.yaml>
 | `--scenario` | `default` | `default` / `fail_demo` / `examples`（`ros2_poc_sim/config/scenarios/`）または YAML のパス（相対パスは実行したディレクトリから） |
 | `--repeat` | YAML の `repeat`（無ければ 1） | シナリオ全体の繰り返し回数（1〜20） |
 | `--start-sim` | なし | シミュ（公式 Gazebo + MoveIt + 仮想カメラ、視点 `fixed_front_wide`）が動いていなければ起動する。カメラ付きのシミュが起動途中なら起動せずに待ち、カメラ無しのシミュ（README のデモ 2 など）が動いているときは重ねて起動せずに止める |
+| `--light` | なし | 軽量モード。**GUI なし**（`gz sim -r -s` のサーバーのみ、RViz なし）のシミュで実行する。`--start-sim --light` で `arm_with_camera_headless.launch.py` を起動する。GUI 付きのシミュが動いていたら終了コード 2（止めてから起動し直す。`gz sim gui` だけを止めると親の `gz sim` ごと終了し、物理サーバーも落ちるため、止める方式は使えない）。仮想カメラは Gazebo のサーバー側で描画するので判定には影響しない。**デスクトップ録画（動画の左側）は空になる** |
 | `--timeout` | 120（`--start-sim` 時 900） | トピックが流れ始めるまで待つ秒数 |
 
 終了コード: `0` = 全ステップ PASS / `1` = FAIL あり / `2` = 環境・記録の問題（判定できなかった。camera_info が届かない・
@@ -152,6 +153,7 @@ docker exec ros2arm pkill -INT -f '[r]os2 launch ros2_poc_sim'   # 数秒で Gaz
 | 全ステップ `ee_outside_change` / `no_ee_projection` | 手先が画角外の視点で動いている。`fixed_front_wide` で起動し直す |
 | `joints_not_still` | シミュが極端に遅い、またはコントローラが目標に届かない。`gz topic -e -t /stats` で RTF を確認 |
 | 動画の左側が RViz で、Gazebo の GUI が見えない | デスクトップをそのまま録画しているため。Gazebo のシーンは右側の仮想カメラで見える。必要なら noVNC で Gazebo のウィンドウを前に出してから実行する |
+| 動画の左側が空 | `--light`（GUI なし）で実行している。左側を見たいときは `--light` を付けずに（GUI 付きのシミュで）実行する |
 | `合成に失敗した` | `overlay/filtergraph.txt` と ffmpeg のメッセージを確認 |
 | `別の run-scenario が実行中` | 記録プロセスが動いている。終わるのを待つ |
 | `run-vla が実行中` | `run-vla.sh` が同じアームを使っている（ros2server の `/tmp/run-vla.lock`）。終わってから実行する。強制終了の残りなら `docker exec ros2server rm -r /tmp/run-vla.lock`（実行中でないと確かめてから） |
@@ -181,6 +183,20 @@ docker exec -u ubuntu ros2arm bash -lc 'source /opt/ros/jazzy/setup.bash; source
 `result.json` の `performance.steps` にステップごとの `wall_sec` と `sim_sec` も出る（指令の長さに対して実際にかかった時間）。`clock.csv` は約 1Hz なので、記録の末尾に終わったステップの `sim_sec` は `null` になることがある。
 `/clock` が記録されない（`clock.csv` がヘッダだけ）と RTF は全て `-` になり、判定時に端末へ理由が出る（PASS / FAIL には影響しない）。比べる表にシナリオ・メモリの列があり、シナリオが混在すると注意が出る。
 比べるときは、同じシナリオ・同じ視点で、他の重い処理（別セッションの推論コンテナなど）を止めてから測る。
+ホストの負荷で RTF は大きく変わる（同じ設定で 0.59 → 0.24 になったことがある）。**時間をまたいだ比較は使えない**ので、設定を比べるときは交互（ABAB）に複数回測る。
+各モードでシミュを再起動し、ウォームアップの 1 回を捨ててから計測する。
+
+### 実測: `--light`（GUI なし）の効果
+
+Colima 6CPU / 11GiB、シナリオ `default`、3 往復（light と default を交互）。
+
+| | RTF | RTF最小 | wall[s] | cam[fps] |
+|---|---|---|---|---|
+| default（GUI あり） | 0.37（0.34〜0.39） | 0.31 | 51.0 | 1.97 |
+| `--light`（GUI なし） | 0.71（0.71〜0.72） | 0.61 | 39.1 | 5.18 |
+
+RTF は約 1.9 倍、所要時間は約 23% 短縮、カメラは約 2.6 倍のフレームレートになった（全 6 回 5/5 PASS）。それでも RTF は 1.0 に届かない。
+RViz だけを止めても効果は小さい（RTF 0.59 → 0.57、別時間帯の単発測定）。重いのは Gazebo の GUI。
 
 ## 制約
 

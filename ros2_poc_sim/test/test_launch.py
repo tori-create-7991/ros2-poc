@@ -260,3 +260,45 @@ def test_signal_exits_do_not_print_failure_guidance(tmp_path, monkeypatch):
     for rc in (-2, -15, 130, 143):
         assert fn(type('Ev', (), {'returncode': rc})(), None) == []
     assert fn(type('Ev', (), {'returncode': 2})(), None) != []
+
+
+# --- arm_with_camera_headless: 公式 launch の gz sim だけをサーバーのみに差し替える
+def _headless(monkeypatch):
+    pytest.importorskip('ament_index_python')
+    mod = _load('arm_with_camera_headless')
+    monkeypatch.setattr(mod, 'get_package_share_directory', lambda pkg: f'/share/{pkg}')
+    return mod
+
+
+def _gz():
+    return ExecuteProcess(cmd=['gz sim -r', '/share/crane_x7_gazebo/worlds/table.sdf', '--gui-config', '/x/gui.config'],
+                          shell=True)
+
+
+def test_headless_replaces_only_the_gz_sim_process(monkeypatch):
+    mod = _headless(monkeypatch)
+    other = ExecuteProcess(cmd=['echo', 'hi'])
+    first, last = _gz(), object()
+    out = mod.replace_gz_sim([other, first, last])
+    assert out[0] is other and out[2] is last                      # 順序と他のエンティティは変えない
+    cmd = _cmd(out[1])
+    assert cmd[0] == 'gz sim -r -s' and cmd[1].endswith('table.sdf')
+    assert '--gui-config' not in cmd                                # GUI を持たせない
+    assert out[1] is not first
+
+
+@pytest.mark.parametrize('make', [lambda: [], lambda: [ExecuteProcess(cmd=['echo', 'hi'])], lambda: [_gz(), _gz()]],
+                         ids=['none', 'not-gz-sim', 'two'])
+def test_headless_refuses_when_gz_sim_is_not_unique(monkeypatch, make):
+    mod = _headless(monkeypatch)
+    with pytest.raises(RuntimeError, match='1 つに特定できない'):
+        mod.replace_gz_sim(make())
+
+
+def test_headless_does_not_count_nodes_as_gz_sim(monkeypatch):
+    # Node は ExecuteProcess の子クラス。isinstance で数えると gz sim が 2 つに見えてしまう
+    from launch_ros.actions import Node
+    mod = _headless(monkeypatch)
+    node = Node(package='demo_nodes_cpp', executable='talker')
+    out = mod.replace_gz_sim([_gz(), node])
+    assert out[1] is node and _cmd(out[0])[0] == 'gz sim -r -s'
