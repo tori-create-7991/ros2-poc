@@ -169,7 +169,11 @@ if [ "$LIGHT" = 1 ]; then
     fail_env "GUI 付きのシミュが動いている。--light は GUI なしで起動するので、止めてから --start-sim --light で起動し直す: docker exec ros2arm pkill -INT -f '[r]os2 launch'"
   fi
   echo "軽量モード: GUI なしのシミュで実行する（デスクトップ録画の左側は空になる）"
-  # RViz は move_group の launch が起動する。止めても他のノードは生きている。起動直後は空振りしうるので、止まるまで数回やる
+  # RViz は move_group の launch が起動する。止めても他のノードは生きている。
+  # 起動した直後はトピックが先に流れ、RViz がまだ出ていないことがある。止めるのが空振りしないよう、出るまで待つ（最大 90 秒）
+  if [ "$START_SIM" = 1 ]; then
+    arm "for _ in \$(seq 1 90); do pgrep -x rviz2 > /dev/null && exit 0; sleep 1; done; exit 1" < /dev/null || true
+  fi
   arm "for _ in 1 2 3; do pkill -x rviz2; sleep 1; pgrep -x rviz2 > /dev/null || exit 0; done; exit 1" < /dev/null \
     || echo "RViz を止められなかった（CPU を余分に使うが、判定には影響しない）" >&2
   sim_ready || fail_env "RViz を止めたらシミュのトピックが止まった。--light を付けずにシミュを起動し直す"

@@ -53,6 +53,7 @@ case "$args" in
   *"pgrep -f '[a]rm_with_camera"*"[g]z sim gui"*) [ "${STUB_GZ_GUI:-0}" = 1 ] && exit 0; exit 1 ;;
   *"pgrep -f '[a]rm_with_camera_headless"*) [ "${STUB_SIM_RUNNING:-0}" = headless ] && exit 0; exit 1 ;;
   *"pkill -x rviz2"*) exit 0 ;;
+  *"pgrep -x rviz2"*) exit 0 ;;
   *"pgrep -f '[a]rm_with_camera"*) [ "${STUB_SIM_RUNNING:-0}" = camera ] && exit 0; exit 1 ;;
   *"pgrep -f '[r]os2 launch"*) [ "${STUB_SIM_RUNNING:-0}" = other ] && exit 0; exit 1 ;;
   *"grep -c 'Node name"*) echo "${STUB_CONTROLLERS:-1}" ;;
@@ -305,6 +306,12 @@ grep -q "GUI なしのシミュ" <<<"$ERR" || fail "headless: 録画の左側が
 # --start-sim --light は GUI なしの launch を起動し、付けなければ GUI 付き
 STUB_EXEC_FAIL='ros2 topic echo' run_case "$ALL" --start-sim --light --timeout 1
 grep -q "ros2 launch ros2_poc_sim arm_with_camera_headless.launch.py" <<<"$LOG" || fail "--start-sim --light が headless の launch を起動していない: $LOG"
+# --start-sim --light は、起動直後で RViz がまだ出ていないことがあるので、RViz の出現を待ってから止める（--start-sim 無しでは待たない）
+run_case "$ALL" --start-sim --light
+[ "$RC" -eq 0 ] || fail "--start-sim --light（起動済みのシミュ）は exit 0 のはずが $RC: $ERR"
+grep -q "seq 1 90.*pgrep -x rviz2" <<<"$LOG" || fail "--start-sim --light で RViz の出現を待っていない: $LOG"
+run_case "$ALL" --light
+if grep -q "seq 1 90" <<<"$LOG"; then fail "--start-sim 無しで RViz の出現を待った: $LOG"; fi
 STUB_EXEC_FAIL='ros2 topic echo' run_case "$ALL" --start-sim --timeout 1
 grep -q "ros2 launch ros2_poc_sim arm_with_camera.launch.py" <<<"$LOG" || fail "--start-sim が通常の launch を起動していない: $LOG"
 if grep -q "arm_with_camera_headless" <<<"$LOG"; then fail "--light 無しで headless の launch を起動した: $LOG"; fi

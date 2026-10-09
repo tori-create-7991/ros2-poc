@@ -287,10 +287,18 @@ def test_headless_replaces_only_the_gz_sim_process(monkeypatch):
     assert out[1] is not first
 
 
-@pytest.mark.parametrize('entities', [[], [ExecuteProcess(cmd=['echo', 'hi'])], ['gz'] * 2])
-def test_headless_refuses_when_gz_sim_is_not_unique(monkeypatch, entities):
+@pytest.mark.parametrize('make', [lambda: [], lambda: [ExecuteProcess(cmd=['echo', 'hi'])], lambda: [_gz(), _gz()]],
+                         ids=['none', 'not-gz-sim', 'two'])
+def test_headless_refuses_when_gz_sim_is_not_unique(monkeypatch, make):
     mod = _headless(monkeypatch)
-    if entities == ['gz'] * 2:
-        entities = [_gz(), _gz()]
     with pytest.raises(RuntimeError, match='1 つに特定できない'):
-        mod.replace_gz_sim(entities)
+        mod.replace_gz_sim(make())
+
+
+def test_headless_does_not_count_nodes_as_gz_sim(monkeypatch):
+    # Node は ExecuteProcess の子クラス。isinstance で数えると gz sim が 2 つに見えてしまう
+    from launch_ros.actions import Node
+    mod = _headless(monkeypatch)
+    node = Node(package='demo_nodes_cpp', executable='talker')
+    out = mod.replace_gz_sim([_gz(), node])
+    assert out[1] is node and _cmd(out[0])[0] == 'gz sim -r -s'
