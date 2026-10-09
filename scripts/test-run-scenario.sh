@@ -50,8 +50,10 @@ if [ -n "${STUB_EXEC_FAIL:-}" ] && [[ "$args" =~ $STUB_EXEC_FAIL ]]; then
 fi
 run_dir() { [[ "$args" =~ /workspace/runs/([0-9-]+) ]] && echo "$STUB_WS/runs/${BASH_REMATCH[1]}"; }
 case "$args" in
+  *"pgrep -f '[a]rm_with_camera"*"[g]z sim gui"*) [ "${STUB_GZ_GUI:-0}" = 1 ] && exit 0; exit 1 ;;
+  *"pgrep -f '[a]rm_with_camera_headless"*) [ "${STUB_SIM_RUNNING:-0}" = headless ] && exit 0; exit 1 ;;
+  *"pkill -x rviz2"*) exit 0 ;;
   *"pgrep -f '[a]rm_with_camera"*) [ "${STUB_SIM_RUNNING:-0}" = camera ] && exit 0; exit 1 ;;
-  *"pgrep -f '[g]z sim gui"*) [ "${STUB_GZ_GUI:-0}" = 1 ] && exit 0; exit 1 ;;
   *"pgrep -f '[r]os2 launch"*) [ "${STUB_SIM_RUNNING:-0}" = other ] && exit 0; exit 1 ;;
   *"grep -c 'Node name"*) echo "${STUB_CONTROLLERS:-1}" ;;
   *"mkdir /tmp/run-scenario.lock"*)
@@ -296,6 +298,10 @@ STUB_GZ_GUI=1 run_case "$ALL" --light
 [ "$RC" -eq 2 ] || fail "--light で GUI 付きのシミュが動いているときは exit 2 のはずが $RC: $ERR"
 grep -q "start-sim --light" <<<"$ERR" || fail "--light: 起動し直しの案内が無い: $ERR"
 if sent; then fail "--light の拒否で送信した: $LOG"; fi
+# --light なしで GUI なしのシミュが動いている → 録画の左側が空になる旨を知らせて続行
+STUB_SIM_RUNNING=headless run_case "$ALL"
+[ "$RC" -eq 0 ] || fail "headless のシミュへの接続は exit 0 のはずが $RC: $ERR"
+grep -q "GUI なしのシミュ" <<<"$ERR" || fail "headless: 録画の左側が空になる旨が無い: $ERR"
 # --start-sim --light は GUI なしの launch を起動し、付けなければ GUI 付き
 STUB_EXEC_FAIL='ros2 topic echo' run_case "$ALL" --start-sim --light --timeout 1
 grep -q "ros2 launch ros2_poc_sim arm_with_camera_headless.launch.py" <<<"$LOG" || fail "--start-sim --light が headless の launch を起動していない: $LOG"

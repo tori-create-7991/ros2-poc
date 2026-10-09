@@ -159,20 +159,22 @@ if ! sim_ready; then
       arm_bg "exec ros2 launch ros2_poc_sim $LAUNCH_FILE placement:=fixed_front_wide > /workspace/runs/sim-$TS.log 2>&1"
     fi
   fi
-  rec_wait_sim "$TIMEOUT" "カメラ付きのシミュ（arm_with_camera.launch.py）が動いていなければ、他のシミュを止めて --start-sim を付ける（docs/sim-scenario-recording.md）。"
+  rec_wait_sim "$TIMEOUT" "カメラ付きのシミュ（$LAUNCH_FILE）が動いていなければ、他のシミュを止めて --start-sim を付ける（docs/sim-scenario-recording.md）。"
 fi
 
 if [ "$LIGHT" = 1 ]; then
   # GUI（gz sim gui）だけを止めると親の gz sim ごと終了して物理サーバーも落ちるので、止めずに GUI なしで起動する。
   # GUI 付きのシミュが動いていたら、止めてから --start-sim --light で起動し直してもらう
-  if arm "pgrep -f '[g]z sim gui'" > /dev/null 2>&1 < /dev/null; then
-    fail_env "Gazebo の GUI 付きのシミュが動いている。--light は GUI なしで起動するので、止めてから --start-sim --light で起動し直す: docker exec ros2arm pkill -INT -f '[r]os2 launch'"
+  if arm "pgrep -f '[a]rm_with_camera\.launch\.py|[g]z sim gui'" > /dev/null 2>&1 < /dev/null; then
+    fail_env "GUI 付きのシミュが動いている。--light は GUI なしで起動するので、止めてから --start-sim --light で起動し直す: docker exec ros2arm pkill -INT -f '[r]os2 launch'"
   fi
   echo "軽量モード: GUI なしのシミュで実行する（デスクトップ録画の左側は空になる）"
-  # RViz は move_group の launch が起動する。止めても他のノードは生きている
-  arm "pkill -x rviz2; true" < /dev/null || true
-  sleep 3
+  # RViz は move_group の launch が起動する。止めても他のノードは生きている。起動直後は空振りしうるので、止まるまで数回やる
+  arm "for _ in 1 2 3; do pkill -x rviz2; sleep 1; pgrep -x rviz2 > /dev/null || exit 0; done; exit 1" < /dev/null \
+    || echo "RViz を止められなかった（CPU を余分に使うが、判定には影響しない）" >&2
   sim_ready || fail_env "RViz を止めたらシミュのトピックが止まった。--light を付けずにシミュを起動し直す"
+elif arm "pgrep -f '[a]rm_with_camera_headless\.launch\.py'" > /dev/null 2>&1 < /dev/null; then
+  echo "GUI なしのシミュ（arm_with_camera_headless）に接続する。デスクトップ録画の左側は空になる" >&2
 fi
 
 lab true < /dev/null > /dev/null || fail_env "ros2lab-a でコマンドを実行できない"

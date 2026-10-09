@@ -153,6 +153,7 @@ docker exec ros2arm pkill -INT -f '[r]os2 launch ros2_poc_sim'   # 数秒で Gaz
 | 全ステップ `ee_outside_change` / `no_ee_projection` | 手先が画角外の視点で動いている。`fixed_front_wide` で起動し直す |
 | `joints_not_still` | シミュが極端に遅い、またはコントローラが目標に届かない。`gz topic -e -t /stats` で RTF を確認 |
 | 動画の左側が RViz で、Gazebo の GUI が見えない | デスクトップをそのまま録画しているため。Gazebo のシーンは右側の仮想カメラで見える。必要なら noVNC で Gazebo のウィンドウを前に出してから実行する |
+| 動画の左側が空 | `--light`（GUI なし）で実行している。左側を見たいときは `--light` を付けずに（GUI 付きのシミュで）実行する |
 | `合成に失敗した` | `overlay/filtergraph.txt` と ffmpeg のメッセージを確認 |
 | `別の run-scenario が実行中` | 記録プロセスが動いている。終わるのを待つ |
 | `run-vla が実行中` | `run-vla.sh` が同じアームを使っている（ros2server の `/tmp/run-vla.lock`）。終わってから実行する。強制終了の残りなら `docker exec ros2server rm -r /tmp/run-vla.lock`（実行中でないと確かめてから） |
