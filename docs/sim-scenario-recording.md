@@ -17,7 +17,7 @@ bash scripts/run-scenario.sh --scenario <path/to/my.yaml>
 | `--scenario` | `default` | `default` / `fail_demo` / `examples`（`ros2_poc_sim/config/scenarios/`）または YAML のパス（相対パスは実行したディレクトリから） |
 | `--repeat` | YAML の `repeat`（無ければ 1） | シナリオ全体の繰り返し回数（1〜20） |
 | `--start-sim` | なし | シミュ（公式 Gazebo + MoveIt + 仮想カメラ、視点 `fixed_front_wide`）が動いていなければ起動する。カメラ付きのシミュが起動途中なら起動せずに待ち、カメラ無しのシミュ（README のデモ 2 など）が動いているときは重ねて起動せずに止める |
-| `--light` | なし | 軽量モード。シミュが流れ始めたあと RViz と Gazebo の GUI（`gz sim gui`）を止めて CPU を減らす。仮想カメラは Gazebo のサーバー側で描画するので判定には影響しない。**デスクトップ録画（動画の左側）は空になる**。止めたあとにトピックが止まったら終了コード 2 |
+| `--light` | なし | 軽量モード。**GUI なし**（`gz sim -r -s` のサーバーのみ、RViz なし）のシミュで実行する。`--start-sim --light` で `arm_with_camera_headless.launch.py` を起動する。GUI 付きのシミュが動いていたら終了コード 2（止めてから起動し直す。`gz sim gui` だけを止めると親の `gz sim` ごと終了し、物理サーバーも落ちるため、止める方式は使えない）。仮想カメラは Gazebo のサーバー側で描画するので判定には影響しない。**デスクトップ録画（動画の左側）は空になる** |
 | `--timeout` | 120（`--start-sim` 時 900） | トピックが流れ始めるまで待つ秒数 |
 
 終了コード: `0` = 全ステップ PASS / `1` = FAIL あり / `2` = 環境・記録の問題（判定できなかった。camera_info が届かない・

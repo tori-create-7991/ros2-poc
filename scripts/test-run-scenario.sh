@@ -51,6 +51,7 @@ fi
 run_dir() { [[ "$args" =~ /workspace/runs/([0-9-]+) ]] && echo "$STUB_WS/runs/${BASH_REMATCH[1]}"; }
 case "$args" in
   *"pgrep -f '[a]rm_with_camera"*) [ "${STUB_SIM_RUNNING:-0}" = camera ] && exit 0; exit 1 ;;
+  *"pgrep -f '[g]z sim gui"*) [ "${STUB_GZ_GUI:-0}" = 1 ] && exit 0; exit 1 ;;
   *"pgrep -f '[r]os2 launch"*) [ "${STUB_SIM_RUNNING:-0}" = other ] && exit 0; exit 1 ;;
   *"grep -c 'Node name"*) echo "${STUB_CONTROLLERS:-1}" ;;
   *"mkdir /tmp/run-scenario.lock"*)
@@ -283,13 +284,24 @@ STUB_TSV='g\tsim\t0.0\tros2 action send_goal /crane_x7_gripper_controller/grippe
 [ "$RC" -eq 0 ] || fail "グリッパの正常系は exit 0 のはずが $RC: $ERR"
 grep -q "ros2arm bash -c .*date +%s.%N; timeout 30 ros2 action send_goal" <<<"$LOG" || fail "グリッパの指令が ros2arm から送られていない: $LOG"
 
-# --light: RViz と Gazebo の GUI を止める。付けなければ止めない
+# --light: GUI なしのシミュで実行する（RViz は止める。GUI だけを止めるとシミュ全体が落ちるので gz sim gui は止めない）
 run_case "$ALL" --light
 [ "$RC" -eq 0 ] || fail "--light の正常系は exit 0 のはずが $RC: $ERR"
 grep -q "pkill -x rviz2" <<<"$LOG" || fail "--light で RViz を止めていない: $LOG"
-grep -qF "[g]z sim gui" <<<"$LOG" || fail "--light で Gazebo の GUI を止めていない: $LOG"
+if grep -E "pkill.*gz sim" <<<"$LOG"; then fail "--light で Gazebo を止めた（親ごと落ちる）: $LOG"; fi
 run_case "$ALL"
 if grep -q "pkill -x rviz2" <<<"$LOG"; then fail "--light 無しで RViz を止めた: $LOG"; fi
+# --light で GUI 付きのシミュが動いている → 止めずに案内して exit 2（送信しない）
+STUB_GZ_GUI=1 run_case "$ALL" --light
+[ "$RC" -eq 2 ] || fail "--light で GUI 付きのシミュが動いているときは exit 2 のはずが $RC: $ERR"
+grep -q "start-sim --light" <<<"$ERR" || fail "--light: 起動し直しの案内が無い: $ERR"
+if sent; then fail "--light の拒否で送信した: $LOG"; fi
+# --start-sim --light は GUI なしの launch を起動し、付けなければ GUI 付き
+STUB_EXEC_FAIL='ros2 topic echo' run_case "$ALL" --start-sim --light --timeout 1
+grep -q "ros2 launch ros2_poc_sim arm_with_camera_headless.launch.py" <<<"$LOG" || fail "--start-sim --light が headless の launch を起動していない: $LOG"
+STUB_EXEC_FAIL='ros2 topic echo' run_case "$ALL" --start-sim --timeout 1
+grep -q "ros2 launch ros2_poc_sim arm_with_camera.launch.py" <<<"$LOG" || fail "--start-sim が通常の launch を起動していない: $LOG"
+if grep -q "arm_with_camera_headless" <<<"$LOG"; then fail "--light 無しで headless の launch を起動した: $LOG"; fi
 
 # 最初の停止指示（INT）はカメラ用 ffmpeg に送らない（読み残したフレームが落ちる）。TERM / KILL では含める
 run_case "$ALL"
