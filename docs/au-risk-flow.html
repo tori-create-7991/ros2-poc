@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AU-1〜3 通信フローとリスク</title>
+<style>
+:root{--bg:#fff;--fg:#1c1e21;--muted:#606770;--card:#f5f6f8;--line:#d0d4da;--red:#c62828;--redbg:#fdecea;--amber:#b26a00;--amberbg:#fff4e0;--blue:#1565c0;--bluebg:#e8f1fb;--green:#2e7d32;--greenbg:#e8f5e9}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#15171a;--fg:#e6e8eb;--muted:#9aa3ad;--card:#1f2226;--line:#383d44;--red:#ff8a80;--redbg:#3a1f1e;--amber:#ffb74d;--amberbg:#3a2d17;--blue:#90caf9;--bluebg:#1b2a3a;--green:#81c784;--greenbg:#1d3022}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.7 -apple-system,"Hiragino Sans","Noto Sans JP",sans-serif}
+main{max-width:980px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:1.5rem;margin:0 0 4px}
+h2{font-size:1.15rem;margin:36px 0 10px;padding-bottom:6px;border-bottom:2px solid var(--line)}
+p.lead{color:var(--muted);margin:0 0 8px}
+.note{background:var(--bluebg);border-left:4px solid var(--blue);padding:10px 14px;border-radius:4px;margin:12px 0}
+.warn{background:var(--amberbg);border-left:4px solid var(--amber);padding:10px 14px;border-radius:4px;margin:12px 0}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;margin:10px 0;min-width:560px}
+th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:var(--card);white-space:nowrap}
+code{background:var(--card);padding:1px 5px;border-radius:3px;font-size:.9em}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:.8rem;font-weight:600;white-space:nowrap}
+.t-red{background:var(--redbg);color:var(--red)}
+.t-amber{background:var(--amberbg);color:var(--amber)}
+.t-blue{background:var(--bluebg);color:var(--blue)}
+.t-green{background:var(--greenbg);color:var(--green)}
+svg{width:100%;height:auto;display:block;margin:8px 0;background:var(--card);border:1px solid var(--line);border-radius:6px}
+svg text{fill:var(--fg);font-family:inherit}
+.box{fill:var(--bg);stroke:var(--line);stroke-width:1.5}
+.netlab{fill:none;stroke:var(--amber);stroke-width:2;stroke-dasharray:6 4}
+.netdef{fill:none;stroke:var(--blue);stroke-width:2;stroke-dasharray:6 4}
+.risk{fill:var(--redbg);stroke:var(--red);stroke-width:2}
+.arrow{stroke:var(--muted);stroke-width:2;fill:none}
+.arrowr{stroke:var(--red);stroke-width:2.5;fill:none}
+.small{font-size:12px;fill:var(--muted)}
+.badge{fill:var(--red)}
+.badgetxt{fill:#fff!important;font-size:13px;font-weight:700}
+ol.steps li{margin:4px 0}
+</style>
+</head>
+<body>
+<main>
+<h1>AU-1〜3 通信フローとリスク</h1>
+<p class="lead">対象: このリポジトリの Docker 構成から ros2real (実機) を除いた部分。ros2lab-a / ros2lab-b / ros2arm (シミュ) と、外から接続してくる低信頼コンテナ。</p>
+
+<div class="note"><b>AU-1〜3 とは</b> (PoC1 検証項目詳細 v0.4): DDS-Security の「認証」3項目です。
+AU-1 = 未認証参加者が入れるか / AU-2 = 資格情報の一意性・管理 / AU-3 = 不正証明書を弾くか。</div>
+
+<h2>1. 現在の構成と通信フロー</h2>
+<svg viewBox="0 0 900 460" role="img" aria-label="コンテナ構成と通信フロー">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor" style="color:var(--muted)"/></marker>
+    <marker id="ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--red)"/></marker>
+  </defs>
+  <!-- lab network -->
+  <rect class="netlab" x="20" y="90" width="860" height="250" rx="10"/>
+  <text x="34" y="112" font-size="13" font-weight="700" style="fill:var(--amber)">ros2-lab-net (internal / 外部出口なし)</text>
+  <!-- default network -->
+  <rect class="netdef" x="20" y="250" width="860" height="100" rx="10"/>
+  <text x="34" y="338" font-size="13" font-weight="700" style="fill:var(--blue)">compose default (bridge)</text>
+
+  <!-- external -->
+  <rect class="box" x="40" y="14" width="200" height="56" rx="8"/>
+  <text x="140" y="38" text-anchor="middle" font-size="14" font-weight="700">kali-vnc 等</text>
+  <text x="140" y="58" text-anchor="middle" class="small">別 compose / docker network connect</text>
+
+  <!-- containers -->
+  <rect class="box" x="60" y="150" width="200" height="70" rx="8"/>
+  <text x="160" y="178" text-anchor="middle" font-size="14" font-weight="700">ros2lab-a</text>
+  <text x="160" y="200" text-anchor="middle" class="small">Domain 42 / SUBNET</text>
+
+  <rect class="box" x="350" y="150" width="200" height="70" rx="8"/>
+  <text x="450" y="178" text-anchor="middle" font-size="14" font-weight="700">ros2lab-b</text>
+  <text x="450" y="200" text-anchor="middle" class="small">Domain 42 / SUBNET</text>
+
+  <rect class="box" x="640" y="150" width="220" height="70" rx="8"/>
+  <text x="750" y="178" text-anchor="middle" font-size="14" font-weight="700">ros2arm (Gazebo/MoveIt)</text>
+  <text x="750" y="200" text-anchor="middle" class="small">noVNC 127.0.0.1:6080</text>
+
+  <!-- workspace volume -->
+  <rect class="risk" x="220" y="380" width="460" height="56" rx="8"/>
+  <text x="450" y="404" text-anchor="middle" font-size="14" font-weight="700">./workspace (全コンテナ 書き込み可で共有)</text>
+  <text x="450" y="424" text-anchor="middle" class="small">README: SROS2 keystore もここに置く想定</text>
+
+  <!-- arrows -->
+  <path class="arrowr" d="M140 70 L140 150" marker-end="url(#ahr)"/>
+  <text x="150" y="112" font-size="12" style="fill:var(--red)">① 未認証で参加</text>
+  <path class="arrow" d="M260 185 L350 185" marker-start="url(#ah)" marker-end="url(#ah)"/>
+  <text x="305" y="176" text-anchor="middle" class="small">② Pub/Sub</text>
+  <path class="arrow" d="M550 185 L640 185" marker-start="url(#ah)" marker-end="url(#ah)"/>
+  <text x="595" y="176" text-anchor="middle" class="small">③ 軌道指令/状態</text>
+  <path class="arrowr" d="M160 220 L300 380" marker-end="url(#ahr)"/>
+  <path class="arrowr" d="M450 220 L450 380"/>
+  <path class="arrowr" d="M750 220 L600 380"/>
+  <text x="170" y="300" font-size="12" style="fill:var(--red)">④ 鍵・スクリプトの共有</text>
+
+  <!-- badges -->
+  <circle class="badge" cx="140" cy="130" r="13"/><text class="badgetxt" x="140" y="135" text-anchor="middle">1</text>
+  <circle class="badge" cx="305" cy="200" r="13"/><text class="badgetxt" x="305" y="205" text-anchor="middle">3</text>
+  <circle class="badge" cx="450" cy="400" r="13" style="display:none"/>
+</svg>
+<p class="small" style="color:var(--muted);font-size:13px">赤い矢印・枠がリスク箇所。ros2lab-a/b と ros2arm は同じ <code>ROS_DOMAIN_ID=42</code> で互いに見える。現在は SROS2 未適用 (<code>ros-jazzy-sros2</code> は同梱のみ) のため、認証・暗号化・権限制御はない。</p>
+
+<h2>2. 通信フロー</h2>
+<div class="tablewrap"><table>
+<tr><th>#</th><th>通信</th><th>中身</th><th>現状</th></tr>
+<tr><td>①</td><td>低信頼コンテナ → ros2lab-a/b</td><td>Discovery (UDP マルチキャスト) → Pub/Sub</td><td><span class="tag t-red">認証なし</span> lab に繋がれば誰でも参加できる</td></tr>
+<tr><td>②</td><td>ros2lab-a ↔ ros2lab-b</td><td>トピックの発行・購読</td><td><span class="tag t-red">無認証・平文</span></td></tr>
+<tr><td>③</td><td>ros2lab-a/b ↔ ros2arm</td><td>MoveIt への指令 / <code>/joint_states</code> / <code>/tf</code></td><td><span class="tag t-red">無認証・平文</span> シミュなので物理被害はない</td></tr>
+<tr><td>④</td><td>全コンテナ ↔ <code>./workspace</code></td><td>スクリプト、SROS2 keystore (予定)</td><td><span class="tag t-amber">全員が書き込み可</span></td></tr>
+</table></div>
+
+<h2>3. AU-1〜3 のリスクが出る箇所</h2>
+<div class="tablewrap"><table>
+<tr><th>ID</th><th>どこで起きるか</th><th>この構成での具体例</th><th>起きると何が困るか</th></tr>
+<tr>
+<td><b>AU-1</b><br>未認証参加者の混入<br><span class="tag t-red">①②③</span></td>
+<td>lab ネットワークの入口 (①) と、ros2lab-a/b・ros2arm への DDS 参加</td>
+<td>
+<ul>
+<li>kali-vnc 等が <code>docker network connect ros2-lab-net</code> で lab に入る (README 記載の手順)</li>
+<li>SROS2 導入後も <code>ROS_SECURITY_STRATEGY=Permissive</code> や <code>allow_unauthenticated_participants=true</code> が残り、鍵なしの participant が混ざれる</li>
+</ul></td>
+<td>参加できた時点で、購読 (盗聴) と発行 (指令注入) が可能。例: ros2arm の MoveIt に勝手に軌道指令を送る。認証が破れると他の対策の多くが意味を失う</td>
+</tr>
+<tr>
+<td><b>AU-2</b><br>資格情報の一意性・管理<br><span class="tag t-amber">④</span></td>
+<td>共有 volume <code>./workspace</code> と、同じイメージから起動する ros2lab-a/b</td>
+<td>
+<ul>
+<li>keystore を <code>./workspace</code> に置くと、全コンテナが秘密鍵を読み書きできる。1つ侵害されれば鍵が盗まれる・差し替えられる</li>
+<li>ros2lab-a と b が同じ keystore・証明書を使い回すと、1台の鍵で全員になりすませる</li>
+<li>証明書の有効期限・CA の設計が未検討 (実質無期限になりがち)</li>
+</ul></td>
+<td>鍵を1つ抜かれると、そのノード全員 (将来は出荷済み全台) へのなりすましが成立する</td>
+</tr>
+<tr>
+<td><b>AU-3</b><br>証明書検証の厳密性<br><span class="tag t-red">①③</span></td>
+<td>ros2arm / ros2lab が受け取る参加要求の証明書チェック</td>
+<td>
+<ul>
+<li>SROS2 導入後、不正証明書 (期限切れ / 別CA / 自己署名 / 失効済み) で参加を試みる試験の対象</li>
+<li>検証が甘いと、偽の証明書で正規ノードになりすませる</li>
+<li>失効 (CRL) の確認は Fast DDS 標準プラグインが対応しているか、着手前に要確認</li>
+</ul></td>
+<td>「認証あり」なのに実際は効いていない状態。書面監査では見つからない。AU-3 はこれを検出するための項目</td>
+</tr>
+</table></div>
+
+<div class="warn"><b>押さえておく点</b>
+<ul style="margin:6px 0 0 18px;padding:0">
+<li>今は認証そのものがないので、環境 A (無防備) に当たる。AU-1〜3 はすべて「不合格」が期待値。</li>
+<li>ros2real を除くと、ros2arm はシミュなので物理被害はない。試験を作り込むには安全な対象。</li>
+<li>ros2lab-a/b が lab にも default にも繋がっている点は、侵入の足場になる。</li>
+</ul></div>
+
+<h2>4. 試験の進め方 (この構成での例)</h2>
+<ol class="steps">
+<li>環境 A (現状) で、kali-vnc 相当のコンテナを lab に繋ぎ、ros2lab-a のトピックが見える・購読できることを確認する (AU-1 の「不合格」ベースライン)。</li>
+<li>SROS2 の keystore を作り、環境 C (適正設定) を compose で切り替えられるようにする。keystore の置き場は <code>./workspace</code> 以外を検討する (AU-2)。</li>
+<li>環境 C で、鍵なし participant が拒否されることを確認する (AU-1 合格)。</li>
+<li>環境 B (誤設定: Permissive / allow_unauthenticated / 鍵の使い回し) を作り、各不備を検出できるか確認する。</li>
+<li>openssl で不正証明書4種を作り、環境 C で全て拒否されるか確認する (AU-3)。証明書は lab 外に出さない。</li>
+</ol>
+</main>
+</body>
+</html>
